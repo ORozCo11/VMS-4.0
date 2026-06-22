@@ -223,6 +223,8 @@ function Workspace() {
   const [notice, setNotice] = useState(null);
   const [loading, setLoading] = useState(false);
   const [ticketDetailTarget, setTicketDetailTarget] = useState(null);
+  const [confirmDialog, setConfirmDialog] = useState(null);
+  const [confirmBusy, setConfirmBusy] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [showNotifications, setShowNotifications] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -475,16 +477,34 @@ function Workspace() {
   };
 
   const deleteRecord = async (path, success) => {
-    if (!window.confirm('Continue with this action?')) {
+    setConfirmDialog({
+      title: 'Confirm Action',
+      message: 'Continue with this action?',
+      confirmLabel: 'Continue',
+      variant: 'danger',
+      onConfirm: async () => {
+        try {
+          await api.delete(path);
+          setNotice({ type: 'success', text: success });
+          await refreshCurrent();
+        } catch (error) {
+          showError(error, setNotice);
+        }
+      },
+    });
+  };
+
+  const handleConfirmDialog = async () => {
+    if (!confirmDialog?.onConfirm || confirmBusy) {
       return;
     }
 
+    setConfirmBusy(true);
     try {
-      await api.delete(path);
-      setNotice({ type: 'success', text: success });
-      await refreshCurrent();
-    } catch (error) {
-      showError(error, setNotice);
+      await confirmDialog.onConfirm();
+      setConfirmDialog(null);
+    } finally {
+      setConfirmBusy(false);
     }
   };
 
@@ -734,6 +754,12 @@ function Workspace() {
         </div>
       </section>
     </main>
+    <ConfirmDialog
+      busy={confirmBusy}
+      dialog={confirmDialog}
+      onCancel={() => setConfirmDialog(null)}
+      onConfirm={handleConfirmDialog}
+    />
     </FormNoticeContext.Provider>
   );
 
@@ -1209,6 +1235,7 @@ function Workspace() {
           setFilterPriority={setFilterPriority}
           prefilledTicketData={prefilledTicketData}
           setPrefilledTicketData={setPrefilledTicketData}
+          onRequestConfirmation={setConfirmDialog}
         />
       );
     }
@@ -1225,9 +1252,13 @@ function Workspace() {
               style={{ height: '32px', padding: '0 14px', fontSize: '0.8rem', background: 'linear-gradient(90deg, #3b82f6, #2563eb)', color: '#fff' }}
               type="button"
               onClick={() => {
-                if (window.confirm(`Are you sure you want to reopen Ticket #${row.ticket_id} for ${row.vehicle_name}?`)) {
-                  ticketAction(`/ticket-archives/${row.archive_id}/reopen`, {}, 'Ticket successfully reopened and returned to active ledger.');
-                }
+                setConfirmDialog({
+                  title: 'Reopen Archived Ticket',
+                  message: `Are you sure you want to reopen Ticket #${row.ticket_id} for ${row.vehicle_name}?`,
+                  confirmLabel: 'Reopen Ticket',
+                  variant: 'primary',
+                  onConfirm: () => ticketAction(`/ticket-archives/${row.archive_id}/reopen`, {}, 'Ticket successfully reopened and returned to active ledger.'),
+                });
               }}
             >
               Reopen
@@ -1346,6 +1377,28 @@ function Dashboard({ data }) {
     return <p className="empty-state">No dashboard data available yet.</p>;
   }
 
+  const metricValue = (label) => dashboardMetricValue(data.metrics, label);
+  const totalVehicles = metricValue('Total Vehicles');
+  const availableVehicles = metricValue('Available Vehicles');
+  const maintenanceVehicles = metricValue('Vehicles Under Maintenance');
+  const inactiveVehicles = metricValue('Inactive Vehicles');
+  const reportedIssues = metricValue('Reported Issues');
+  const upcomingMaintenance = metricValue('Upcoming Maintenance');
+  const maintenanceExpenses = data.metrics.find((metric) => metric.label === 'Total Maintenance Expenses')?.value ?? '0';
+  const availabilityRate = totalVehicles ? Math.round((availableVehicles / totalVehicles) * 100) : 0;
+
+  const fleetStatus = [
+    { label: 'Available', value: availableVehicles, color: '#36c66d' },
+    { label: 'Under Maintenance', value: maintenanceVehicles, color: '#ff7a1a' },
+    { label: 'Inactive', value: inactiveVehicles, color: '#ff5c5c' },
+  ];
+
+  const operationsQueue = [
+    { label: 'Issues', value: reportedIssues, color: '#ff5c5c' },
+    { label: 'Upcoming', value: upcomingMaintenance, color: '#ffba4a' },
+    { label: 'Ready', value: availableVehicles, color: '#36c66d' },
+  ];
+
   return (
     <div className="dashboard-grid">
       <div className="dashboard-banner">
@@ -1375,6 +1428,33 @@ function Dashboard({ data }) {
         ))}
       </section>
 
+      <section className="dashboard-graphs full-span" aria-label="Dashboard graphs">
+        <GraphPanel title="Fleet Status" stat={`${availabilityRate}% available`}>
+          <DonutChart
+            centerLabel={totalVehicles}
+            centerSubLabel="Vehicles"
+            segments={fleetStatus}
+          />
+          <ChartLegend rows={fleetStatus} />
+        </GraphPanel>
+
+        <GraphPanel title="Vehicles by Type" stat={`${data.vehicles_by_type?.length ?? 0} types`}>
+          <HorizontalBarChart rows={data.vehicles_by_type} />
+        </GraphPanel>
+
+        <GraphPanel title="Vehicles by Location" stat={`${data.vehicles_by_location?.length ?? 0} sites`}>
+          <HorizontalBarChart rows={data.vehicles_by_location} />
+        </GraphPanel>
+
+        <GraphPanel title="Operations Queue" stat={String(maintenanceExpenses)}>
+          <ColumnChart rows={operationsQueue} />
+          <div className="graph-footnote">
+            <span>Total maintenance expenses</span>
+            <strong>{maintenanceExpenses}</strong>
+          </div>
+        </GraphPanel>
+      </section>
+
       <ValueList title="Vehicles by Type" rows={data.vehicles_by_type} />
       <ValueList title="Vehicles by Location" rows={data.vehicles_by_location} />
 
@@ -1384,6 +1464,127 @@ function Dashboard({ data }) {
         </div>
         <DataTable columns={historyColumns.slice(1)} rows={data.recent_updates} />
       </section>
+    </div>
+  );
+}
+
+function dashboardMetricValue(metrics, label) {
+  const rawValue = metrics.find((metric) => metric.label === label)?.value ?? 0;
+  if (typeof rawValue === 'number') {
+    return rawValue;
+  }
+  const parsed = Number.parseFloat(String(rawValue).replace(/[^0-9.-]/g, ''));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function GraphPanel({ title, stat, children }) {
+  return (
+    <article className="graph-panel">
+      <div className="graph-panel-header">
+        <h3>{title}</h3>
+        <span>{stat}</span>
+      </div>
+      {children}
+    </article>
+  );
+}
+
+function DonutChart({ segments, centerLabel, centerSubLabel }) {
+  const total = segments.reduce((sum, segment) => sum + segment.value, 0);
+  const radius = 42;
+  const circumference = 2 * Math.PI * radius;
+  let offset = 0;
+
+  return (
+    <div className="donut-chart">
+      <svg viewBox="0 0 120 120" role="img" aria-label={`${centerLabel} total vehicles`}>
+        <circle className="donut-track" cx="60" cy="60" r={radius} />
+        {segments.map((segment) => {
+          const length = total ? (segment.value / total) * circumference : 0;
+          const dashOffset = -offset;
+          offset += length;
+          return (
+            <circle
+              className="donut-segment"
+              cx="60"
+              cy="60"
+              key={segment.label}
+              r={radius}
+              stroke={segment.color}
+              strokeDasharray={`${length} ${circumference - length}`}
+              strokeDashoffset={dashOffset}
+            />
+          );
+        })}
+      </svg>
+      <div className="donut-center">
+        <strong>{centerLabel}</strong>
+        <span>{centerSubLabel}</span>
+      </div>
+    </div>
+  );
+}
+
+function ChartLegend({ rows }) {
+  return (
+    <ul className="chart-legend">
+      {rows.map((row) => (
+        <li key={row.label}>
+          <span style={{ '--legend-color': row.color }}></span>
+          <small>{row.label}</small>
+          <strong>{row.value}</strong>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function HorizontalBarChart({ rows = [] }) {
+  const maxValue = Math.max(1, ...rows.map((row) => Number(row.value) || 0));
+
+  if (!rows.length) {
+    return <p className="empty-state">No graph data yet.</p>;
+  }
+
+  return (
+    <div className="horizontal-bars">
+      {rows.map((row) => {
+        const value = Number(row.value) || 0;
+        const percent = Math.round((value / maxValue) * 100);
+        return (
+          <div className="bar-row" key={row.label || 'Unassigned'}>
+            <div className="bar-row-label">
+              <span>{row.label || 'Unassigned'}</span>
+              <strong>{value}</strong>
+            </div>
+            <div className="bar-track">
+              <span style={{ width: `${percent}%` }}></span>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ColumnChart({ rows = [] }) {
+  const maxValue = Math.max(1, ...rows.map((row) => Number(row.value) || 0));
+
+  return (
+    <div className="column-chart">
+      {rows.map((row) => {
+        const value = Number(row.value) || 0;
+        const height = Math.max(8, Math.round((value / maxValue) * 100));
+        return (
+          <div className="column-bar" key={row.label}>
+            <div className="column-track">
+              <span style={{ height: `${height}%`, background: row.color }}></span>
+            </div>
+            <strong>{value}</strong>
+            <small>{row.label}</small>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -1425,6 +1626,48 @@ function FormModal({ open, title, onClose, children }) {
         )}
         <div className="modal-body">{children}</div>
       </div>
+    </div>
+  );
+}
+
+function ConfirmDialog({ busy, dialog, onCancel, onConfirm }) {
+  if (!dialog) return null;
+
+  return (
+    <div className="confirm-overlay" onClick={busy ? undefined : onCancel}>
+      <section
+        aria-labelledby="confirm-dialog-title"
+        aria-modal="true"
+        className="confirm-dialog"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+      >
+        <div className="confirm-dialog-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 9v4" />
+            <path d="M12 17h.01" />
+            <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
+          </svg>
+        </div>
+        <div className="confirm-dialog-copy">
+          <p className="eyebrow">Confirmation</p>
+          <h3 id="confirm-dialog-title">{dialog.title ?? 'Confirm Action'}</h3>
+          <p>{dialog.message}</p>
+        </div>
+        <div className="confirm-dialog-actions">
+          <button className="ghost-button" disabled={busy} onClick={onCancel} type="button">
+            Cancel
+          </button>
+          <button
+            className={dialog.variant === 'primary' ? 'primary-button' : 'danger-button'}
+            disabled={busy}
+            onClick={onConfirm}
+            type="button"
+          >
+            {busy ? 'Working...' : dialog.confirmLabel ?? 'Continue'}
+          </button>
+        </div>
+      </section>
     </div>
   );
 }
@@ -2332,13 +2575,22 @@ function TicketStatusBadge({ value, size = 'normal' }) {
 // TICKET DETAIL PANEL — shown when admin clicks a ticket row
 // =========================================================================
 
-function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm, onCancel, onUncancel, onDelete, onClose }) {
+function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm, onCancel, onUncancel, onDelete, onRequestConfirmation, onClose }) {
   const [mechanicForm, setMechanicForm] = useState(false);
   const [confirmForm, setConfirmForm] = useState(false);
 
   if (!ticket) return null;
 
   const phase = ticketPhaseLabel(ticket.status);
+  const requestDelete = () => {
+    onRequestConfirmation({
+      title: 'Delete Ticket',
+      message: `Are you sure you want to completely delete Ticket #${ticket.ticket_id}? This action cannot be undone.`,
+      confirmLabel: 'Delete Ticket',
+      variant: 'danger',
+      onConfirm: () => onDelete(ticket),
+    });
+  };
 
   return (
     <div className="ticket-detail-overlay" onClick={onClose}>
@@ -2454,7 +2706,7 @@ function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm,
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
               <button className="primary-button" type="button" onClick={() => setMechanicForm(true)}>Assign Mechanic (Work Order)</button>
               <button className="ghost-button" type="button" onClick={() => onCancel(ticket)}>Cancel Ticket</button>
-              <button className="danger-button" type="button" onClick={() => { if (window.confirm("Are you sure you want to completely delete this ticket?")) onDelete(ticket); }}>Delete Ticket</button>
+              <button className="danger-button" type="button" onClick={requestDelete}>Delete Ticket</button>
             </div>
           </div>
         )}
@@ -2479,7 +2731,7 @@ function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm,
             <p className="notice success" style={{marginBottom: 12}}>✅ Custodian has approved the repair. Your final confirmation is required.</p>
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
               <button className="primary-button" type="button" onClick={() => setConfirmForm(true)}>Issue Confirmation Verdict</button>
-              <button className="danger-button" type="button" onClick={() => { if (window.confirm("Are you sure you want to completely delete this ticket?")) onDelete(ticket); }}>Delete Ticket</button>
+              <button className="danger-button" type="button" onClick={requestDelete}>Delete Ticket</button>
             </div>
           </div>
         )}
@@ -2542,7 +2794,7 @@ function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm,
               {ticket.status !== 'Done' && ticket.status !== 'Cancelled' && (
                 <button className="ghost-button" type="button" onClick={() => onCancel(ticket)}>Cancel Ticket</button>
               )}
-              <button className="danger-button" type="button" onClick={() => { if (window.confirm("Are you sure you want to completely delete this ticket?")) onDelete(ticket); }}>Delete Ticket</button>
+              <button className="danger-button" type="button" onClick={requestDelete}>Delete Ticket</button>
             </div>
           </div>
         )}
@@ -2580,7 +2832,8 @@ function TicketModule({
   filterPriority,
   setFilterPriority,
   prefilledTicketData,
-  setPrefilledTicketData
+  setPrefilledTicketData,
+  onRequestConfirmation
 }) {
   const [showCreate, setShowCreate] = useState(false);
 
@@ -2692,6 +2945,7 @@ function TicketModule({
           onCancel={(ticket) => onTicketAction(`/tickets/${ticket.ticket_id}/cancel`, {}, 'Ticket cancelled.')}
           onUncancel={(ticket) => onTicketAction(`/tickets/${ticket.ticket_id}/uncancel`, {}, 'Ticket restored.')}
           onDelete={onDeleteTicket}
+          onRequestConfirmation={onRequestConfirmation}
           onClose={() => setTicketDetailTarget(null)}
         />
       )}

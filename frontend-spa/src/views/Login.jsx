@@ -1,6 +1,7 @@
 import { useContext, useState } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
 import api from '../api/axios';
+import vmsLogo from '../assets/vms-logo.png';
 import { AuthContext } from '../context/AuthContextObject';
 
 const roleRoutes = {
@@ -76,12 +77,7 @@ function Login() {
     <main className="auth-page">
       <section className="auth-card" aria-labelledby="login-title">
         <div className="auth-logo-header">
-          <div className="auth-logo-badge">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="logo-svg">
-              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
-              <polyline points="12 8 12 12 15 14"></polyline>
-            </svg>
-          </div>
+          <img className="auth-logo-image" src={vmsLogo} alt="Vehicle Management" />
           <p className="eyebrow">Barangay VMS</p>
           <h1 id="login-title">Sign in</h1>
           <p className="auth-subtitle">

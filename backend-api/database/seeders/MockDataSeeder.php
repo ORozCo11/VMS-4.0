@@ -56,7 +56,7 @@ class MockDataSeeder extends Seeder
                 'current_location' => 'Palanan Central Hub',
                 'status'           => 'Available',
                 'condition'        => 'Good',
-                'photo_url'        => $baseUrl . '/storage/vehicles/lego_ambulance.jpg',
+                'photo_url'        => $baseUrl . '/mockups/fleet-vehicle.png',
             ]
         );
 
@@ -75,7 +75,7 @@ class MockDataSeeder extends Seeder
                 'current_location' => 'Barangay Hall Hub',
                 'status'           => 'Available',
                 'condition'        => 'Good',
-                'photo_url'        => $baseUrl . '/storage/vehicles/inem_ambulance.jpg',
+                'photo_url'        => $baseUrl . '/mockups/fleet-vehicle.png',
             ]
         );
 
@@ -94,7 +94,7 @@ class MockDataSeeder extends Seeder
                 'current_location' => 'San Isidro Depot',
                 'status'           => 'Available',
                 'condition'        => 'Good',
-                'photo_url'        => $baseUrl . '/storage/vehicles/rescue_truck.jpg',
+                'photo_url'        => $baseUrl . '/mockups/fleet-vehicle.png',
             ]
         );
 
@@ -113,7 +113,7 @@ class MockDataSeeder extends Seeder
                 'current_location' => 'Palanan Central Hub',
                 'status'           => 'Under Maintenance',
                 'condition'        => 'Needs Repair',
-                'photo_url'        => $baseUrl . '/storage/vehicles/caddy_ambulance.jpg',
+                'photo_url'        => $baseUrl . '/mockups/fleet-vehicle.png',
             ]
         );
 
@@ -138,7 +138,7 @@ class MockDataSeeder extends Seeder
                 'severity_level'    => 'Medium',
                 'reported_by'       => $custodian->id,
                 'status'            => 'Pending',
-                'photo_url'        => $baseUrl . '/storage/issue-attachments/engine_issue.png',
+                'photo_url'        => $baseUrl . '/mockups/issue-attachment.png',
             ]
         );
 

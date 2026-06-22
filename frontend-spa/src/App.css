@@ -1628,6 +1628,247 @@ table button,
   gap: 20px;
 }
 
+.dashboard-graphs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.graph-panel {
+  min-height: 300px;
+  background: linear-gradient(180deg, rgba(22, 23, 27, 0.98), rgba(14, 15, 18, 0.98));
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-soft);
+  color: var(--text);
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.graph-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 34px;
+}
+
+.graph-panel-header h3 {
+  color: var(--text-strong);
+  font-size: 0.98rem;
+  font-weight: 800;
+}
+
+.graph-panel-header span {
+  color: var(--primary-strong);
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-align: right;
+}
+
+.donut-chart {
+  width: min(190px, 100%);
+  aspect-ratio: 1;
+  align-self: center;
+  position: relative;
+  display: grid;
+  place-items: center;
+}
+
+.donut-chart svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.donut-track,
+.donut-segment {
+  fill: none;
+  stroke-linecap: round;
+  stroke-width: 12;
+  transform: rotate(-90deg);
+  transform-origin: 60px 60px;
+}
+
+.donut-track {
+  stroke: rgba(255, 255, 255, 0.06);
+}
+
+.donut-segment {
+  transition: stroke-dasharray 0.24s ease;
+}
+
+.donut-center {
+  position: absolute;
+  inset: 26%;
+  border-radius: 999px;
+  background: #0b0c0f;
+  border: 1px solid var(--border-subtle);
+  display: grid;
+  place-items: center;
+  align-content: center;
+  text-align: center;
+}
+
+.donut-center strong {
+  color: var(--text-strong);
+  font-size: 1.7rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.donut-center span {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.chart-legend {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.chart-legend li {
+  display: grid;
+  grid-template-columns: 10px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+}
+
+.chart-legend li > span {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--legend-color);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--legend-color) 48%, transparent);
+}
+
+.chart-legend small,
+.column-bar small {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.chart-legend strong,
+.column-bar strong {
+  color: var(--text-strong);
+  font-size: 0.88rem;
+}
+
+.horizontal-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 4px;
+}
+
+.bar-row {
+  display: grid;
+  gap: 7px;
+}
+
+.bar-row-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text);
+}
+
+.bar-row-label span {
+  color: var(--text);
+  font-size: 0.83rem;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bar-row-label strong {
+  color: var(--primary-strong);
+  font-size: 0.86rem;
+}
+
+.bar-track {
+  height: 9px;
+  background: rgba(255, 255, 255, 0.055);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.bar-track span {
+  display: block;
+  height: 100%;
+  min-width: 10px;
+  background: linear-gradient(90deg, #ff7a1a, #ffba4a);
+  border-radius: inherit;
+}
+
+.column-chart {
+  min-height: 185px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  align-items: end;
+  padding-top: 8px;
+}
+
+.column-bar {
+  min-width: 0;
+  display: grid;
+  grid-template-rows: 138px auto auto;
+  gap: 7px;
+  justify-items: center;
+}
+
+.column-track {
+  width: 100%;
+  max-width: 54px;
+  height: 138px;
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px 999px 7px 7px;
+  display: flex;
+  align-items: flex-end;
+  overflow: hidden;
+  padding: 4px;
+}
+
+.column-track span {
+  width: 100%;
+  min-height: 8px;
+  border-radius: inherit;
+  box-shadow: 0 0 18px rgba(255, 122, 26, 0.16);
+}
+
+.graph-footnote {
+  margin-top: auto;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.graph-footnote span {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.graph-footnote strong {
+  color: var(--primary-strong);
+  font-size: 0.92rem;
+  white-space: nowrap;
+}
+
 .panel,
 .metric-card,
 .ticket-card,
@@ -2126,6 +2367,14 @@ button.btn-reopen-action {
   color: var(--text-strong);
 }
 
+.auth-logo-image {
+  width: min(210px, 76%);
+  height: auto;
+  object-fit: contain;
+  margin: -4px auto 4px;
+  filter: drop-shadow(0 12px 24px rgba(255, 122, 26, 0.16));
+}
+
 .demo-account-button {
   background: var(--surface-2) !important;
   border: 1px solid var(--border);
@@ -2161,6 +2410,81 @@ button.btn-reopen-action {
   border-radius: 8px;
   box-shadow: var(--shadow-deep);
   color: var(--text);
+}
+
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 360;
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(8px);
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  animation: fadeSlide 0.16s ease;
+}
+
+.confirm-dialog {
+  width: min(440px, 100%);
+  background:
+    linear-gradient(180deg, rgba(27, 21, 23, 0.98), rgba(15, 15, 18, 0.98));
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-deep);
+  color: var(--text);
+  padding: 22px;
+  display: grid;
+  gap: 16px;
+}
+
+.confirm-dialog-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 999px;
+  background: rgba(255, 122, 26, 0.12);
+  border: 1px solid rgba(255, 122, 26, 0.3);
+  color: var(--primary-strong);
+  display: grid;
+  place-items: center;
+}
+
+.confirm-dialog-icon svg {
+  width: 22px;
+  height: 22px;
+}
+
+.confirm-dialog-copy .eyebrow {
+  color: var(--primary-strong);
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+
+.confirm-dialog-copy h3 {
+  color: var(--text-strong);
+  font-size: 1.15rem;
+  font-weight: 800;
+  margin-bottom: 8px;
+}
+
+.confirm-dialog-copy p:last-child {
+  color: var(--text);
+  font-size: 0.92rem;
+  line-height: 1.55;
+}
+
+.confirm-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.confirm-dialog-actions .ghost-button,
+.confirm-dialog-actions .primary-button,
+.confirm-dialog-actions .danger-button {
+  height: 40px;
 }
 
 .modal-header,
@@ -2340,6 +2664,10 @@ button.btn-reopen-action {
     grid-template-columns: 1fr;
   }
 
+  .dashboard-graphs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .sidebar {
     border-bottom: 1px solid var(--border-subtle);
     border-right: none;
@@ -2382,6 +2710,10 @@ button.btn-reopen-action {
   }
 
   .metric-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-graphs {
     grid-template-columns: 1fr;
   }
 
