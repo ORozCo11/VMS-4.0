@@ -1,0 +1,56 @@
+import { BrowserRouter as Router, Routes, Route, Navigate, Link } from 'react-router-dom';
+import { ProtectedRoute } from './components/ProtectedRoute';
+import Login from './views/Login';
+import Workspace from './views/Workspace';
+import './App.css';
+
+function Unauthorized() {
+  return (
+    <main className="auth-page">
+      <section className="auth-card">
+        <p className="eyebrow">Access Control</p>
+        <h1>Access denied</h1>
+        <p>Your account role does not have permission to view that workspace.</p>
+        <Link className="primary-link" to="/login">Return to sign in</Link>
+      </section>
+    </main>
+  );
+}
+
+function App() {
+  return (
+    <Router>
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route path="/unauthorized" element={<Unauthorized />} />
+        <Route
+          path="/admin/*"
+          element={
+            <ProtectedRoute allowedRoles={['Admin']}>
+              <Workspace />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/custodian/*"
+          element={
+            <ProtectedRoute allowedRoles={['Custodian']}>
+              <Workspace />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/maintenance/*"
+          element={
+            <ProtectedRoute allowedRoles={['Maintenance Personnel']}>
+              <Workspace />
+            </ProtectedRoute>
+          }
+        />
+        <Route path="*" element={<Navigate to="/login" replace />} />
+      </Routes>
+    </Router>
+  );
+}
+
+export default App;
