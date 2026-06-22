@@ -1,6 +1,7 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState, createContext } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/axios';
+import LocationDensityMap from '../components/LocationDensityMap';
 import vmsLogo from '../assets/vms-logo.png';
 import { AuthContext } from '../context/AuthContextObject';
 
@@ -765,7 +766,7 @@ function Workspace() {
 
   function renderModule() {
     if (activeModule === 'dashboard') {
-      return <Dashboard data={dashboard} />;
+      return <Dashboard data={dashboard} user={user} />;
     }
 
     if (activeModule === 'vehicles') {
@@ -857,19 +858,7 @@ function Workspace() {
                 <DataTable columns={locationColumns} rows={visibleRows} />
               </div>
               <div className="map-card">
-                <div className="map-header">
-                  <span style={{ fontSize: '1.2rem' }}>📍</span>
-                  <h4>Mandaue City Dispatch Map</h4>
-                </div>
-                <div className="map-iframe-container">
-                  <iframe
-                    title="Mandaue City Map"
-                    className="map-iframe"
-                    src="https://maps.google.com/maps?q=Mandaue%20City,%20Cebu,%20Philippines&t=&z=14&ie=UTF8&iwloc=&output=embed"
-                    allowFullScreen
-                    loading="lazy"
-                  ></iframe>
-                </div>
+                <LocationDensityMap vehicles={lookups.vehicles ?? []} />
               </div>
             </div>
           </ModulePanel>
@@ -1339,13 +1328,14 @@ function Workspace() {
   }
 }
 
-function Dashboard({ data }) {
+function Dashboard({ data, user }) {
   const [weather, setWeather] = useState(null);
-  const [dateStr, setDateStr] = useState('');
+  const [greeting, setGreeting] = useState(() => buildLocalGreeting(user?.name));
+  const [greetingRole, setGreetingRole] = useState(() => dashboardRoleLabel(user?.role));
+  const [now, setNow] = useState(() => new Date());
 
   useEffect(() => {
-    const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
-    setDateStr(new Date().toLocaleDateString('en-US', options));
+    const interval = setInterval(() => setNow(new Date()), 1000);
 
     // Fetch Mandaue City, Cebu, Philippines (10.3446, 123.9392) weather
     fetch('https://api.open-meteo.com/v1/forecast?latitude=10.3446&longitude=123.9392&current=temperature_2m,relative_humidity_2m,weather_code')
@@ -1371,7 +1361,36 @@ function Dashboard({ data }) {
       .catch(() => {
         setWeather({ temp: 33, desc: 'Partly Cloudy', icon: '⛅', humidity: 68 });
       });
+
+    return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadGreeting = async () => {
+      try {
+        const response = await api.get('/greeting');
+        if (!cancelled) {
+          setGreeting(response.data.greeting ?? buildLocalGreeting(user?.name));
+          setGreetingRole(response.data.role_label ?? dashboardRoleLabel(user?.role));
+        }
+      } catch {
+        if (!cancelled) {
+          setGreeting(buildLocalGreeting(user?.name));
+          setGreetingRole(dashboardRoleLabel(user?.role));
+        }
+      }
+    };
+
+    loadGreeting();
+    const interval = setInterval(loadGreeting, 60000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [user?.name, user?.role]);
 
   if (!data) {
     return <p className="empty-state">No dashboard data available yet.</p>;
@@ -1398,34 +1417,50 @@ function Dashboard({ data }) {
     { label: 'Upcoming', value: upcomingMaintenance, color: '#ffba4a' },
     { label: 'Ready', value: availableVehicles, color: '#36c66d' },
   ];
+  const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+  const timeStr = now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' });
 
   return (
     <div className="dashboard-grid">
       <div className="dashboard-banner">
         <div className="dashboard-banner-welcome">
-          <h2>Barangay Fleet Overview</h2>
+          <span className="dashboard-greeting-role">{greetingRole}</span>
+          <h2>{greeting}</h2>
           <p>{dateStr || 'Today'}</p>
         </div>
-        {weather && (
-          <div className="dashboard-banner-weather">
-            <span className="weather-icon">{weather.icon}</span>
-            <div className="weather-details">
-              <span className="weather-city">Mandaue City, Cebu</span>
-              <span className="weather-desc">{weather.desc}</span>
-              <span className="weather-extra">Humidity: {weather.humidity}%</span>
-            </div>
-            <p className="weather-temp">{weather.temp}°C</p>
+        <div className="dashboard-banner-widgets">
+          <div className="dashboard-banner-time">
+            <span className="time-label">Local time</span>
+            <strong>{timeStr}</strong>
           </div>
-        )}
+          {weather && (
+            <div className="dashboard-banner-weather">
+              <span className="weather-icon">{weather.icon}</span>
+              <div className="weather-details">
+                <span className="weather-city">Mandaue City, Cebu</span>
+                <span className="weather-desc">{weather.desc}</span>
+                <span className="weather-extra">Humidity: {weather.humidity}%</span>
+              </div>
+              <p className="weather-temp">{weather.temp}°C</p>
+            </div>
+          )}
+        </div>
       </div>
 
       <section className="metric-grid">
-        {data.metrics.map((metric) => (
-          <article className="metric-card" key={metric.label}>
-            <span>{metric.label}</span>
-            <strong>{metric.value}</strong>
-          </article>
-        ))}
+        {data.metrics.map((metric) => {
+          const isReportedIssueAlert = metric.label === 'Reported Issues' && reportedIssues > 0;
+
+          return (
+            <article
+              className={`metric-card${isReportedIssueAlert ? ' metric-card-alert' : ''}`}
+              key={metric.label}
+            >
+              <span>{metric.label}</span>
+              <strong>{metric.value}</strong>
+            </article>
+          );
+        })}
       </section>
 
       <section className="dashboard-graphs full-span" aria-label="Dashboard graphs">
@@ -1466,6 +1501,81 @@ function Dashboard({ data }) {
       </section>
     </div>
   );
+}
+
+function buildLocalGreeting(name = 'User', date = new Date()) {
+  const displayName = firstName(name);
+  const hour = date.getHours();
+
+  if (hour >= 5 && hour < 12) {
+    return randomGreeting([
+      `Rise and shine, ${displayName}!`,
+      `A bright morning to you, ${displayName}!`,
+      `Fresh start, ${displayName}! Let's keep the fleet moving.`,
+      `Morning momentum is here, ${displayName}!`,
+    ]);
+  }
+
+  if (hour === 12) {
+    return randomGreeting([
+      `Happy noon, ${displayName}!`,
+      `Midday check-in, ${displayName}! The fleet is ready.`,
+      `It's noon, ${displayName}! Keep the day rolling.`,
+      `A steady noon to you, ${displayName}!`,
+    ]);
+  }
+
+  if (hour >= 13 && hour < 15) {
+    return randomGreeting([
+      `A pleasant afternoon, ${displayName}!`,
+      `Good energy this afternoon, ${displayName}!`,
+      `Afternoon focus is on, ${displayName}!`,
+      `Keep the dashboard sharp this afternoon, ${displayName}!`,
+    ]);
+  }
+
+  if (hour >= 15 && hour < 18) {
+    return randomGreeting([
+      `It's late afternoon, ${displayName}!`,
+      `Late afternoon focus, ${displayName}!`,
+      `A strong late afternoon to you, ${displayName}!`,
+      `The day is still moving, ${displayName}!`,
+    ]);
+  }
+
+  if (hour >= 18 && hour < 22) {
+    return randomGreeting([
+      `A calm evening to you, ${displayName}!`,
+      `Evening check-in, ${displayName}! The fleet is in view.`,
+      `Good evening, ${displayName}! Keep things steady.`,
+      `The evening shift is looking sharp, ${displayName}!`,
+    ]);
+  }
+
+  return randomGreeting([
+    `Working late, ${displayName}? The dashboard is ready.`,
+    `Quiet night watch, ${displayName}!`,
+    `Late-night focus, ${displayName}!`,
+    `The fleet rests easier with you here, ${displayName}!`,
+  ]);
+}
+
+function randomGreeting(messages) {
+  return messages[Math.floor(Math.random() * messages.length)];
+}
+
+function firstName(name = 'User') {
+  return (String(name || 'User').trim().split(/\s+/)[0] || 'User').toUpperCase();
+}
+
+function dashboardRoleLabel(role = 'User') {
+  const labels = {
+    Admin: 'Administrator',
+    Custodian: 'Custodian',
+    'Maintenance Personnel': 'Maintenance',
+  };
+
+  return labels[role] ?? role;
 }
 
 function dashboardMetricValue(metrics, label) {
@@ -3272,13 +3382,13 @@ function MechanicWorkOrderModule({
       <FormModal open={!!editTarget} title={`Log Repairs — Ticket #${editTarget?.ticket_id}`} onClose={onCancelEdit}>
         {editTarget?.confirmation_verdict === 'Reopened' && (
           <div className="notice danger" style={{ marginBottom: 16 }}>
-            <h4>⚠️ Reopened by Admin ({editTarget.confirmed_by?.name ?? 'John ADmin'})</h4>
+            <h4>⚠️ Reopened by Admin ({editTarget.confirmed_by?.name ?? 'Roel Degulacion'})</h4>
             <p><strong>Feedback/Reason:</strong> {editTarget.confirmation_notes ?? 'No feedback notes provided.'}</p>
           </div>
         )}
         {editTarget?.verification_verdict === 'Rejected' && (
           <div className="notice warning" style={{ marginBottom: 16 }}>
-            <h4>⚠️ Rejected by Custodian ({editTarget.verified_by?.name ?? 'Paul'})</h4>
+            <h4>⚠️ Rejected by Custodian ({editTarget.verified_by?.name ?? 'Nicole'})</h4>
             <p><strong>Feedback/Reason:</strong> {editTarget.verification_notes ?? 'No feedback notes provided.'}</p>
           </div>
         )}

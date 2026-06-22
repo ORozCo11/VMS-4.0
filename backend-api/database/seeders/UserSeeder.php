@@ -22,19 +22,19 @@ class UserSeeder extends Seeder
 
         $users = [
             [
-                'name' => 'John ADmin',
+                'name' => 'Roel Degulacion',
                 'email' => 'admin@barangay.gov',
                 'password' => 'admin123',
                 'role' => 'Admin',
             ],
             [
-                'name' => 'Paul',
+                'name' => 'Nicole',
                 'email' => 'custodian@barangay.gov',
                 'password' => 'custodian123',
                 'role' => 'Custodian',
             ],
             [
-                'name' => 'orozco',
+                'name' => 'Toto Bongo',
                 'email' => 'maintenance@barangay.gov',
                 'password' => 'maintenance123',
                 'role' => 'Maintenance Personnel',

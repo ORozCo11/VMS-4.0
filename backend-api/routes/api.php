@@ -29,6 +29,7 @@ Route::middleware('auth:sanctum')->group(function () {
         return $request->user();
     });
 
+    Route::get('/greeting', [AuthController::class, 'greeting']);
     Route::put('/profile/password', [AuthController::class, 'updatePassword']);
 
     Route::get('/lookups', [FleetController::class, 'lookups']);

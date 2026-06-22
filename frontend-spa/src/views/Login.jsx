@@ -22,14 +22,17 @@ function Login() {
 
   const demoAccounts = {
     Admin: {
+      name: 'Roel Degulacion',
       email: 'admin@barangay.gov',
       password: 'admin123',
     },
     Custodian: {
+      name: 'Nicole',
       email: 'custodian@barangay.gov',
       password: 'custodian123',
     },
     'Maintenance Personnel': {
+      name: 'Toto Bongo',
       email: 'maintenance@barangay.gov',
       password: 'maintenance123',
     },
@@ -49,7 +52,8 @@ function Login() {
 
   const loadDemoAccount = (role) => {
     setError('');
-    setCredentials(demoAccounts[role]);
+    const { email, password } = demoAccounts[role];
+    setCredentials({ email, password });
   };
 
   const handleSubmit = async (event) => {
@@ -87,13 +91,16 @@ function Login() {
 
         <div className="demo-account-grid" aria-label="Demo account shortcuts">
           <button className="demo-account-button admin" onClick={() => loadDemoAccount('Admin')} type="button">
-            Admin
+            <span>Admin</span>
+            <small>{demoAccounts.Admin.name}</small>
           </button>
           <button className="demo-account-button custodian" onClick={() => loadDemoAccount('Custodian')} type="button">
-            Custodian
+            <span>Custodian</span>
+            <small>{demoAccounts.Custodian.name}</small>
           </button>
           <button className="demo-account-button maintenance" onClick={() => loadDemoAccount('Maintenance Personnel')} type="button">
-            Maintenance
+            <span>Maintenance</span>
+            <small>{demoAccounts['Maintenance Personnel'].name}</small>
           </button>
         </div>
 
