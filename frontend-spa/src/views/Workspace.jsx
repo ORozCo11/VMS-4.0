@@ -4,6 +4,7 @@ import api from '../api/axios';
 import LocationDensityMap from '../components/LocationDensityMap';
 import vmsLogo from '../assets/vms-logo.png';
 import { AuthContext } from '../context/AuthContextObject';
+import { PAKNAAN_HUBS, HUBS_STORAGE_KEY, groupLocationRowsByHub } from '../data/paknaanLocationDensity';
 
 const FormNoticeContext = createContext(null);
 
@@ -238,6 +239,8 @@ function Workspace() {
   const [condFilterStartDate, setCondFilterStartDate] = useState('');
   const [condFilterEndDate, setCondFilterEndDate] = useState('');
   const [prefilledTicketData, setPrefilledTicketData] = useState(null);
+  const [allHubs, setAllHubs] = useState([]);
+  const [locationsTab, setLocationsTab] = useState('map');
   const notificationsRef = useRef(null);
   const hasVehicles = (lookups.vehicles ?? []).length > 0;
 
@@ -336,6 +339,12 @@ function Workspace() {
     const response = await api.get(endpoint, { params });
     setRecords((current) => ({ ...current, [key]: response.data }));
   }, [user.role]);
+
+  useEffect(() => {
+    // Initialize hubs with static defaults + any custom hubs from storage
+    const customHubs = JSON.parse(localStorage.getItem(HUBS_STORAGE_KEY) || '[]');
+    setAllHubs([...PAKNAAN_HUBS, ...customHubs]);
+  }, []);
 
   useEffect(() => {
     loadLookups().catch((error) => showError(error, setNotice));
@@ -637,6 +646,39 @@ function Workspace() {
     return result;
   }, [rawRows, searchQuery, filterCategory, filterCapacity, filterStatus, filterPriority, activeModule, condFilterStartDate, condFilterEndDate]);
 
+  // For the Vehicle Location module, every vehicle shown on the map should also
+  // appear in the records list. We merge the saved location records (history)
+  // with a synthesized "current" row for each vehicle that has no record yet,
+  // so the list always mirrors the map.
+  const locationRows = useMemo(() => {
+    if (activeModule !== 'locations') {
+      return visibleRows;
+    }
+
+    const vehiclesWithRecord = new Set(visibleRows.map((row) => row.vehicle_id));
+    const query = searchQuery.toLowerCase().trim();
+
+    const syntheticRows = (lookups.vehicles ?? [])
+      .filter((vehicle) => !vehiclesWithRecord.has(vehicle.vehicle_id))
+      .filter((vehicle) => {
+        if (!query) return true;
+        return [vehicle.vehicle_name, vehicle.plate_number, vehicle.current_location]
+          .some((val) => val && String(val).toLowerCase().includes(query));
+      })
+      .map((vehicle) => ({
+        location_record_id: null,
+        vehicle_id: vehicle.vehicle_id,
+        vehicle,
+        current_location: vehicle.current_location,
+        address_area: null,
+        updated_by: null,
+        updated_at: vehicle.updated_at ?? null,
+        is_current_snapshot: true,
+      }));
+
+    return [...visibleRows, ...syntheticRows];
+  }, [activeModule, visibleRows, lookups.vehicles, searchQuery]);
+
   const unreadCount = notifications.filter((n) => !n.read_at).length;
 
   return (
@@ -846,33 +888,70 @@ function Workspace() {
       return (
         <>
           <ModulePanel description="Record current vehicle stationing and keep a location history.">
-            <div className="module-action-bar">
-              <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                <h3>Vehicle Locations ({visibleRows.length})</h3>
-                <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search locations..." />
-              </div>
-              <button className="primary-button" type="button" onClick={() => setEditTarget({})}>+ Update Location</button>
+            <div className="locations-tab-bar">
+              <button
+                className={`locations-tab-button ${locationsTab === 'map' ? 'active' : ''}`}
+                onClick={() => setLocationsTab('map')}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                  <polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21" />
+                  <line x1="9" y1="3" x2="9" y2="18" />
+                  <line x1="15" y1="6" x2="15" y2="21" />
+                </svg>
+                Vehicles Map
+              </button>
+              <button
+                className={`locations-tab-button ${locationsTab === 'records' ? 'active' : ''}`}
+                onClick={() => setLocationsTab('records')}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <polyline points="14 2 14 8 20 8" />
+                  <line x1="16" y1="13" x2="8" y2="13" />
+                  <line x1="16" y1="17" x2="8" y2="17" />
+                  <polyline points="10 9 9 9 8 9" />
+                </svg>
+                Vehicle Location Record
+              </button>
             </div>
-            <div className="location-layout-grid">
-              <div>
-                <DataTable columns={locationColumns} rows={visibleRows} />
+
+            {locationsTab === 'map' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', height: '100%' }}>
+                <div className="map-container-full">
+                  <LocationDensityMap vehicles={lookups.vehicles ?? []} onHubsChange={setAllHubs} />
+                </div>
               </div>
-              <div className="map-card">
-                <LocationDensityMap vehicles={lookups.vehicles ?? []} />
+            )}
+
+            {locationsTab === 'records' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <div className="module-action-bar">
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                    <h3>Location Records ({locationRows.length})</h3>
+                    <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search records..." />
+                  </div>
+                  <button className="primary-button" type="button" onClick={() => setEditTarget({})}>+ Add Record</button>
+                </div>
+                <div style={{ overflowX: 'auto' }}>
+                  <DataTable columns={locationColumns} rows={locationRows} />
+                </div>
+                {editTarget !== null && (
+                  <div className="location-form-panel">
+                    <h3>{editTarget?.location_record_id ? 'Update Location Record' : 'Add Location Record'}</h3>
+                    <SmartForm
+                      fields={locationFields(lookups, allHubs)}
+                      initialValues={editTarget?.vehicle_id ? editTarget : EMPTY_OBJ}
+                      key="location-create"
+                      onCancel={() => setEditTarget(null)}
+                      onSubmit={submitModuleForm}
+                      submitLabel={editTarget?.location_record_id ? 'Update Record' : 'Add Record'}
+                      title=""
+                    />
+                  </div>
+                )}
               </div>
-            </div>
+            )}
           </ModulePanel>
-          <FormModal open={!!editTarget} title="Update Vehicle Location" onClose={() => setEditTarget(null)}>
-            <SmartForm
-              fields={locationFields(lookups)}
-              initialValues={editTarget?.vehicle_id ? editTarget : EMPTY_OBJ}
-              key="location-create"
-              onCancel={() => setEditTarget(null)}
-              onSubmit={submitModuleForm}
-              submitLabel="Update Location"
-              title=""
-            />
-          </FormModal>
         </>
       );
     }
@@ -1406,6 +1485,10 @@ function Dashboard({ data, user }) {
   const maintenanceExpenses = data.metrics.find((metric) => metric.label === 'Total Maintenance Expenses')?.value ?? '0';
   const availabilityRate = totalVehicles ? Math.round((availableVehicles / totalVehicles) * 100) : 0;
 
+  // Re-group raw location rows into the same hubs the map shows, so the
+  // "Vehicles by Location" chart always matches the map's pins.
+  const locationsByHub = groupLocationRowsByHub(data.vehicles_by_location ?? []);
+
   const fleetStatus = [
     { label: 'Available', value: availableVehicles, color: '#36c66d' },
     { label: 'Under Maintenance', value: maintenanceVehicles, color: '#ff7a1a' },
@@ -1477,8 +1560,8 @@ function Dashboard({ data, user }) {
           <HorizontalBarChart rows={data.vehicles_by_type} />
         </GraphPanel>
 
-        <GraphPanel title="Vehicles by Location" stat={`${data.vehicles_by_location?.length ?? 0} sites`}>
-          <HorizontalBarChart rows={data.vehicles_by_location} />
+        <GraphPanel title="Vehicles by Location" stat={`${locationsByHub.length} sites`}>
+          <HorizontalBarChart rows={locationsByHub} />
         </GraphPanel>
 
         <GraphPanel title="Operations Queue" stat={String(maintenanceExpenses)}>
@@ -1489,9 +1572,6 @@ function Dashboard({ data, user }) {
           </div>
         </GraphPanel>
       </section>
-
-      <ValueList title="Vehicles by Type" rows={data.vehicles_by_type} />
-      <ValueList title="Vehicles by Location" rows={data.vehicles_by_location} />
 
       <section className="panel full-span">
         <div className="panel-header">
@@ -1981,26 +2061,6 @@ function DataTable({ columns, rows }) {
   );
 }
 
-function ValueList({ rows, title }) {
-  return (
-    <section className="panel">
-      <div className="panel-header">
-        <h3>{title}</h3>
-      </div>
-      {rows?.length ? (
-        <ul className="value-list">
-          {rows.map((row) => (
-            <li key={row.label ?? 'blank'}>
-              <span>{row.label || 'Unassigned'}</span>
-              <strong>{row.value}</strong>
-            </li>
-          ))}
-        </ul>
-      ) : <p className="empty-state">No grouped data yet.</p>}
-    </section>
-  );
-}
-
 function EmptyPrerequisite({ title, message }) {
   return (
     <div className="empty-prereq">
@@ -2088,10 +2148,15 @@ function vehicleFields(lookups) {
   ];
 }
 
-function locationFields(lookups) {
+function locationFields(lookups, allHubs = []) {
+  const hubOptions = allHubs.map((hub) => ({
+    value: hub.name,
+    label: hub.name,
+  }));
+
   return [
     { label: 'Vehicle', name: 'vehicle_id', options: vehicleOptions(lookups), required: true, type: 'select' },
-    { label: 'Current Location', name: 'current_location', required: true, type: 'text' },
+    { label: 'Current Location', name: 'current_location', options: hubOptions, required: true, type: 'select' },
     { label: 'Address / Area', name: 'address_area', type: 'text' },
     { label: 'Remarks', name: 'remarks', type: 'textarea' },
   ];
@@ -2239,12 +2304,19 @@ function categoryColumns(setEditTarget, deleteRecord) {
 }
 
 const locationColumns = [
-  { label: 'Record ID', render: (row) => row.location_record_id },
+  { label: 'Record ID', render: (row) => row.location_record_id ?? '—' },
   { label: 'Vehicle', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
-  { label: 'Current Location', render: (row) => row.current_location },
+  { label: 'Current Location', render: (row) => row.current_location ?? '-' },
   { label: 'Address / Area', render: (row) => row.address_area ?? '-' },
-  { label: 'Updated By', render: (row) => row.updated_by?.name ?? row.updated_by?.email ?? '-' },
-  { label: 'Date Updated', render: (row) => formatDate(row.updated_at) },
+  {
+    label: 'Updated By',
+    render: (row) => (
+      row.is_current_snapshot
+        ? <span className="location-snapshot-tag">Current (on map)</span>
+        : (row.updated_by?.name ?? row.updated_by?.email ?? '-')
+    ),
+  },
+  { label: 'Date Updated', render: (row) => (row.updated_at ? formatDate(row.updated_at) : '-') },
 ];
 
 function conditionColumns(role, setEditTarget, deleteRecord) {

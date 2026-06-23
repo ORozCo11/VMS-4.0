@@ -2,6 +2,9 @@
 // Coordinates are Leaflet LatLng tuples: [latitude, longitude].
 export const PAKNAAN_CENTER = { lat: 10.3462, lng: 123.9603 };
 
+// Key for localStorage to persist dynamically created hubs
+export const HUBS_STORAGE_KEY = 'paknaan_vehicle_hubs';
+
 export const PAKNAAN_BOUNDS = [
   [10.3398, 123.9469],
   [10.3524, 123.9755],
@@ -209,7 +212,13 @@ export const PAKNAAN_HUBS = [
     lat: 10.345909307605107,
     lng: 123.95748834311513,
     label: 'TB',
-    matchNames: ['twinbee hub', 'twinbee'],
+    matchNames: [
+      'twinbee hub',
+      'twinbee',
+      'palanan central hub',
+      'palanan central',
+      'palanan',
+    ],
   },
   {
     id: 'paknaan-brgy-hall',
@@ -234,6 +243,77 @@ export const PAKNAAN_HUBS = [
     lat: 10.346474742138703,
     lng: 123.95854066966143,
     label: 'GY',
-    matchNames: ['paknaan gymnasium', 'paknaan gymnasium hub', 'gymnasium hub', 'gymnasium'],
+    matchNames: [
+      'paknaan gymnasium',
+      'paknaan gymnasium hub',
+      'gymnasium hub',
+      'gymnasium',
+      'san isidro depot',
+      'san isidro',
+      'depot',
+    ],
   },
 ];
+
+// Label shown on the map/dashboard for any vehicle whose location does not
+// match a known hub (kept identical to the map's FALLBACK_HUB name).
+export const FALLBACK_HUB_NAME = 'Paknaan Area (Unassigned)';
+
+function normalizeLocationName(value = '') {
+  return String(value).trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+// Resolves a raw vehicle current_location string to the canonical hub name
+// used on the map. Returns FALLBACK_HUB_NAME when nothing matches.
+// Includes any custom hubs the user pinned (passed in or read from storage).
+export function resolveHubName(location, extraHubs = null) {
+  const normalized = normalizeLocationName(location);
+  if (!normalized) {
+    return FALLBACK_HUB_NAME;
+  }
+
+  let customHubs = extraHubs;
+  if (!customHubs) {
+    try {
+      customHubs = JSON.parse(localStorage.getItem(HUBS_STORAGE_KEY) || '[]');
+    } catch {
+      customHubs = [];
+    }
+  }
+
+  const hubs = [...PAKNAAN_HUBS, ...customHubs];
+
+  // Exact alias match first.
+  const exact = hubs.find((hub) => (
+    (hub.matchNames ?? [hub.name]).some((name) => normalizeLocationName(name) === normalized)
+  ));
+  if (exact) {
+    return exact.name;
+  }
+
+  // Loose contains-match for minor wording differences.
+  const loose = hubs.find((hub) => (
+    (hub.matchNames ?? [hub.name]).some((name) => {
+      const n = normalizeLocationName(name);
+      return normalized.includes(n) || n.includes(normalized);
+    })
+  ));
+
+  return loose ? loose.name : FALLBACK_HUB_NAME;
+}
+
+// Re-groups raw {label, value} location rows (from the dashboard API) into
+// the same hub buckets the map uses, so both views always agree.
+export function groupLocationRowsByHub(rows = [], extraHubs = null) {
+  const totals = new Map();
+
+  rows.forEach((row) => {
+    const hubName = resolveHubName(row.label, extraHubs);
+    const count = Number(row.value) || 0;
+    totals.set(hubName, (totals.get(hubName) ?? 0) + count);
+  });
+
+  return Array.from(totals.entries())
+    .map(([label, value]) => ({ label, value }))
+    .sort((a, b) => b.value - a.value);
+}
