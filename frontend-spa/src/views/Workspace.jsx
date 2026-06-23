@@ -2630,14 +2630,38 @@ function StatusBadge({ value }) {
   return <span className={`status-badge ${String(value).toLowerCase().replaceAll(' ', '-')}`}>{value ?? '-'}</span>;
 }
 
+// The backend stores absolute image URLs built from APP_URL, which often points
+// at a different host/port than where the API is actually served (e.g. stored as
+// localhost:8000 but served on 127.0.0.1:8001). Rewrite local-host URLs to the
+// real API origin so images load; leave external URLs (e.g. Supabase) untouched.
+const API_ORIGIN = (api.defaults.baseURL || '').replace(/\/api\/?$/, '');
+
+function resolvePhotoUrl(url) {
+  if (!url) return url;
+  try {
+    const parsed = new URL(url, window.location.origin);
+    const isLocalHost = ['localhost', '127.0.0.1', '0.0.0.0'].includes(parsed.hostname);
+    if (isLocalHost && API_ORIGIN) {
+      const base = new URL(API_ORIGIN);
+      parsed.protocol = base.protocol;
+      parsed.host = base.host;
+    }
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
 function PhotoCell({ url, alt }) {
   if (!url) {
     return '-';
   }
 
+  const resolved = resolvePhotoUrl(url);
+
   return (
-    <a className="photo-cell" href={url} rel="noreferrer" target="_blank">
-      <img alt={alt} className="photo-thumb" src={url} />
+    <a className="photo-cell" href={resolved} rel="noreferrer" target="_blank">
+      <img alt={alt} className="photo-thumb" src={resolved} loading="lazy" />
     </a>
   );
 }
