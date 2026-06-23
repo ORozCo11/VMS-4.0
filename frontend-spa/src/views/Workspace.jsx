@@ -238,6 +238,8 @@ function Workspace() {
   // Condition Monitoring Filters
   const [condFilterStartDate, setCondFilterStartDate] = useState('');
   const [condFilterEndDate, setCondFilterEndDate] = useState('');
+  // Draft for the condition filter bar — applied only on "Filter" click.
+  const [condDraft, setCondDraft] = useState({ category: '', status: '', start: '', end: '' });
   const [prefilledTicketData, setPrefilledTicketData] = useState(null);
   const [allHubs, setAllHubs] = useState([]);
   const [locationsTab, setLocationsTab] = useState('map');
@@ -382,6 +384,9 @@ function Workspace() {
      setFilterCapacity('');
      setFilterStatus('');
      setFilterPriority('');
+     setCondFilterStartDate('');
+     setCondFilterEndDate('');
+     setCondDraft({ category: '', status: '', start: '', end: '' });
      setLoading(true);
      loadModule(activeModule)
        .catch((error) => showError(error, setNotice))
@@ -978,8 +983,8 @@ function Workspace() {
               {/* Category Dropdown */}
               <select
                 className="filter-select"
-                value={filterCategory}
-                onChange={(e) => setFilterCategory(e.target.value)}
+                value={condDraft.category}
+                onChange={(e) => setCondDraft((d) => ({ ...d, category: e.target.value }))}
               >
                 <option value="">All Categories</option>
                 {(lookups.categories ?? []).map((cat) => (
@@ -992,8 +997,8 @@ function Workspace() {
               {/* Condition Dropdown */}
               <select
                 className="filter-select"
-                value={filterStatus}
-                onChange={(e) => setFilterStatus(e.target.value)}
+                value={condDraft.status}
+                onChange={(e) => setCondDraft((d) => ({ ...d, status: e.target.value }))}
               >
                 <option value="">All Conditions</option>
                 {['Good', 'Needs Inspection', 'Needs Repair', 'Damaged'].map((cond) => (
@@ -1010,8 +1015,8 @@ function Workspace() {
                   type="date"
                   className="filter-select"
                   style={{ minWidth: 'auto' }}
-                  value={condFilterStartDate}
-                  onChange={(e) => setCondFilterStartDate(e.target.value)}
+                  value={condDraft.start}
+                  onChange={(e) => setCondDraft((d) => ({ ...d, start: e.target.value }))}
                 />
               </div>
 
@@ -1022,21 +1027,43 @@ function Workspace() {
                   type="date"
                   className="filter-select"
                   style={{ minWidth: 'auto' }}
-                  value={condFilterEndDate}
-                  onChange={(e) => setCondFilterEndDate(e.target.value)}
+                  value={condDraft.end}
+                  onChange={(e) => setCondDraft((d) => ({ ...d, end: e.target.value }))}
                 />
               </div>
 
-              {/* Action Buttons */}
-              {(filterCategory || filterStatus || condFilterStartDate || condFilterEndDate) && (
-                <button 
-                  type="button" 
+              {/* Apply Filter */}
+              <button
+                type="button"
+                className="filter-apply-btn"
+                disabled={
+                  condDraft.category === filterCategory
+                  && condDraft.status === filterStatus
+                  && condDraft.start === condFilterStartDate
+                  && condDraft.end === condFilterEndDate
+                }
+                onClick={() => {
+                  setFilterCategory(condDraft.category);
+                  setFilterStatus(condDraft.status);
+                  setCondFilterStartDate(condDraft.start);
+                  setCondFilterEndDate(condDraft.end);
+                }}
+              >
+                Filter
+              </button>
+
+              {/* Clear Filters */}
+              {(filterCategory || filterStatus || condFilterStartDate || condFilterEndDate
+                || condDraft.category || condDraft.status || condDraft.start || condDraft.end) && (
+                <button
+                  type="button"
                   className="filter-clear-btn"
                   onClick={() => {
                     setFilterCategory('');
                     setFilterStatus('');
                     setCondFilterStartDate('');
                     setCondFilterEndDate('');
+                    setCondDraft({ category: '', status: '', start: '', end: '' });
                   }}
                 >
                   Clear Filters
@@ -2425,7 +2452,7 @@ function categoryColumns(setEditTarget, deleteRecord) {
 }
 
 const locationColumns = [
-  { label: 'Record ID', render: (row) => row.location_record_id ?? '—' },
+  { label: 'ID', render: (row) => row.location_record_id ?? '—' },
   { label: 'Vehicle', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
   { label: 'Current Location', render: (row) => row.current_location ?? '-' },
   { label: 'Address / Area', render: (row) => row.address_area ?? '-' },
@@ -2442,7 +2469,7 @@ const locationColumns = [
 
 function conditionColumns(role, setEditTarget, deleteRecord) {
   const columns = [
-    { label: 'Check ID', render: (row) => row.condition_check_id },
+    { label: 'ID', render: (row) => row.condition_check_id },
     { label: 'Vehicle', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
     { label: 'Result', render: (row) => <StatusBadge value={row.condition_result} /> },
     { label: 'Checked By', render: (row) => row.checked_by?.name ?? '-' },
@@ -2518,7 +2545,7 @@ function issueColumns(role, setEditTarget, onCreateTicketFromIssue) {
 
 function maintenanceColumns(role, setEditTarget, updateRecord) {
   const columns = [
-    { label: 'Maintenance ID', render: (row) => row.maintenance_id },
+    { label: 'ID', render: (row) => row.maintenance_id },
     { label: 'Vehicle', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
     { label: 'Type', render: (row) => row.maintenance_type },
     { label: 'Problem / Reason', className: 'cell-text', render: (row) => row.problem_reason },
@@ -2548,7 +2575,7 @@ function maintenanceColumns(role, setEditTarget, updateRecord) {
 
 function maintenanceStatusColumns(setEditTarget) {
   return [
-    { label: 'Maintenance ID', render: (row) => row.maintenance_id },
+    { label: 'ID', render: (row) => row.maintenance_id },
     { label: 'Vehicle', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
     { label: 'Type', render: (row) => row.maintenance_type },
     { label: 'Problem / Reason', className: 'cell-text', render: (row) => row.problem_reason },
@@ -2561,7 +2588,7 @@ function maintenanceStatusColumns(setEditTarget) {
 
 function scheduleColumns(setEditTarget, deleteRecord) {
   return [
-    { label: 'Schedule ID', render: (row) => row.schedule_id },
+    { label: 'ID', render: (row) => row.schedule_id },
     { label: 'Vehicle', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
     { label: 'Type', render: (row) => row.maintenance_type },
     { label: 'Date', render: (row) => formatDate(row.scheduled_date) },
@@ -2581,7 +2608,7 @@ function scheduleColumns(setEditTarget, deleteRecord) {
 }
 
 const maintenanceHistoryColumns = [
-  { label: 'History ID', render: (row) => row.maintenance_id },
+  { label: 'ID', render: (row) => row.maintenance_id },
   { label: 'Vehicle', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
   { label: 'Type', render: (row) => row.maintenance_type },
   { label: 'Problem / Reason', className: 'cell-text', render: (row) => row.problem_reason },
@@ -2592,7 +2619,7 @@ const maintenanceHistoryColumns = [
 ];
 
 const historyColumns = [
-  { label: 'History ID', render: (row) => row.history_id },
+  { label: 'ID', render: (row) => row.history_id },
   { label: 'Vehicle', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
   { label: 'Activity', render: (row) => row.activity_type },
   { label: 'Description', className: 'cell-text', render: (row) => row.description },
@@ -2602,7 +2629,7 @@ const historyColumns = [
 ];
 
 const logColumns = [
-  { label: 'Log ID', render: (row) => row.log_id },
+  { label: 'ID', render: (row) => row.log_id },
   { label: 'User', render: (row) => row.user?.name ?? '-' },
   { label: 'Role', render: (row) => row.role ?? '-' },
   { label: 'Action', render: (row) => row.action },
@@ -3717,19 +3744,57 @@ function FilterBar({
     return Array.from(caps).sort();
   }, [vehicles]);
 
+  // Draft selections — only applied to the table when "Filter" is clicked.
+  const [draft, setDraft] = useState({
+    category: filterCategory,
+    capacity: filterCapacity,
+    status: filterStatus,
+    priority: filterPriority,
+  });
+
+  // Keep the draft in sync when applied filters are reset externally
+  // (e.g. switching modules clears all filters).
+  useEffect(() => {
+    setDraft({
+      category: filterCategory,
+      capacity: filterCapacity,
+      status: filterStatus,
+      priority: filterPriority,
+    });
+  }, [filterCategory, filterCapacity, filterStatus, filterPriority]);
+
   const hasActiveFilters = filterCategory || filterCapacity || filterStatus || filterPriority;
+  const isDirty = draft.category !== filterCategory
+    || draft.capacity !== filterCapacity
+    || draft.status !== filterStatus
+    || draft.priority !== filterPriority;
+
+  const applyFilters = () => {
+    setFilterCategory(draft.category);
+    setFilterCapacity(draft.capacity);
+    setFilterStatus(draft.status);
+    if (setFilterPriority) setFilterPriority(draft.priority);
+  };
+
+  const clearFilters = () => {
+    setDraft({ category: '', capacity: '', status: '', priority: '' });
+    setFilterCategory('');
+    setFilterCapacity('');
+    setFilterStatus('');
+    if (setFilterPriority) setFilterPriority('');
+  };
 
   return (
     <div className="filter-bar-container">
       <div className="filter-label">
         <span>Filters:</span>
       </div>
-      
+
       {/* Category Dropdown */}
       <select
         className="filter-select"
-        value={filterCategory}
-        onChange={(e) => setFilterCategory(e.target.value)}
+        value={draft.category}
+        onChange={(e) => setDraft((d) => ({ ...d, category: e.target.value }))}
       >
         <option value="">All Categories</option>
         {categories.map((cat) => (
@@ -3742,8 +3807,8 @@ function FilterBar({
       {/* Capacity Dropdown */}
       <select
         className="filter-select"
-        value={filterCapacity}
-        onChange={(e) => setFilterCapacity(e.target.value)}
+        value={draft.capacity}
+        onChange={(e) => setDraft((d) => ({ ...d, capacity: e.target.value }))}
       >
         <option value="">All Capacities</option>
         {capacities.map((cap) => (
@@ -3757,8 +3822,8 @@ function FilterBar({
       {statusOptions && statusOptions.length > 0 && (
         <select
           className="filter-select"
-          value={filterStatus}
-          onChange={(e) => setFilterStatus(e.target.value)}
+          value={draft.status}
+          onChange={(e) => setDraft((d) => ({ ...d, status: e.target.value }))}
         >
           <option value="">All {statusLabel}es</option>
           {statusOptions.map((opt) => (
@@ -3773,8 +3838,8 @@ function FilterBar({
       {priorityOptions && priorityOptions.length > 0 && (
         <select
           className="filter-select"
-          value={filterPriority}
-          onChange={(e) => setFilterPriority(e.target.value)}
+          value={draft.priority}
+          onChange={(e) => setDraft((d) => ({ ...d, priority: e.target.value }))}
         >
           <option value="">All {priorityLabel}s</option>
           {priorityOptions.map((opt) => (
@@ -3785,17 +3850,22 @@ function FilterBar({
         </select>
       )}
 
+      {/* Apply Filter button */}
+      <button
+        type="button"
+        className="filter-apply-btn"
+        onClick={applyFilters}
+        disabled={!isDirty}
+      >
+        Filter
+      </button>
+
       {/* Clear Filters button */}
-      {hasActiveFilters && (
+      {(hasActiveFilters || isDirty) && (
         <button
           type="button"
           className="filter-clear-btn"
-          onClick={() => {
-            setFilterCategory('');
-            setFilterCapacity('');
-            setFilterStatus('');
-            if (setFilterPriority) setFilterPriority('');
-          }}
+          onClick={clearFilters}
         >
           Clear Filters
         </button>
