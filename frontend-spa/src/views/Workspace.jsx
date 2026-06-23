@@ -2672,9 +2672,9 @@ function VehicleCell({ vehicle }) {
   }
 
   return (
-    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+    <div className="vehicle-cell">
       <PhotoCell alt={vehicle.vehicle_name} url={vehicle.photo_url} />
-      <span>{vehicleLabel(vehicle)}</span>
+      <span className="vehicle-cell-name">{vehicleLabel(vehicle)}</span>
     </div>
   );
 }

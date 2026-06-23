@@ -783,6 +783,26 @@ table a:hover {
 .photo-thumb:hover {
   transform: scale(1.08);
 }
+
+/* Vehicle cell: keep the thumbnail fixed and wrap the name at words, never
+   mid-word (prevents the one-letter-per-line squeeze in narrow columns). */
+.vehicle-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 170px;
+}
+.vehicle-cell .photo-cell,
+.vehicle-cell .photo-thumb {
+  flex-shrink: 0;
+}
+.vehicle-cell-name {
+  word-break: normal;
+  overflow-wrap: normal;
+  white-space: normal;
+  line-height: 1.3;
+}
+
 .form-actions {
   display: flex;
   gap: 12px;
