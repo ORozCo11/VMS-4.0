@@ -995,6 +995,11 @@ class FleetController extends Controller
 
             return $this->publicStorageUrl($path);
         } catch (\Throwable $throwable) {
+            // Don't fail the request, but make the fallback visible — a silent
+            // fallback previously hid broken Supabase credentials for a long time.
+            \Illuminate\Support\Facades\Log::warning(
+                "Supabase upload failed for {$directory}/{$filename}; stored locally instead. ({$throwable->getMessage()})"
+            );
             $path = Storage::disk('public')->putFileAs($directory, $file, $filename, 'public');
 
             return $this->publicLocalStorageUrl($path);
