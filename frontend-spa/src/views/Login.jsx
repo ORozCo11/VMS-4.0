@@ -134,7 +134,12 @@ function Login() {
           {error ? <p className="notice error">{error}</p> : null}
 
           <button className="primary-button" disabled={submitting} type="submit">
-            {submitting ? 'Signing in...' : 'Sign in'}
+            {submitting ? (
+              <span className="btn-loading">
+                <span className="btn-spinner" aria-hidden="true" />
+                Signing in…
+              </span>
+            ) : 'Sign in'}
           </button>
         </form>
       </section>

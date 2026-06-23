@@ -793,7 +793,7 @@ function Workspace() {
 
         {notice ? <p className={`notice ${notice.type}`} style={{margin: '20px 32px 0'}}>{notice.text}</p> : null}
         <div className="content-body">
-          {loading ? <p className="loading">Loading module data...</p> : renderModule()}
+          {loading ? <ModuleLoader /> : renderModule()}
         </div>
       </section>
     </main>
@@ -1573,6 +1573,14 @@ function Dashboard({ data, user }) {
         </GraphPanel>
       </section>
 
+      <section className="panel full-span area-chart-panel">
+        <div className="panel-header area-chart-header">
+          <h3>Fleet Activity by Day</h3>
+          <span className="area-chart-tag">Last 14 days</span>
+        </div>
+        <AreaChart rows={data.activity_by_day ?? []} />
+      </section>
+
       <section className="panel full-span">
         <div className="panel-header">
           <h3>Recent Updates</h3>
@@ -1775,6 +1783,83 @@ function ColumnChart({ rows = [] }) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function AreaChart({ rows = [], height = 180 }) {
+  if (!rows.length) {
+    return <p className="empty-state">No activity data yet.</p>;
+  }
+
+  const width = 560;
+  const padX = 36;
+  const padTop = 16;
+  const padBottom = 26;
+  const innerW = width - padX * 2;
+  const innerH = height - padTop - padBottom;
+
+  const values = rows.map((r) => Number(r.value) || 0);
+  const maxValue = Math.max(1, ...values);
+  // Round the axis max up to a "nice" number for readable gridlines.
+  const niceMax = (() => {
+    const pow = Math.pow(10, Math.floor(Math.log10(maxValue)));
+    return Math.ceil(maxValue / pow) * pow || 1;
+  })();
+
+  const stepX = rows.length > 1 ? innerW / (rows.length - 1) : 0;
+  const points = rows.map((row, i) => {
+    const x = padX + stepX * i;
+    const y = padTop + innerH - ((Number(row.value) || 0) / niceMax) * innerH;
+    return { x, y, ...row };
+  });
+
+  const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
+  const areaPath = `${linePath} L ${points[points.length - 1].x.toFixed(1)} ${(padTop + innerH).toFixed(1)} L ${points[0].x.toFixed(1)} ${(padTop + innerH).toFixed(1)} Z`;
+
+  const gridLines = [0, 0.25, 0.5, 0.75, 1];
+  // Show at most ~8 x-axis labels to avoid crowding.
+  const labelStep = Math.ceil(rows.length / 8);
+
+  return (
+    <div className="area-chart">
+      <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" role="img" aria-label="Activity by day">
+        <defs>
+          <linearGradient id="areaFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#ff7a1a" stopOpacity="0.45" />
+            <stop offset="100%" stopColor="#ff7a1a" stopOpacity="0" />
+          </linearGradient>
+        </defs>
+
+        {gridLines.map((g) => {
+          const y = padTop + innerH * g;
+          const val = Math.round(niceMax * (1 - g));
+          return (
+            <g key={g}>
+              <line
+                className="area-grid-line"
+                x1={padX} y1={y} x2={width - padX} y2={y}
+                strokeDasharray="3 4"
+              />
+              <text className="area-axis-label" x={padX - 8} y={y + 3} textAnchor="end">{val}</text>
+            </g>
+          );
+        })}
+
+        <path d={areaPath} fill="url(#areaFill)" />
+        <path d={linePath} className="area-line" fill="none" />
+
+        {points.map((p, i) => (
+          <g key={i}>
+            <circle className="area-dot" cx={p.x} cy={p.y} r="3.2">
+              <title>{`${p.label}: ${p.value}`}</title>
+            </circle>
+            {i % labelStep === 0 && (
+              <text className="area-axis-label" x={p.x} y={height - 8} textAnchor="middle">{p.label}</text>
+            )}
+          </g>
+        ))}
+      </svg>
     </div>
   );
 }
@@ -2037,9 +2122,18 @@ function DataTable({ columns, rows }) {
     return <p className="empty-state">No records found.</p>;
   }
 
+  const hasWidths = columns.some((column) => column.width);
+
   return (
     <div className="table-shell">
       <table>
+        {hasWidths && (
+          <colgroup>
+            {columns.map((column) => (
+              <col key={column.label} style={column.width ? { width: column.width } : undefined} />
+            ))}
+          </colgroup>
+        )}
         <thead>
           <tr>
             {columns.map((column) => (
@@ -2051,12 +2145,39 @@ function DataTable({ columns, rows }) {
           {rows.map((row, index) => (
             <tr key={rowKey(row, index)}>
               {columns.map((column) => (
-                <td key={column.label}>{column.render ? column.render(row) : row[column.key]}</td>
+                <td key={column.label} className={column.className}>{column.render ? column.render(row) : row[column.key]}</td>
               ))}
             </tr>
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function ModuleLoader({ label = 'Loading module data' }) {
+  return (
+    <div className="module-loader" role="status" aria-live="polite">
+      <div className="module-loader-card">
+        <span className="module-loader-spinner" aria-hidden="true">
+          <svg viewBox="0 0 50 50" width="44" height="44">
+            <circle className="module-loader-track" cx="25" cy="25" r="20" fill="none" strokeWidth="5" />
+            <circle className="module-loader-arc" cx="25" cy="25" r="20" fill="none" strokeWidth="5" strokeLinecap="round" />
+          </svg>
+        </span>
+        <span className="module-loader-label">{label}<span className="module-loader-dots" /></span>
+      </div>
+
+      <div className="skeleton-table" aria-hidden="true">
+        <div className="skeleton-row skeleton-head">
+          {Array.from({ length: 5 }).map((_, i) => <span className="skeleton-cell" key={i} />)}
+        </div>
+        {Array.from({ length: 5 }).map((_, r) => (
+          <div className="skeleton-row" key={r} style={{ animationDelay: `${r * 0.08}s` }}>
+            {Array.from({ length: 5 }).map((_, c) => <span className="skeleton-cell" key={c} />)}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -2325,7 +2446,7 @@ function conditionColumns(role, setEditTarget, deleteRecord) {
     { label: 'Vehicle', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
     { label: 'Result', render: (row) => <StatusBadge value={row.condition_result} /> },
     { label: 'Checked By', render: (row) => row.checked_by?.name ?? '-' },
-    { label: 'Observations', render: (row) => row.observations ?? '-' },
+    { label: 'Observations', className: 'cell-text', render: (row) => row.observations ?? '-' },
     { label: 'Date', render: (row) => formatDate(row.created_at) },
   ];
 
@@ -2346,15 +2467,33 @@ function conditionColumns(role, setEditTarget, deleteRecord) {
 
 function issueColumns(role, setEditTarget, onCreateTicketFromIssue) {
   const columns = [
-    { label: 'Issue ID', render: (row) => row.issue_report_id },
-    { label: 'Vehicle', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
-    { label: 'Issue Type', render: (row) => row.issue_type },
-    { label: 'Severity', render: (row) => <StatusBadge value={row.severity_level} /> },
-    { label: 'Status', render: (row) => <StatusBadge value={row.status} /> },
-    { label: 'Reported By', render: (row) => row.reported_by?.name ?? '-' },
-    { label: 'Description', render: (row) => row.issue_description },
+    {
+      label: 'Issue',
+      width: '28%',
+      render: (row) => (
+        <div className="issue-cell">
+          <div className="issue-cell-top">
+            <span className="issue-id-badge">#{row.issue_report_id}</span>
+            <span className="issue-type">{row.issue_type}</span>
+          </div>
+          {row.issue_description && (
+            <p className="issue-desc" title={row.issue_description}>{row.issue_description}</p>
+          )}
+        </div>
+      ),
+    },
+    { label: 'Vehicle', width: '16%', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
+    { label: 'Severity', width: '10%', render: (row) => <StatusBadge value={row.severity_level} /> },
+    { label: 'Status', width: '10%', render: (row) => <StatusBadge value={row.status} /> },
+    {
+      label: 'Reported By',
+      width: '12%',
+      render: (row) => <span className="issue-reporter">{row.reported_by?.name ?? '-'}</span>,
+    },
     {
       label: 'Photo',
+      width: '7%',
+      className: 'cell-center',
       render: (row) => <PhotoCell alt={`Issue #${row.issue_report_id}`} url={row.photo_url} />,
     },
   ];
@@ -2362,6 +2501,7 @@ function issueColumns(role, setEditTarget, onCreateTicketFromIssue) {
   if (['Admin', 'Maintenance Personnel'].includes(role)) {
     columns.push({
       label: 'Action',
+      width: '17%',
       render: (row) => (
         <div className="row-actions">
           <button className="btn-edit-action" onClick={() => setEditTarget(row)} type="button">Update</button>
@@ -2381,7 +2521,7 @@ function maintenanceColumns(role, setEditTarget, updateRecord) {
     { label: 'Maintenance ID', render: (row) => row.maintenance_id },
     { label: 'Vehicle', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
     { label: 'Type', render: (row) => row.maintenance_type },
-    { label: 'Problem / Reason', render: (row) => row.problem_reason },
+    { label: 'Problem / Reason', className: 'cell-text', render: (row) => row.problem_reason },
     { label: 'Personnel', render: (row) => row.maintenance_personnel?.name ?? '-' },
     { label: 'Progress', render: (row) => <StatusBadge value={row.progress_status} /> },
     { label: 'Verification', render: (row) => row.verification_result ? <StatusBadge value={row.verification_result} /> : '-' },
@@ -2411,8 +2551,8 @@ function maintenanceStatusColumns(setEditTarget) {
     { label: 'Maintenance ID', render: (row) => row.maintenance_id },
     { label: 'Vehicle', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
     { label: 'Type', render: (row) => row.maintenance_type },
-    { label: 'Problem / Reason', render: (row) => row.problem_reason },
-    { label: 'Action Taken', render: (row) => row.action_taken ?? '-' },
+    { label: 'Problem / Reason', className: 'cell-text', render: (row) => row.problem_reason },
+    { label: 'Action Taken', className: 'cell-text', render: (row) => row.action_taken ?? '-' },
     { label: 'Personnel', render: (row) => row.maintenance_personnel?.name ?? '-' },
     { label: 'Progress', render: (row) => <StatusBadge value={row.progress_status} /> },
     { label: 'Action', render: (row) => <button className="btn-edit-action" onClick={() => setEditTarget(row)} type="button">Verify</button> },
@@ -2444,8 +2584,8 @@ const maintenanceHistoryColumns = [
   { label: 'History ID', render: (row) => row.maintenance_id },
   { label: 'Vehicle', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
   { label: 'Type', render: (row) => row.maintenance_type },
-  { label: 'Problem / Reason', render: (row) => row.problem_reason },
-  { label: 'Action Taken', render: (row) => row.action_taken ?? '-' },
+  { label: 'Problem / Reason', className: 'cell-text', render: (row) => row.problem_reason },
+  { label: 'Action Taken', className: 'cell-text', render: (row) => row.action_taken ?? '-' },
   { label: 'Parts Used', render: (row) => <PartsTags value={row.parts_used} /> },
   { label: 'Personnel', render: (row) => row.maintenance_personnel?.name ?? '-' },
   { label: 'Completed', render: (row) => formatDate(row.date_completed ?? row.updated_at) },
@@ -2455,7 +2595,7 @@ const historyColumns = [
   { label: 'History ID', render: (row) => row.history_id },
   { label: 'Vehicle', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
   { label: 'Activity', render: (row) => row.activity_type },
-  { label: 'Description', render: (row) => row.description },
+  { label: 'Description', className: 'cell-text', render: (row) => row.description },
   { label: 'Related Record', render: (row) => row.related_record_id ?? '-' },
   { label: 'Updated By', render: (row) => row.updated_by?.name ?? '-' },
   { label: 'Date and Time', render: (row) => formatDate(row.created_at) },
@@ -2468,7 +2608,7 @@ const logColumns = [
   { label: 'Action', render: (row) => row.action },
   { label: 'Module', render: (row) => row.module },
   { label: 'Record ID', render: (row) => row.affected_record_id ?? '-' },
-  { label: 'Details', render: (row) => row.details ?? '-' },
+  { label: 'Details', className: 'cell-text', render: (row) => row.details ?? '-' },
   { label: 'Date and Time', render: (row) => formatDate(row.created_at) },
 ];
 

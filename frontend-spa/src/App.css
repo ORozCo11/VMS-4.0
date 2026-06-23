@@ -295,6 +295,167 @@
   display: flex; align-items: center; justify-content: center;
   padding: 60px; color: #2563eb; font-size: 0.9rem; font-weight: 600;
 }
+
+/* --- Trendy module loader (spinner + shimmer skeleton) --- */
+.module-loader {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  padding: 28px 4px;
+  animation: loaderFadeIn 0.3s ease;
+}
+
+@keyframes loaderFadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.module-loader-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  align-self: center;
+  padding: 16px 26px;
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(255, 122, 26, 0.10), rgba(255, 122, 26, 0.02));
+  border: 1px solid rgba(255, 122, 26, 0.22);
+  box-shadow: 0 8px 30px rgba(255, 122, 26, 0.10);
+}
+
+.module-loader-spinner svg {
+  display: block;
+  animation: loaderSpin 1s linear infinite;
+}
+
+.module-loader-track {
+  stroke: rgba(255, 122, 26, 0.18);
+}
+
+.module-loader-arc {
+  stroke: #ff7a1a;
+  stroke-dasharray: 90 150;
+  filter: drop-shadow(0 0 4px rgba(255, 122, 26, 0.6));
+}
+
+@keyframes loaderSpin {
+  to { transform: rotate(360deg); }
+}
+
+.module-loader-label {
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: #c2410c;
+}
+
+.module-loader-dots::after {
+  content: '';
+  animation: loaderDots 1.4s steps(4, end) infinite;
+}
+
+@keyframes loaderDots {
+  0% { content: ''; }
+  25% { content: '.'; }
+  50% { content: '..'; }
+  75% { content: '...'; }
+  100% { content: ''; }
+}
+
+.skeleton-table {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.skeleton-row {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 14px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: rgba(120, 130, 150, 0.05);
+  animation: skeletonPulse 1.4s ease-in-out infinite;
+}
+
+.skeleton-row.skeleton-head {
+  background: rgba(120, 130, 150, 0.09);
+}
+
+.skeleton-cell {
+  height: 12px;
+  border-radius: 6px;
+  background: linear-gradient(
+    90deg,
+    rgba(148, 163, 184, 0.12) 25%,
+    rgba(148, 163, 184, 0.28) 37%,
+    rgba(148, 163, 184, 0.12) 63%
+  );
+  background-size: 400% 100%;
+  animation: skeletonShimmer 1.4s ease infinite;
+}
+
+.skeleton-head .skeleton-cell {
+  height: 14px;
+}
+
+.skeleton-cell:first-child { max-width: 70%; }
+.skeleton-cell:nth-child(3) { max-width: 85%; }
+.skeleton-cell:last-child { max-width: 55%; }
+
+@keyframes skeletonShimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+
+@keyframes skeletonPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.65; }
+}
+
+/* --- Inline button spinner (login / submit actions) --- */
+.btn-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.btn-spinner {
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #ffffff;
+  animation: loaderSpin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+/* --- Full-screen session loader --- */
+.fullscreen-loader {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  background: radial-gradient(120% 120% at 50% 30%, #11151d 0%, #070a0f 70%);
+  z-index: 5000;
+}
+
+.fullscreen-loader-spinner svg {
+  display: block;
+  animation: loaderSpin 1s linear infinite;
+}
+
+.fullscreen-loader-label {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #cbd5e1;
+}
 .empty-state {
   display: flex; align-items: center; justify-content: center; flex-direction: column;
   padding: 48px; text-align: center; color: #64748b;
@@ -359,7 +520,8 @@
 .table-shell {
   border: 1px solid #cbd5e1;
   border-radius: 12px;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
   background: #ffffff;
   box-shadow: 0 4px 12px rgba(15, 23, 42, 0.05);
   margin-bottom: 24px;
@@ -368,6 +530,78 @@ table {
   width: 100%;
   border-collapse: collapse;
   font-size: 0.875rem;
+  table-layout: auto;
+}
+/* Let cells wrap long text instead of forcing horizontal scroll. */
+tbody td {
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+/* When a column declares an explicit width (via <colgroup>), honour it. */
+table colgroup + thead th,
+table colgroup ~ tbody td {
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+td.cell-center, th.cell-center { text-align: center; }
+
+/* Long free-text columns: cap width and wrap so the table stays readable
+   and doesn't stretch into a wide horizontal scroll. */
+td.cell-text {
+  min-width: 180px;
+  max-width: 320px;
+  white-space: normal;
+  line-height: 1.45;
+}
+
+/* --- Issue Reports: combined issue cell --- */
+.issue-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.issue-cell-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.issue-id-badge {
+  flex-shrink: 0;
+  font-family: 'Space Grotesk', 'Inter', sans-serif;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #93c5fd;
+  background: rgba(59, 130, 246, 0.14);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  border-radius: 6px;
+  padding: 1px 7px;
+  letter-spacing: 0.02em;
+}
+
+.issue-type {
+  font-weight: 700;
+  font-size: 0.88rem;
+  color: var(--text-strong, #0f172a);
+  line-height: 1.2;
+}
+
+.issue-desc {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  color: var(--text-muted, #64748b);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.issue-reporter {
+  font-size: 0.82rem;
+  font-weight: 600;
 }
 thead th {
   background: linear-gradient(180deg, #f8fafc 0%, #e2e8f0 100%);
@@ -436,15 +670,22 @@ table a:hover {
 .status-badge {
   display: inline-flex;
   align-items: center;
-  height: 24px;
-  padding: 0 12px;
-  border-radius: 99px;
+  justify-content: center;
+  text-align: center;
+  min-height: 24px;
+  padding: 4px 12px;
+  border-radius: 16px;
   font-family: 'Space Grotesk', sans-serif;
   font-size: 0.75rem;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.04em;
   border: 1.5px solid transparent;
+  white-space: normal;
+  overflow-wrap: normal;
+  word-break: keep-all;
+  hyphens: none;
+  line-height: 1.15;
 }
 .status-badge.active, .status-badge.available, .status-badge.completed, .status-badge.passed, .status-badge.resolved, .status-badge.approved, .status-badge.good {
   background: #dcfce7;
@@ -610,12 +851,17 @@ table a:hover {
 .row-actions {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
 }
 .row-actions button, table button, .table-shell button {
   height: 36px;
   padding: 0 14px;
   font-size: 0.85rem;
   border-radius: 8px;
+  white-space: nowrap;
+  word-break: normal;
+  overflow-wrap: normal;
+  flex-shrink: 0;
 }
 
 /* --- Action Button Color Modifiers --- */
@@ -1879,6 +2125,71 @@ table button,
   color: var(--primary-strong);
   font-size: 0.92rem;
   white-space: nowrap;
+}
+
+/* --- Area / line chart (Fleet Activity by Day) --- */
+.area-chart-panel {
+  background: linear-gradient(180deg, #11151d 0%, #0b0e14 100%);
+}
+
+.area-chart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.area-chart-tag {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #ffbd7a;
+  background: rgba(255, 122, 26, 0.12);
+  border: 1px solid rgba(255, 122, 26, 0.28);
+  padding: 4px 12px;
+  border-radius: 999px;
+}
+
+.area-chart {
+  width: 100%;
+  margin-top: 12px;
+}
+
+.area-chart svg {
+  width: 100%;
+  height: 220px;
+  display: block;
+  overflow: visible;
+}
+
+.area-grid-line {
+  stroke: rgba(148, 163, 184, 0.16);
+  stroke-width: 1;
+}
+
+.area-axis-label {
+  fill: #7f8799;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.area-line {
+  stroke: #ff7a1a;
+  stroke-width: 2.4;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  filter: drop-shadow(0 2px 6px rgba(255, 122, 26, 0.45));
+}
+
+.area-dot {
+  fill: #ff7a1a;
+  stroke: #11151d;
+  stroke-width: 2;
+  transition: r 0.15s ease;
+  cursor: pointer;
+}
+
+.area-dot:hover {
+  r: 5;
+  fill: #ffaa5e;
 }
 
 .panel,

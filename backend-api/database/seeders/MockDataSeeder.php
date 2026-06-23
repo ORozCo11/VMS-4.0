@@ -56,7 +56,7 @@ class MockDataSeeder extends Seeder
                 'current_location' => 'Palanan Central Hub',
                 'status'           => 'Available',
                 'condition'        => 'Good',
-                'photo_url'        => $baseUrl . '/mockups/fleet-vehicle.png',
+                'photo_url'        => $baseUrl . '/mockups/ambulance-blue.svg',
             ]
         );
 
@@ -75,7 +75,7 @@ class MockDataSeeder extends Seeder
                 'current_location' => 'Barangay Hall Hub',
                 'status'           => 'Available',
                 'condition'        => 'Good',
-                'photo_url'        => $baseUrl . '/mockups/fleet-vehicle.png',
+                'photo_url'        => $baseUrl . '/mockups/ambulance-yellow.svg',
             ]
         );
 
@@ -94,7 +94,7 @@ class MockDataSeeder extends Seeder
                 'current_location' => 'San Isidro Depot',
                 'status'           => 'Available',
                 'condition'        => 'Good',
-                'photo_url'        => $baseUrl . '/mockups/fleet-vehicle.png',
+                'photo_url'        => $baseUrl . '/mockups/rescue-truck.svg',
             ]
         );
 
@@ -113,7 +113,7 @@ class MockDataSeeder extends Seeder
                 'current_location' => 'Palanan Central Hub',
                 'status'           => 'Under Maintenance',
                 'condition'        => 'Needs Repair',
-                'photo_url'        => $baseUrl . '/mockups/fleet-vehicle.png',
+                'photo_url'        => $baseUrl . '/mockups/ambulance-wagon.svg',
             ]
         );
 
