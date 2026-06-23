@@ -532,16 +532,18 @@ table {
   font-size: 0.875rem;
   table-layout: auto;
 }
-/* Let cells wrap long text instead of forcing horizontal scroll. */
+/* Let cells wrap long text instead of forcing horizontal scroll.
+   Use overflow-wrap (not word-break) so short words like "Admin" never
+   split mid-word — only over-long unbreakable tokens get broken. */
 tbody td {
   overflow-wrap: break-word;
-  word-break: break-word;
+  word-break: normal;
 }
 /* When a column declares an explicit width (via <colgroup>), honour it. */
 table colgroup + thead th,
 table colgroup ~ tbody td {
   overflow-wrap: break-word;
-  word-break: break-word;
+  word-break: normal;
 }
 td.cell-center, th.cell-center { text-align: center; }
 
