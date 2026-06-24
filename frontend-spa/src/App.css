@@ -3422,6 +3422,23 @@ button.btn-view-action svg {
   padding: 12px;
 }
 
+/* Fullscreen map: cover the whole viewport above all other content. */
+.location-density-map-shell.is-maximized {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  border-radius: 0;
+  padding: 16px;
+  min-height: 100vh;
+  background: #050609;
+  animation: fadeSlide 0.2s ease;
+}
+
+.location-density-map-shell.is-maximized .location-density-map {
+  min-height: 0;
+  flex: 1;
+}
+
 /* --- Map toolbar (Add Hub / Download) --- */
 .location-density-toolbar {
   display: flex;

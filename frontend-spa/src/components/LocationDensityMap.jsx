@@ -237,6 +237,19 @@ function ResetMapView({ requestKey }) {
   return null;
 }
 
+// Leaflet renders tiles based on the container size at mount; when the shell
+// resizes (e.g. toggling fullscreen) the map must be told to recalculate.
+function ResizeMapOnToggle({ trigger }) {
+  const map = useMap();
+
+  useEffect(() => {
+    const timer = setTimeout(() => map.invalidateSize(), 260);
+    return () => clearTimeout(timer);
+  }, [map, trigger]);
+
+  return null;
+}
+
 function LocationDensityMap({
   vehicles = [],
   selectedVehicleId = null,
@@ -252,8 +265,24 @@ function LocationDensityMap({
   const [capturing, setCapturing] = useState(false);
   const [mapNotice, setMapNotice] = useState(null);
   const [resetViewRequest, setResetViewRequest] = useState(0);
+  const [isMaximized, setIsMaximized] = useState(false);
   const mapShellRef = useRef(null);
   const nameInputRef = useRef(null);
+
+  // Allow ESC to exit fullscreen and lock body scroll while maximized.
+  useEffect(() => {
+    if (!isMaximized) return undefined;
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') setIsMaximized(false);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [isMaximized]);
 
   const updateHubState = useCallback((nextCustomHubs, nextHiddenHubIds) => {
     localStorage.setItem(HUBS_STORAGE_KEY, JSON.stringify(nextCustomHubs));
@@ -391,7 +420,7 @@ function LocationDensityMap({
   const selectedVehicleIcon = useMemo(() => createSelectedVehicleIcon(), []);
 
   return (
-    <div className="location-density-map-shell" ref={mapShellRef}>
+    <div className={`location-density-map-shell${isMaximized ? ' is-maximized' : ''}`} ref={mapShellRef}>
       <div className="location-density-toolbar">
         <span className="location-density-hint">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -465,6 +494,34 @@ function LocationDensityMap({
               <line x1="12" y1="15" x2="12" y2="3" />
             </svg>
             {capturing ? 'Capturing…' : 'Download Map'}
+          </button>
+          <button
+            type="button"
+            className={`location-density-btn ${isMaximized ? 'is-active' : 'is-secondary'}`}
+            onClick={() => setIsMaximized((prev) => !prev)}
+            title={isMaximized ? 'Exit fullscreen (Esc)' : 'Maximize map'}
+          >
+            {isMaximized ? (
+              <>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M9 9 4 4M9 9V5M9 9H5" />
+                  <path d="m15 9 5-5M15 9V5M15 9h4" />
+                  <path d="m9 15-5 5M9 15v4M9 15H5" />
+                  <path d="m15 15 5 5M15 15v4M15 15h4" />
+                </svg>
+                Exit Fullscreen
+              </>
+            ) : (
+              <>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M15 3h6v6" />
+                  <path d="M9 21H3v-6" />
+                  <path d="M21 3l-7 7" />
+                  <path d="M3 21l7-7" />
+                </svg>
+                Maximize
+              </>
+            )}
           </button>
         </div>
       </div>
@@ -625,6 +682,7 @@ function LocationDensityMap({
         <FitBoundsToPolygon />
         <FocusVehicleOnMap target={selectedVehicleGroup} />
         <ResetMapView requestKey={resetViewRequest} />
+        <ResizeMapOnToggle trigger={isMaximized} />
       </MapContainer>
 
       {pendingLatLng && (
