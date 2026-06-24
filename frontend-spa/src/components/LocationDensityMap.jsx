@@ -3,15 +3,34 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { MapContainer, Marker, Polygon, Popup, TileLayer, Tooltip, useMap, ZoomControl } from 'react-leaflet';
 import { toPng } from 'html-to-image';
-import { PAKNAAN_BOUNDS, PAKNAAN_CENTER, PAKNAAN_HUBS, PAKNAAN_POLYGON, HUBS_STORAGE_KEY } from '../data/paknaanLocationDensity';
+import {
+  HIDDEN_HUBS_STORAGE_KEY,
+  HUBS_STORAGE_KEY,
+  PAKNAAN_BOUNDS,
+  PAKNAAN_CENTER,
+  PAKNAAN_POLYGON,
+  getActiveHubs,
+  readCustomHubs,
+  readHiddenHubIds,
+} from '../data/paknaanLocationDensity';
 
 const CARTO_DARK_TILE_URL = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
 const CARTO_ATTRIBUTION = '&copy; OpenStreetMap contributors &copy; CARTO';
 
+function escapeSvgText(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function createHubIcon(label, isCustom = false) {
-  const borderColor = isCustom ? '#FF6B9D' : '#22C55E';
-  const bgColor = isCustom ? '#7C1D4F' : '#052E16';
-  const innerColor = isCustom ? '#E84C89' : '#14532D';
+  const borderColor = isCustom ? '#4ADE80' : '#22C55E';
+  const bgColor = isCustom ? '#064E3B' : '#052E16';
+  const innerColor = isCustom ? '#15803D' : '#14532D';
+  const safeLabel = escapeSvgText(label);
 
   return L.divIcon({
     className: 'location-density-hub-icon',
@@ -21,7 +40,7 @@ function createHubIcon(label, isCustom = false) {
         <circle cx="21" cy="21" r="15" fill="${innerColor}" stroke="#86EFAC" stroke-width="1"/>
         <path d="M12 24.5 21 17l9 7.5" fill="none" stroke="#DCFCE7" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
         <path d="M15.5 23.5v8h11v-8" fill="none" stroke="#DCFCE7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-        <text x="21" y="15" text-anchor="middle" fill="#BBF7D0" font-size="8" font-family="Arial, sans-serif" font-weight="800">${label}</text>
+        <text x="21" y="15" text-anchor="middle" fill="#BBF7D0" font-size="8" font-family="Arial, sans-serif" font-weight="800">${safeLabel}</text>
       </svg>
     `,
     iconSize: [42, 42],
@@ -41,6 +60,23 @@ function createVehicleDotIcon(count) {
     iconSize: [18, 18],
     iconAnchor: [9, 9],
     popupAnchor: [0, -10],
+  });
+}
+
+function createSelectedVehicleIcon() {
+  return L.divIcon({
+    className: 'location-density-selected-vehicle-icon',
+    html: `
+      <span class="location-density-selected-vehicle">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z"/>
+          <circle cx="12" cy="12" r="3"/>
+        </svg>
+      </span>
+    `,
+    iconSize: [34, 34],
+    iconAnchor: [17, 17],
+    popupAnchor: [0, -17],
   });
 }
 
@@ -67,7 +103,7 @@ const FALLBACK_HUB = {
   matchNames: [],
 };
 
-function findHubForVehicle(vehicle) {
+function findHubForVehicle(vehicle, hubs) {
   const location = normalizeLocation(vehicle.current_location);
 
   if (!location) {
@@ -75,8 +111,8 @@ function findHubForVehicle(vehicle) {
   }
 
   // 1. Exact match against any hub alias.
-  const exact = PAKNAAN_HUBS.find((hub) => (
-    hub.matchNames.some((name) => location === normalizeLocation(name))
+  const exact = hubs.find((hub) => (
+    (hub.matchNames ?? [hub.name]).some((name) => location === normalizeLocation(name))
   ));
 
   if (exact) {
@@ -84,19 +120,19 @@ function findHubForVehicle(vehicle) {
   }
 
   // 2. Loose contains-match so minor wording differences still land on a hub.
-  return PAKNAAN_HUBS.find((hub) => (
-    hub.matchNames.some((name) => {
+  return hubs.find((hub) => (
+    (hub.matchNames ?? [hub.name]).some((name) => {
       const normalized = normalizeLocation(name);
       return location.includes(normalized) || normalized.includes(location);
     })
   )) ?? null;
 }
 
-function groupVehiclesByHub(vehicles) {
+function groupVehiclesByHub(vehicles, hubs) {
   const groups = new Map();
 
   vehicles.forEach((vehicle) => {
-    const matchedHub = findHubForVehicle(vehicle);
+    const matchedHub = findHubForVehicle(vehicle, hubs);
     const hub = (matchedHub && isValidCoordinate(matchedHub.lat) && isValidCoordinate(matchedHub.lng))
       ? matchedHub
       : FALLBACK_HUB;
@@ -172,20 +208,62 @@ function FitBoundsToPolygon() {
   return null;
 }
 
-function LocationDensityMap({ vehicles = [], onHubsChange = null }) {
-  const [customHubs, setCustomHubs] = useState(() => {
-    try {
-      return JSON.parse(localStorage.getItem(HUBS_STORAGE_KEY) || '[]');
-    } catch {
-      return [];
-    }
-  });
+function FocusVehicleOnMap({ target }) {
+  const map = useMap();
+  const hubId = target?.hub.id;
+  const lat = target?.hub.lat;
+  const lng = target?.hub.lng;
+
+  useEffect(() => {
+    if (!isValidCoordinate(lat) || !isValidCoordinate(lng)) return;
+    map.flyTo([lat, lng], Math.max(map.getZoom(), 18), {
+      animate: true,
+      duration: 0.8,
+    });
+  }, [hubId, lat, lng, map]);
+
+  return null;
+}
+
+function ResetMapView({ requestKey }) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (!requestKey) return;
+    const bounds = L.latLngBounds(PAKNAAN_POLYGON);
+    map.flyToBounds(bounds, { animate: true, duration: 0.8, padding: [24, 24], maxZoom: 16 });
+  }, [map, requestKey]);
+
+  return null;
+}
+
+function LocationDensityMap({
+  vehicles = [],
+  selectedVehicleId = null,
+  onClearSelectedVehicle = null,
+  onHubsChange = null,
+}) {
+  const [customHubs, setCustomHubs] = useState(() => readCustomHubs());
+  const [hiddenHubIds, setHiddenHubIds] = useState(() => readHiddenHubIds());
   const [addMode, setAddMode] = useState(false);
   const [pendingLatLng, setPendingLatLng] = useState(null);
+  const [deleteCandidate, setDeleteCandidate] = useState(null);
   const [hubNameDraft, setHubNameDraft] = useState('');
   const [capturing, setCapturing] = useState(false);
+  const [mapNotice, setMapNotice] = useState(null);
+  const [resetViewRequest, setResetViewRequest] = useState(0);
   const mapShellRef = useRef(null);
   const nameInputRef = useRef(null);
+
+  const updateHubState = useCallback((nextCustomHubs, nextHiddenHubIds) => {
+    localStorage.setItem(HUBS_STORAGE_KEY, JSON.stringify(nextCustomHubs));
+    localStorage.setItem(HIDDEN_HUBS_STORAGE_KEY, JSON.stringify(nextHiddenHubIds));
+    setCustomHubs(nextCustomHubs);
+    setHiddenHubIds(nextHiddenHubIds);
+    if (onHubsChange) {
+      onHubsChange(getActiveHubs(nextCustomHubs, nextHiddenHubIds));
+    }
+  }, [onHubsChange]);
 
   // When the naming modal opens, focus the input.
   useEffect(() => {
@@ -222,34 +300,65 @@ function LocationDensityMap({ vehicles = [], onHubsChange = null }) {
       isCustom: true,
     };
 
-    const stored = JSON.parse(localStorage.getItem(HUBS_STORAGE_KEY) || '[]');
-    const updated = [...stored, newHub];
-    localStorage.setItem(HUBS_STORAGE_KEY, JSON.stringify(updated));
-
-    setCustomHubs((prev) => [...prev, newHub]);
-    if (onHubsChange) {
-      onHubsChange([...PAKNAAN_HUBS, ...customHubs, newHub]);
-    }
-
+    updateHubState([...customHubs, newHub], hiddenHubIds);
+    setMapNotice({ type: 'success', text: `${name} hub added.` });
     setPendingLatLng(null);
     setHubNameDraft('');
-  }, [hubNameDraft, pendingLatLng, customHubs, onHubsChange]);
+  }, [customHubs, hiddenHubIds, hubNameDraft, pendingLatLng, updateHubState]);
 
   const captureMap = useCallback(async () => {
     setCapturing(true);
+    setMapNotice(null);
     try {
       await captureMapToPng(mapShellRef.current?.querySelector('.location-density-map'));
+      setMapNotice({ type: 'success', text: 'Map image downloaded.' });
     } catch (error) {
       console.error('Failed to capture map:', error);
-      alert('Sorry, the map could not be captured. Please try again.');
+      setMapNotice({ type: 'error', text: 'The map could not be captured. Please try again.' });
     } finally {
       setCapturing(false);
     }
   }, []);
 
+  const requestDeleteHub = useCallback((hub) => {
+    setDeleteCandidate(hub);
+  }, []);
+
+  const cancelDeleteHub = useCallback(() => {
+    setDeleteCandidate(null);
+  }, []);
+
+  const confirmDeleteHub = useCallback(() => {
+    if (!deleteCandidate) return;
+
+    const nextCustomHubs = deleteCandidate.isCustom
+      ? customHubs.filter((hub) => hub.id !== deleteCandidate.id)
+      : customHubs;
+    const nextHiddenHubIds = deleteCandidate.isCustom
+      ? hiddenHubIds
+      : Array.from(new Set([...hiddenHubIds, deleteCandidate.id]));
+
+    updateHubState(nextCustomHubs, nextHiddenHubIds);
+    setMapNotice({ type: 'success', text: `${deleteCandidate.name} removed from the map.` });
+    setDeleteCandidate(null);
+  }, [customHubs, deleteCandidate, hiddenHubIds, updateHubState]);
+
+  const restoreDefaultHubs = useCallback(() => {
+    updateHubState(customHubs, []);
+    setMapNotice({ type: 'success', text: 'Default hubs restored.' });
+  }, [customHubs, updateHubState]);
+
+  const cancelFocusMode = useCallback(() => {
+    setResetViewRequest((value) => value + 1);
+    setMapNotice({ type: 'success', text: 'Vehicle focus cleared.' });
+    if (onClearSelectedVehicle) {
+      onClearSelectedVehicle();
+    }
+  }, [onClearSelectedVehicle]);
+
   const allHubs = useMemo(
-    () => [...PAKNAAN_HUBS, ...customHubs].filter((hub) => isValidCoordinate(hub.lat) && isValidCoordinate(hub.lng)),
-    [customHubs],
+    () => getActiveHubs(customHubs, hiddenHubIds).filter((hub) => isValidCoordinate(hub.lat) && isValidCoordinate(hub.lng)),
+    [customHubs, hiddenHubIds],
   );
 
   const hubs = useMemo(
@@ -261,13 +370,25 @@ function LocationDensityMap({ vehicles = [], onHubsChange = null }) {
     () => Object.fromEntries(hubs.map((hub) => [hub.id, createHubIcon(hub.label, hub.isCustom)])),
     [hubs],
   );
-  const vehicleGroups = useMemo(() => groupVehiclesByHub(vehicles), [vehicles]);
+  const vehicleGroups = useMemo(() => groupVehiclesByHub(vehicles, hubs), [hubs, vehicles]);
   const vehicleIcons = useMemo(
     () => Object.fromEntries(
       vehicleGroups.map((group) => [group.hub.id, createVehicleDotIcon(group.vehicles.length)]),
     ),
     [vehicleGroups],
   );
+  const selectedId = selectedVehicleId == null ? null : String(selectedVehicleId);
+  let selectedVehicleGroup = null;
+  if (selectedId) {
+    for (const group of vehicleGroups) {
+      const vehicle = group.vehicles.find((candidate) => String(candidate.vehicle_id) === selectedId);
+      if (vehicle) {
+        selectedVehicleGroup = { hub: group.hub, vehicle };
+        break;
+      }
+    }
+  }
+  const selectedVehicleIcon = useMemo(() => createSelectedVehicleIcon(), []);
 
   return (
     <div className="location-density-map-shell" ref={mapShellRef}>
@@ -281,6 +402,34 @@ function LocationDensityMap({ vehicles = [], onHubsChange = null }) {
           {addMode ? 'Click anywhere on the map to drop the new hub.' : 'Click "Add Hub", then click the map to pin a new location.'}
         </span>
         <div style={{ display: 'flex', gap: '8px' }}>
+          {selectedVehicleId != null && (
+            <button
+              type="button"
+              className="location-density-btn is-secondary is-focus-cancel"
+              onClick={cancelFocusMode}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M2 12s3.5-6 10-6c2.2 0 4.1.7 5.7 1.7" />
+                <path d="M22 12s-3.5 6-10 6c-2.2 0-4.1-.7-5.7-1.7" />
+                <path d="M3 3l18 18" />
+                <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
+              </svg>
+              Cancel Focus
+            </button>
+          )}
+          {hiddenHubIds.length > 0 && (
+            <button
+              type="button"
+              className="location-density-btn is-secondary"
+              onClick={restoreDefaultHubs}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 12a9 9 0 1 0 3-6.7" />
+                <path d="M3 4v6h6" />
+              </svg>
+              Restore Hubs
+            </button>
+          )}
           <button
             type="button"
             className={`location-density-btn ${addMode ? 'is-active' : 'is-primary'}`}
@@ -319,6 +468,31 @@ function LocationDensityMap({ vehicles = [], onHubsChange = null }) {
           </button>
         </div>
       </div>
+      <div className="location-density-legend" aria-label="Map legend">
+        <span className="location-density-legend-item">
+          <span className="legend-symbol legend-symbol-hub" aria-hidden="true" />
+          Hub
+        </span>
+        <span className="location-density-legend-item">
+          <span className="legend-symbol legend-symbol-vehicle" aria-hidden="true" />
+          Vehicle count
+        </span>
+        <span className="location-density-legend-item">
+          <span className="legend-symbol legend-symbol-boundary" aria-hidden="true" />
+          Paknaan boundary
+        </span>
+      </div>
+      {mapNotice && (
+        <div className={`location-density-notice ${mapNotice.type}`} role="status">
+          <span>{mapNotice.text}</span>
+          <button type="button" onClick={() => setMapNotice(null)} aria-label="Dismiss map notice">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
+      )}
       <MapContainer
         attributionControl
         center={[PAKNAAN_CENTER.lat, PAKNAAN_CENTER.lng]}
@@ -362,41 +536,17 @@ function LocationDensityMap({ vehicles = [], onHubsChange = null }) {
                 <span>{hub.address}</span>
                 <span>Latitude: {hub.lat.toFixed(6)}</span>
                 <span>Longitude: {hub.lng.toFixed(6)}</span>
-                {hub.isCustom && (
-                  <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px solid #22C55E', display: 'flex', gap: '4px' }}>
-                    <button
-                      onClick={() => {
-                        if (confirm(`Delete hub "${hub.name}"?`)) {
-                          const stored = JSON.parse(localStorage.getItem(HUBS_STORAGE_KEY) || '[]');
-                          const updated = stored.filter((h) => h.id !== hub.id);
-                          localStorage.setItem(HUBS_STORAGE_KEY, JSON.stringify(updated));
-                          setCustomHubs(updated);
-                          if (onHubsChange) {
-                            onHubsChange([...PAKNAAN_HUBS, ...updated]);
-                          }
-                        }
-                      }}
-                      style={{
-                        flex: 1,
-                        padding: '4px 8px',
-                        fontSize: '0.7rem',
-                        backgroundColor: '#DC2626',
-                        color: '#fff',
-                        border: 'none',
-                        borderRadius: '4px',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'inline', verticalAlign: 'middle', marginRight: '3px' }}>
-                        <polyline points="3 6 5 6 21 6" />
-                        <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-                        <path d="M10 11v6M14 11v6" />
-                        <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
-                      </svg>
-                      Delete Hub
-                    </button>
-                  </div>
-                )}
+                <div className="location-density-popup-actions">
+                  <button type="button" className="location-density-delete-hub" onClick={() => requestDeleteHub(hub)}>
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="3 6 5 6 21 6" />
+                      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                      <path d="M10 11v6M14 11v6" />
+                      <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+                    </svg>
+                    Delete Hub
+                  </button>
+                </div>
               </div>
             </Popup>
           </Marker>
@@ -437,8 +587,35 @@ function LocationDensityMap({ vehicles = [], onHubsChange = null }) {
             </Popup>
           </Marker>
         ))}
+        {selectedVehicleGroup && (
+          <Marker
+            icon={selectedVehicleIcon}
+            key={`selected-vehicle-${selectedVehicleGroup.vehicle.vehicle_id}`}
+            position={[selectedVehicleGroup.hub.lat, selectedVehicleGroup.hub.lng]}
+            zIndexOffset={1750}
+          >
+            <Tooltip
+              className="location-density-selected-vehicle-tooltip"
+              direction="top"
+              offset={[0, -25]}
+              permanent
+            >
+              Viewing {selectedVehicleGroup.vehicle.vehicle_name}
+            </Tooltip>
+            <Popup className="location-density-vehicle-popup">
+              <div className="location-density-vehicle-popup-content">
+                <strong>{selectedVehicleGroup.vehicle.vehicle_name}</strong>
+                <span>Plate: {selectedVehicleGroup.vehicle.plate_number}</span>
+                <span>Current Location: {selectedVehicleGroup.vehicle.current_location}</span>
+                <span>Hub: {selectedVehicleGroup.hub.name}</span>
+              </div>
+            </Popup>
+          </Marker>
+        )}
         <ZoomControl position="bottomright" />
         <FitBoundsToPolygon />
+        <FocusVehicleOnMap target={selectedVehicleGroup} />
+        <ResetMapView requestKey={resetViewRequest} />
       </MapContainer>
 
       {pendingLatLng && (
@@ -491,6 +668,48 @@ function LocationDensityMap({ vehicles = [], onHubsChange = null }) {
                 disabled={!hubNameDraft.trim()}
               >
                 Save Hub
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deleteCandidate && (
+        <div className="hub-modal-overlay" onMouseDown={cancelDeleteHub}>
+          <div
+            className="hub-modal hub-modal-danger"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="hub-delete-title"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <div className="hub-modal-header">
+              <span className="hub-modal-icon">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="3 6 5 6 21 6" />
+                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                  <path d="M10 11v6M14 11v6" />
+                  <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+                </svg>
+              </span>
+              <h3 id="hub-delete-title">Delete hub</h3>
+            </div>
+
+            <p className="hub-modal-message">
+              Remove <strong>{deleteCandidate.name}</strong> from the map and location choices?
+            </p>
+            {!deleteCandidate.isCustom && (
+              <p className="hub-modal-coords">
+                Built-in hubs are hidden locally and can be restored later.
+              </p>
+            )}
+
+            <div className="hub-modal-actions">
+              <button type="button" className="hub-modal-btn hub-modal-cancel" onClick={cancelDeleteHub}>
+                Cancel
+              </button>
+              <button type="button" className="hub-modal-btn hub-modal-delete" onClick={confirmDeleteHub}>
+                Delete Hub
               </button>
             </div>
           </div>

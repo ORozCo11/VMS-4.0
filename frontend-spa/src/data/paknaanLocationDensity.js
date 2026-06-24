@@ -4,6 +4,7 @@ export const PAKNAAN_CENTER = { lat: 10.3462, lng: 123.9603 };
 
 // Key for localStorage to persist dynamically created hubs
 export const HUBS_STORAGE_KEY = 'paknaan_vehicle_hubs';
+export const HIDDEN_HUBS_STORAGE_KEY = 'paknaan_hidden_vehicle_hub_ids';
 
 export const PAKNAAN_BOUNDS = [
   [10.3398, 123.9469],
@@ -255,6 +256,35 @@ export const PAKNAAN_HUBS = [
   },
 ];
 
+function readStoredArray(storageKey) {
+  if (typeof localStorage === 'undefined') {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(localStorage.getItem(storageKey) || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export function readCustomHubs() {
+  return readStoredArray(HUBS_STORAGE_KEY);
+}
+
+export function readHiddenHubIds() {
+  return readStoredArray(HIDDEN_HUBS_STORAGE_KEY);
+}
+
+export function getActiveHubs(customHubs = null, hiddenHubIds = null) {
+  const hiddenIds = new Set(hiddenHubIds ?? readHiddenHubIds());
+  return [
+    ...PAKNAAN_HUBS.filter((hub) => !hiddenIds.has(hub.id)),
+    ...(customHubs ?? readCustomHubs()),
+  ];
+}
+
 // Label shown on the map/dashboard for any vehicle whose location does not
 // match a known hub (kept identical to the map's FALLBACK_HUB name).
 export const FALLBACK_HUB_NAME = 'Paknaan Area (Unassigned)';
@@ -266,22 +296,13 @@ function normalizeLocationName(value = '') {
 // Resolves a raw vehicle current_location string to the canonical hub name
 // used on the map. Returns FALLBACK_HUB_NAME when nothing matches.
 // Includes any custom hubs the user pinned (passed in or read from storage).
-export function resolveHubName(location, extraHubs = null) {
+export function resolveHubName(location, activeHubs = null) {
   const normalized = normalizeLocationName(location);
   if (!normalized) {
     return FALLBACK_HUB_NAME;
   }
 
-  let customHubs = extraHubs;
-  if (!customHubs) {
-    try {
-      customHubs = JSON.parse(localStorage.getItem(HUBS_STORAGE_KEY) || '[]');
-    } catch {
-      customHubs = [];
-    }
-  }
-
-  const hubs = [...PAKNAAN_HUBS, ...customHubs];
+  const hubs = activeHubs ?? getActiveHubs();
 
   // Exact alias match first.
   const exact = hubs.find((hub) => (
@@ -304,11 +325,11 @@ export function resolveHubName(location, extraHubs = null) {
 
 // Re-groups raw {label, value} location rows (from the dashboard API) into
 // the same hub buckets the map uses, so both views always agree.
-export function groupLocationRowsByHub(rows = [], extraHubs = null) {
+export function groupLocationRowsByHub(rows = [], activeHubs = null) {
   const totals = new Map();
 
   rows.forEach((row) => {
-    const hubName = resolveHubName(row.label, extraHubs);
+    const hubName = resolveHubName(row.label, activeHubs);
     const count = Number(row.value) || 0;
     totals.set(hubName, (totals.get(hubName) ?? 0) + count);
   });

@@ -2,9 +2,10 @@ import { useCallback, useContext, useEffect, useMemo, useRef, useState, createCo
 import { useNavigate } from 'react-router-dom';
 import api from '../api/axios';
 import LocationDensityMap from '../components/LocationDensityMap';
+import Icon from '../components/Icon';
 import vmsLogo from '../assets/vms-logo.png';
 import { AuthContext } from '../context/AuthContextObject';
-import { PAKNAAN_HUBS, HUBS_STORAGE_KEY, groupLocationRowsByHub } from '../data/paknaanLocationDensity';
+import { getActiveHubs, groupLocationRowsByHub } from '../data/paknaanLocationDensity';
 
 const FormNoticeContext = createContext(null);
 
@@ -241,8 +242,12 @@ function Workspace() {
   // Draft for the condition filter bar — applied only on "Filter" click.
   const [condDraft, setCondDraft] = useState({ category: '', status: '', start: '', end: '' });
   const [prefilledTicketData, setPrefilledTicketData] = useState(null);
-  const [allHubs, setAllHubs] = useState([]);
+  const [allHubs, setAllHubs] = useState(() => getActiveHubs());
   const [locationsTab, setLocationsTab] = useState('map');
+  const [selectedMapVehicleId, setSelectedMapVehicleId] = useState(null);
+  const [theme, setTheme] = useState(() => {
+    try { return localStorage.getItem('theme') || 'dark'; } catch { return 'dark'; }
+  });
   const notificationsRef = useRef(null);
   const hasVehicles = (lookups.vehicles ?? []).length > 0;
 
@@ -343,10 +348,9 @@ function Workspace() {
   }, [user.role]);
 
   useEffect(() => {
-    // Initialize hubs with static defaults + any custom hubs from storage
-    const customHubs = JSON.parse(localStorage.getItem(HUBS_STORAGE_KEY) || '[]');
-    setAllHubs([...PAKNAAN_HUBS, ...customHubs]);
-  }, []);
+    document.documentElement.setAttribute('data-theme', theme);
+    try { localStorage.setItem('theme', theme); } catch { /* ignore */ }
+  }, [theme]);
 
   useEffect(() => {
     loadLookups().catch((error) => showError(error, setNotice));
@@ -684,6 +688,18 @@ function Workspace() {
     return [...visibleRows, ...syntheticRows];
   }, [activeModule, visibleRows, lookups.vehicles, searchQuery]);
 
+  const viewVehicleOnMap = useCallback((row) => {
+    const vehicleId = row.vehicle_id ?? row.vehicle?.vehicle_id;
+    if (!vehicleId) return;
+    setSelectedMapVehicleId(vehicleId);
+    setLocationsTab('map');
+  }, []);
+
+  const locationTableColumns = useMemo(
+    () => locationColumns(user, viewVehicleOnMap),
+    [user, viewVehicleOnMap],
+  );
+
   const unreadCount = notifications.filter((n) => !n.read_at).length;
 
   return (
@@ -750,7 +766,7 @@ function Workspace() {
                     <div className="notifications-list">
                       {notifications.length === 0 ? (
                         <div className="notifications-empty">
-                          <span style={{ fontSize: '1.5rem' }}>🔔</span>
+                          <span style={{ display: 'inline-flex', opacity: 0.6 }}><Icon name="bell" size={26} /></span>
                           <span>No notifications yet.</span>
                         </div>
                       ) : (
@@ -779,7 +795,7 @@ function Workspace() {
                               title="Delete notification"
                               onClick={() => deleteNotification(n.notification_id)}
                             >
-                              ✕
+                              <Icon name="close" size={14} />
                             </button>
                           </div>
                         </div>
@@ -789,6 +805,25 @@ function Workspace() {
                 </div>
               )}
             </div>
+
+            <button
+              className="icon-btn theme-toggle-btn"
+              type="button"
+              title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+              aria-label="Toggle light and dark mode"
+              onClick={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
+            >
+              {theme === 'dark' ? (
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="4" />
+                  <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+                </svg>
+              )}
+            </button>
 
             <div className="status-pill">
               <span className="status-name">{user.name}</span>
@@ -813,7 +848,7 @@ function Workspace() {
 
   function renderModule() {
     if (activeModule === 'dashboard') {
-      return <Dashboard data={dashboard} user={user} />;
+      return <Dashboard data={dashboard} hubs={allHubs} user={user} />;
     }
 
     if (activeModule === 'vehicles') {
@@ -846,9 +881,9 @@ function Workspace() {
             />
             <DataTable columns={vehicleColumns(user.role, setEditTarget, deleteRecord)} rows={visibleRows} />
           </ModulePanel>
-          <FormModal open={!!editTarget} title={editTarget?.vehicle_id ? 'Edit Vehicle' : 'Add Vehicle'} onClose={() => setEditTarget(null)}>
+          <FormModal open={!!editTarget} title={editTarget?.vehicle_id ? 'Edit Vehicle' : 'Add Vehicle'} onClose={() => setEditTarget(null)} confirmClose wide>
             <SmartForm
-              fields={vehicleFields(lookups)}
+              fields={vehicleFields(lookups, allHubs)}
               initialValues={editTarget?.vehicle_id ? editTarget : EMPTY_OBJ}
               key={editTarget?.vehicle_id ?? 'vehicle-create'}
               onCancel={() => setEditTarget(null)}
@@ -923,7 +958,12 @@ function Workspace() {
             {locationsTab === 'map' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', height: '100%' }}>
                 <div className="map-container-full">
-                  <LocationDensityMap vehicles={lookups.vehicles ?? []} onHubsChange={setAllHubs} />
+                  <LocationDensityMap
+                    selectedVehicleId={selectedMapVehicleId}
+                    vehicles={lookups.vehicles ?? []}
+                    onClearSelectedVehicle={() => setSelectedMapVehicleId(null)}
+                    onHubsChange={setAllHubs}
+                  />
                 </div>
               </div>
             )}
@@ -938,7 +978,7 @@ function Workspace() {
                   <button className="primary-button" type="button" onClick={() => setEditTarget({})}>+ Add Record</button>
                 </div>
                 <div style={{ overflowX: 'auto' }}>
-                  <DataTable columns={locationColumns} rows={locationRows} />
+                  <DataTable columns={locationTableColumns} rows={locationRows} />
                 </div>
                 {editTarget !== null && (
                   <div className="location-form-panel">
@@ -1434,7 +1474,7 @@ function Workspace() {
   }
 }
 
-function Dashboard({ data, user }) {
+function Dashboard({ data, hubs = null, user }) {
   const [weather, setWeather] = useState(null);
   const [greeting, setGreeting] = useState(() => buildLocalGreeting(user?.name));
   const [greetingRole, setGreetingRole] = useState(() => dashboardRoleLabel(user?.role));
@@ -1514,7 +1554,7 @@ function Dashboard({ data, user }) {
 
   // Re-group raw location rows into the same hubs the map shows, so the
   // "Vehicles by Location" chart always matches the map's pins.
-  const locationsByHub = groupLocationRowsByHub(data.vehicles_by_location ?? []);
+  const locationsByHub = groupLocationRowsByHub(data.vehicles_by_location ?? [], hubs);
 
   const fleetStatus = [
     { label: 'Available', value: availableVehicles, color: '#36c66d' },
@@ -1827,12 +1867,24 @@ function AreaChart({ rows = [], height = 180 }) {
   const innerH = height - padTop - padBottom;
 
   const values = rows.map((r) => Number(r.value) || 0);
-  const maxValue = Math.max(1, ...values);
-  // Round the axis max up to a "nice" number for readable gridlines.
-  const niceMax = (() => {
-    const pow = Math.pow(10, Math.floor(Math.log10(maxValue)));
-    return Math.ceil(maxValue / pow) * pow || 1;
+  const rawMax = Math.max(1, ...values);
+  // Choose a "nice" integer step so the Y axis has clean, unique labels
+  // (counts are whole numbers, so the step is always >= 1).
+  const niceStep = (() => {
+    const rough = rawMax / 4; // aim for ~4 gridline intervals
+    const pow = Math.pow(10, Math.floor(Math.log10(rough)));
+    const norm = rough / pow;
+    let s;
+    if (norm <= 1) s = 1;
+    else if (norm <= 2) s = 2;
+    else if (norm <= 5) s = 5;
+    else s = 10;
+    return Math.max(1, s * pow);
   })();
+  const niceMax = Math.ceil(rawMax / niceStep) * niceStep;
+  // Top-to-bottom integer ticks (e.g. 3, 2, 1, 0) — no rounding duplicates.
+  const yTicks = [];
+  for (let v = niceMax; v >= 0; v -= niceStep) yTicks.push(v);
 
   const stepX = rows.length > 1 ? innerW / (rows.length - 1) : 0;
   const points = rows.map((row, i) => {
@@ -1844,7 +1896,6 @@ function AreaChart({ rows = [], height = 180 }) {
   const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
   const areaPath = `${linePath} L ${points[points.length - 1].x.toFixed(1)} ${(padTop + innerH).toFixed(1)} L ${points[0].x.toFixed(1)} ${(padTop + innerH).toFixed(1)} Z`;
 
-  const gridLines = [0, 0.25, 0.5, 0.75, 1];
   // Show at most ~8 x-axis labels to avoid crowding.
   const labelStep = Math.ceil(rows.length / 8);
 
@@ -1858,11 +1909,10 @@ function AreaChart({ rows = [], height = 180 }) {
           </linearGradient>
         </defs>
 
-        {gridLines.map((g) => {
-          const y = padTop + innerH * g;
-          const val = Math.round(niceMax * (1 - g));
+        {yTicks.map((val) => {
+          const y = padTop + innerH * (1 - val / niceMax);
           return (
-            <g key={g}>
+            <g key={val}>
               <line
                 className="area-grid-line"
                 x1={padX} y1={y} x2={width - padX} y2={y}
@@ -1910,23 +1960,58 @@ function ModulePanel({ children, description }) {
 }
 
 /** Generic modal wrapper that hosts a SmartForm popup. */
-function FormModal({ open, title, onClose, children }) {
+function FormModal({ open, title, onClose, children, confirmClose = false, wide = false }) {
   const notice = useContext(FormNoticeContext);
+  const [confirming, setConfirming] = useState(false);
+
+  useEffect(() => {
+    if (!open) setConfirming(false);
+  }, [open]);
+
   if (!open) return null;
+
+  const requestClose = () => {
+    if (confirmClose) {
+      setConfirming(true);
+    } else {
+      onClose();
+    }
+  };
+
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-box" onClick={(e) => e.stopPropagation()}>
+    <div className="modal-overlay" onClick={requestClose}>
+      <div className={`modal-box${wide ? ' modal-box-wide' : ''}`} onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h3>{title}</h3>
-          <button className="modal-close-btn" onClick={onClose} type="button" aria-label="Close">✕</button>
+          <button className="modal-close-btn" onClick={requestClose} type="button" aria-label="Close"><Icon name="close" size={18} /></button>
         </div>
         {notice && notice.type === 'error' && (
           <div className="notice error" style={{ margin: '12px 28px 0', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span>⚠️</span>
+            <span style={{ display: 'inline-flex', flexShrink: 0 }}><Icon name="alert" size={16} /></span>
             <span>{notice.text}</span>
           </div>
         )}
         <div className="modal-body">{children}</div>
+
+        {confirming && (
+          <div className="modal-confirm-overlay" onClick={() => setConfirming(false)}>
+            <div className="modal-confirm-box" onClick={(e) => e.stopPropagation()} role="alertdialog" aria-modal="true">
+              <div className="modal-confirm-icon" aria-hidden="true">
+                <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
+                  <line x1="12" y1="9" x2="12" y2="13" />
+                  <line x1="12" y1="17" x2="12.01" y2="17" />
+                </svg>
+              </div>
+              <h4>Discard and exit?</h4>
+              <p>Anything you entered in this form will be lost.</p>
+              <div className="modal-confirm-actions">
+                <button className="ghost-button" type="button" onClick={() => setConfirming(false)}>Keep editing</button>
+                <button className="modal-confirm-exit" type="button" onClick={() => { setConfirming(false); onClose(); }}>Exit without saving</button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -2023,8 +2108,8 @@ function ProfilePanel({ user, onLogout, setNotice }) {
           </dl>
 
           <div className="profile-actions">
-            <button className="ghost-button" style={{width:'100%',height:36,fontSize:'0.82rem'}} onClick={() => setPwOpen(true)} type="button">
-              🔑 Change Password
+            <button className="ghost-button" style={{width:'100%',height:36,fontSize:'0.82rem',display:'inline-flex',alignItems:'center',justifyContent:'center',gap:7}} onClick={() => setPwOpen(true)} type="button">
+              <Icon name="key" size={15} /> Change Password
             </button>
             <button className="logout-button" onClick={onLogout} type="button">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{width:16,height:16}}>
@@ -2279,7 +2364,9 @@ const passwordFields = [
   { label: 'Confirm New Password', name: 'new_password_confirmation', required: true, type: 'password' },
 ];
 
-function vehicleFields(lookups) {
+function vehicleFields(lookups, allHubs = []) {
+  const hubOptions = allHubs.map((hub) => ({ value: hub.name, label: hub.name }));
+
   return [
     { label: 'Vehicle Name', name: 'vehicle_name', required: true, type: 'text' },
     { label: 'Plate Number', name: 'plate_number', required: true, type: 'text' },
@@ -2291,7 +2378,7 @@ function vehicleFields(lookups) {
     { label: 'Capacity', name: 'capacity', required: true, type: 'text' },
     { label: 'Vehicle Color', name: 'vehicle_color', required: true, type: 'text' },
     { label: 'Fuel Type', name: 'fuel_type', type: 'text' },
-    { label: 'Current Location', name: 'current_location', required: true, type: 'text' },
+    { label: 'Current Location', name: 'current_location', options: hubOptions, required: true, type: 'select' },
     { label: 'Remarks', name: 'remarks', type: 'textarea' },
   ];
 }
@@ -2451,7 +2538,8 @@ function categoryColumns(setEditTarget, deleteRecord) {
   ];
 }
 
-const locationColumns = [
+function locationColumns(currentUser, onViewOnMap) {
+  return [
   { label: 'ID', render: (row) => row.location_record_id ?? '—' },
   { label: 'Vehicle', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
   { label: 'Current Location', render: (row) => row.current_location ?? '-' },
@@ -2460,12 +2548,30 @@ const locationColumns = [
     label: 'Updated By',
     render: (row) => (
       row.is_current_snapshot
-        ? <span className="location-snapshot-tag">Current (on map)</span>
+        ? (currentUser?.name ?? currentUser?.email ?? '-')
         : (row.updated_by?.name ?? row.updated_by?.email ?? '-')
     ),
   },
   { label: 'Date Updated', render: (row) => (row.updated_at ? formatDate(row.updated_at) : '-') },
-];
+  {
+    label: 'View',
+    render: (row) => (
+      <button
+        className="btn-view-action"
+        onClick={() => onViewOnMap(row)}
+        title="View vehicle on map"
+        type="button"
+      >
+        <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" />
+          <circle cx="12" cy="12" r="3" />
+        </svg>
+        View
+      </button>
+    ),
+  },
+  ];
+}
 
 function conditionColumns(role, setEditTarget, deleteRecord) {
   const columns = [
@@ -2975,23 +3081,37 @@ function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm,
             <div className="ticket-detail-meta">
               <TicketStatusBadge value={ticket.status} size="large" />
               <TicketStatusBadge value={ticket.priority} />
-              <span className="ticket-meta-item">📅 {formatDate(ticket.created_at)}</span>
+              <span className="ticket-meta-item"><Icon name="calendar" size={14} /> {formatDate(ticket.created_at)}</span>
             </div>
           </div>
-          <button className="icon-btn" onClick={onClose} type="button" title="Close">✕</button>
+          <button className="icon-btn" onClick={onClose} type="button" title="Close" aria-label="Close"><Icon name="close" size={18} /></button>
         </div>
 
-        <div className="ticket-detail-phase-bar">
-          {['Open','For Maintenance','Under Repair','For Inspection','For Confirmation','Done'].map((s) => (
-            <div key={s} className={`phase-step ${ticket.status === s ? 'phase-step-active' : ''} ${phaseIsPast(ticket.status, s) ? 'phase-step-done' : ''}`}>
-              <span>{s}</span>
-            </div>
-          ))}
+        <div className="ticket-progress-tracker" role="list" aria-label="Ticket progress">
+          {phaseOrder.map((s, i) => {
+            const current = phaseOrder.indexOf(ticket.status);
+            const state = i < current ? 'done' : i === current ? 'active' : 'upcoming';
+            return (
+              <div key={s} className={`ticket-progress-step is-${state}`} role="listitem">
+                <span className="ticket-progress-marker">
+                  {state === 'done' ? (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  ) : (
+                    <span className="ticket-progress-dot" />
+                  )}
+                </span>
+                <span className="ticket-progress-label">{s}</span>
+                <span className="ticket-progress-stage">Stage {i + 1}</span>
+              </div>
+            );
+          })}
         </div>
 
         <div className="ticket-detail-body">
           <section className="ticket-section">
-            <h4>🚗 Vehicle</h4>
+            <h4><Icon name="vehicle" size={16} /> Vehicle</h4>
             <div className="ticket-detail-vehicle-layout">
               {ticket.vehicle?.photo_url && (
                 <div className="ticket-detail-vehicle-photo">
@@ -3006,13 +3126,13 @@ function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm,
           </section>
 
           <section className="ticket-section">
-            <h4>📋 Description</h4>
+            <h4><Icon name="clipboard" size={16} /> Description</h4>
             <p>{ticket.ticket_description}</p>
           </section>
 
           {ticket.assigned_custodian_id && (
             <section className="ticket-section">
-              <h4>🔍 Phase 1–2 · Custodian Inspection</h4>
+              <h4><Icon name="search" size={16} /> Phase 1–2 · Custodian Inspection</h4>
               <p>Assigned to: <strong>{ticket.assigned_custodian?.name ?? '—'}</strong></p>
               {ticket.inspection_result && <>
                 <p>Result: <TicketStatusBadge value={ticket.inspection_result} /></p>
@@ -3024,7 +3144,7 @@ function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm,
 
           {ticket.assigned_mechanic_id && (
             <section className="ticket-section">
-              <h4>🔧 Phase 3 · Work Order</h4>
+              <h4><Icon name="wrench" size={16} /> Phase 3 · Work Order</h4>
               <p>Mechanic: <strong>{ticket.assigned_mechanic?.name ?? '—'}</strong></p>
               <p>Type: {ticket.maintenance_type}</p>
               {ticket.work_order_notes && <p className="muted">{ticket.work_order_notes}</p>}
@@ -3050,7 +3170,7 @@ function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm,
 
           {ticket.verification_verdict && (
             <section className="ticket-section">
-              <h4>✅ Phase 4T1 · Custodian Verification</h4>
+              <h4><Icon name="checkCircle" size={16} /> Phase 4T1 · Custodian Verification</h4>
               <p>Verdict: <TicketStatusBadge value={ticket.verification_verdict} /></p>
               <p className="muted">{ticket.verification_notes}</p>
               <p className="muted">By {ticket.verified_by?.name} on {formatDate(ticket.verified_at)}</p>
@@ -3059,7 +3179,7 @@ function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm,
 
           {ticket.confirmation_verdict && (
             <section className="ticket-section">
-              <h4>🏁 Phase 4T2 · Admin Confirmation</h4>
+              <h4><Icon name="flag" size={16} /> Phase 4T2 · Admin Confirmation</h4>
               <p>Verdict: <TicketStatusBadge value={ticket.confirmation_verdict} /></p>
               {ticket.maintenance_cost !== null && ticket.maintenance_cost !== undefined && (
                 <p style={{ marginTop: '4px', marginBottom: '4px' }}>
@@ -3075,7 +3195,7 @@ function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm,
         {/* Phase 3 Action — Admin assigns mechanic when status is For Maintenance */}
         {ticket.status === 'For Maintenance' && !mechanicForm && (
           <div className="ticket-detail-actions">
-            <p className="notice warning" style={{marginBottom: 12}}>⚠️ Maintenance Trigger — This vehicle needs a mechanic assigned.</p>
+            <p className="notice warning" style={{marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8}}><Icon name="alert" size={15} /> Maintenance Trigger — This vehicle needs a mechanic assigned.</p>
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
               <button className="primary-button" type="button" onClick={() => setMechanicForm(true)}>Assign Mechanic (Work Order)</button>
               <button className="ghost-button" type="button" onClick={() => onCancel(ticket)}>Cancel Ticket</button>
@@ -3101,7 +3221,7 @@ function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm,
         {/* Phase 4T2 Action — Admin confirms or reopens when status is For Confirmation */}
         {ticket.status === 'For Confirmation' && !confirmForm && (
           <div className="ticket-detail-actions">
-            <p className="notice success" style={{marginBottom: 12}}>✅ Custodian has approved the repair. Your final confirmation is required.</p>
+            <p className="notice success" style={{marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8}}><Icon name="checkCircle" size={15} /> Custodian has approved the repair. Your final confirmation is required.</p>
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
               <button className="primary-button" type="button" onClick={() => setConfirmForm(true)}>Issue Confirmation Verdict</button>
               <button className="danger-button" type="button" onClick={requestDelete}>Delete Ticket</button>
@@ -3121,7 +3241,7 @@ function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm,
               marginBottom: '16px',
               fontSize: '0.88rem'
             }}>
-              <h5 style={{ margin: '0 0 8px 0', fontSize: '0.9rem', color: '#1e293b', fontWeight: 600 }}>🛠️ Repair Summary</h5>
+              <h5 style={{ margin: '0 0 8px 0', fontSize: '0.9rem', color: '#1e293b', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}><Icon name="tools" size={15} /> Repair Summary</h5>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px' }}>
                 <div>
                   <span className="muted" style={{ display: 'block', fontSize: '0.72rem', fontWeight: 600, color: '#64748b' }}>MECHANIC</span>
@@ -3235,12 +3355,12 @@ function TicketModule({
         {/* Alert banners */}
         {forMaintCount > 0 && (
           <div className="ticket-alert-banner formaint">
-            ⚠️ <strong>{forMaintCount}</strong> ticket{forMaintCount > 1 ? 's' : ''} waiting for mechanic assignment — Maintenance Trigger active!
+            <Icon name="alert" size={16} /> <strong>{forMaintCount}</strong> ticket{forMaintCount > 1 ? 's' : ''} waiting for mechanic assignment — Maintenance Trigger active!
           </div>
         )}
         {forConfirmCount > 0 && (
           <div className="ticket-alert-banner forconfirm">
-            ✅ <strong>{forConfirmCount}</strong> ticket{forConfirmCount > 1 ? 's' : ''} awaiting your final confirmation.
+            <Icon name="checkCircle" size={16} /> <strong>{forConfirmCount}</strong> ticket{forConfirmCount > 1 ? 's' : ''} awaiting your final confirmation.
           </div>
         )}
 
@@ -3287,7 +3407,7 @@ function TicketModule({
       <FormModal open={showCreate} title="Phase 1 — Create Ticket" onClose={() => { setShowCreate(false); if (setPrefilledTicketData) setPrefilledTicketData(null); }}>
         {prefilledTicketData && (
           <div className="info-callout" style={{ marginBottom: '16px', background: 'rgba(59, 130, 246, 0.1)', borderColor: '#3b82f6' }}>
-            <span style={{ marginRight: '8px' }}>🔗</span>
+            <span style={{ marginRight: '8px', color: '#3b82f6', display: 'inline-flex' }}><Icon name="link" size={16} /></span>
             <p className="module-description" style={{ color: '#3b82f6', margin: 0 }}>
               Linking this ticket to <strong>Issue Report #{prefilledTicketData.issue_report_id}</strong>.
             </p>
@@ -3621,12 +3741,12 @@ function MechanicWorkOrderModule({
                     <div>
                       <div style={{ fontWeight: 600 }}>{r.ticket_title}</div>
                       {r.confirmation_verdict === 'Reopened' ? (
-                        <span className="status-badge rework-danger" style={{ fontSize: '0.75rem', padding: '3px 8px', marginTop: 4, display: 'inline-block' }}>
-                          ⚠️ Admin Reopened Rework
+                        <span className="status-badge rework-danger" style={{ fontSize: '0.75rem', padding: '3px 8px', marginTop: 4, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                          <Icon name="alert" size={13} /> Admin Reopened Rework
                         </span>
                       ) : r.verification_verdict === 'Rejected' ? (
-                        <span className="status-badge rework-warning" style={{ fontSize: '0.75rem', padding: '3px 8px', marginTop: 4, display: 'inline-block' }}>
-                          ⚠️ Custodian Rejected Rework
+                        <span className="status-badge rework-warning" style={{ fontSize: '0.75rem', padding: '3px 8px', marginTop: 4, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                          <Icon name="alert" size={13} /> Custodian Rejected Rework
                         </span>
                       ) : null}
                     </div>
@@ -3645,13 +3765,13 @@ function MechanicWorkOrderModule({
       <FormModal open={!!editTarget} title={`Log Repairs — Ticket #${editTarget?.ticket_id}`} onClose={onCancelEdit}>
         {editTarget?.confirmation_verdict === 'Reopened' && (
           <div className="notice danger" style={{ marginBottom: 16 }}>
-            <h4>⚠️ Reopened by Admin ({editTarget.confirmed_by?.name ?? 'Roel Degulacion'})</h4>
+            <h4 style={{ display: 'flex', alignItems: 'center', gap: 7 }}><Icon name="alert" size={16} /> Reopened by Admin ({editTarget.confirmed_by?.name ?? 'Roel Degulacion'})</h4>
             <p><strong>Feedback/Reason:</strong> {editTarget.confirmation_notes ?? 'No feedback notes provided.'}</p>
           </div>
         )}
         {editTarget?.verification_verdict === 'Rejected' && (
           <div className="notice warning" style={{ marginBottom: 16 }}>
-            <h4>⚠️ Rejected by Custodian ({editTarget.verified_by?.name ?? 'Nicole'})</h4>
+            <h4 style={{ display: 'flex', alignItems: 'center', gap: 7 }}><Icon name="alert" size={16} /> Rejected by Custodian ({editTarget.verified_by?.name ?? 'Nicole'})</h4>
             <p><strong>Feedback/Reason:</strong> {editTarget.verification_notes ?? 'No feedback notes provided.'}</p>
           </div>
         )}
@@ -3890,7 +4010,7 @@ function LocalSearchInput({ value, onChange, placeholder = "Search..." }) {
       />
       {value && (
         <button className="local-search-clear" onClick={() => onChange('')} type="button" title="Clear search">
-          ✕
+          <Icon name="close" size={14} />
         </button>
       )}
     </div>
