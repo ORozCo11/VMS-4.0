@@ -1,4 +1,5 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState, createContext } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/axios';
 import LocationDensityMap from '../components/LocationDensityMap';
@@ -1978,7 +1979,7 @@ function FormModal({ open, title, onClose, children, confirmClose = false, wide 
     }
   };
 
-  return (
+  return createPortal(
     <div className="modal-overlay" onClick={requestClose}>
       <div className={`modal-box${wide ? ' modal-box-wide' : ''}`} onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
@@ -2013,7 +2014,8 @@ function FormModal({ open, title, onClose, children, confirmClose = false, wide 
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 

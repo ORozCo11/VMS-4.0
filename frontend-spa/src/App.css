@@ -174,7 +174,7 @@
 .profile-role { display: block; color: #64748b; font-size: 0.8rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .profile-arrow-icon { width: 14px; height: 14px; stroke: #64748b; transition: transform 0.2s; }
 .profile-arrow-icon.rotated { transform: rotate(180deg); }
- 
+
 .profile-details-dropdown {
   background: #1a2539;
   border: 1px solid #334155;
@@ -2478,6 +2478,44 @@ table button,
   border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: var(--shadow-soft);
+  isolation: isolate;
+  position: relative;
+}
+
+.dashboard-banner::after {
+  --banner-border-angle: 0deg;
+  animation: dashboardBannerBorderRun 12s linear infinite;
+  background:
+    conic-gradient(
+      from var(--banner-border-angle),
+      rgba(255, 122, 26, 0) 0deg,
+      rgba(255, 122, 26, 0) 54deg,
+      #ff8f1f 78deg,
+      #ffc15a 96deg,
+      #ff8f1f 116deg,
+      rgba(255, 122, 26, 0) 144deg,
+      rgba(255, 122, 26, 0) 360deg
+    );
+  border-radius: inherit;
+  content: '';
+  inset: 0;
+  padding: 2px;
+  pointer-events: none;
+  position: absolute;
+  z-index: 1;
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+}
+
+.dashboard-banner > * {
+  position: relative;
+  z-index: 2;
 }
 
 .dashboard-banner-welcome h2 {
@@ -2553,6 +2591,18 @@ table button,
 
 .weather-icon {
   color: var(--primary-strong);
+}
+
+@property --banner-border-angle {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+
+@keyframes dashboardBannerBorderRun {
+  to {
+    --banner-border-angle: 360deg;
+  }
 }
 
 .metric-grid {
@@ -2667,6 +2717,10 @@ table button,
 
 @media (prefers-reduced-motion: reduce) {
   .metric-card.metric-card-alert::after {
+    animation: none;
+  }
+
+  .dashboard-banner::after {
     animation: none;
   }
 }
