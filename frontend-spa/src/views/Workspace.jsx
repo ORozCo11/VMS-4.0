@@ -1178,7 +1178,7 @@ function Workspace() {
             />
             <DataTable columns={issueColumns(user.role, setEditTarget, handleCreateTicketFromIssue)} rows={visibleRows} />
           </ModulePanel>
-          <FormModal open={!!editTarget} title={editTarget?.issue_report_id ? 'Update Issue Status' : 'Report Vehicle Issue'} onClose={() => setEditTarget(null)}>
+          <FormModal open={!!editTarget} title={editTarget?.issue_report_id ? 'Update Issue Status' : 'Report Vehicle Issue'} onClose={() => setEditTarget(null)} confirmClose>
             <SmartForm
               fields={issueFields(lookups, editTarget, user.role)}
               initialValues={editTarget?.issue_report_id ? editTarget : EMPTY_OBJ}
