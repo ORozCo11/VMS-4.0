@@ -1087,6 +1087,8 @@ table a:hover {
 .module-action-bar {
   display: flex; align-items: center; justify-content: space-between;
   margin-bottom: 18px;
+  width: 100%;
+  min-width: 0;
 }
 .module-action-bar h3 { font-size: 1rem; font-weight: 700; color: #0f172a; }
 
@@ -3485,6 +3487,24 @@ button.btn-view-action svg {
   width: 14px;
 }
 
+.legend-symbol-focus {
+  align-items: center;
+  background: #0ea5e9;
+  border: 2px solid #e0f2fe;
+  border-radius: 999px;
+  box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.24);
+  color: #f0f9ff;
+  display: inline-flex;
+  height: 18px;
+  justify-content: center;
+  width: 18px;
+}
+
+.legend-symbol-focus svg {
+  height: 10px;
+  width: 10px;
+}
+
 .legend-symbol-boundary {
   border-top: 4px solid #ff7a1a;
   height: 0;
@@ -4034,10 +4054,32 @@ button.btn-view-action svg {
 .module-action-bar {
   gap: 14px;
   flex-wrap: wrap;
+  align-items: flex-start;
 }
 
 .module-action-bar > div {
+  display: flex;
+  align-items: center;
   flex-wrap: wrap;
+  flex: 1 1 320px;
+  min-width: 0;
+  max-width: 100%;
+  gap: 16px;
+}
+
+.module-action-bar .local-search-container {
+  flex: 1 1 260px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.module-action-bar .primary-button,
+.module-action-bar .primary-link {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  text-align: center;
 }
 
 .location-layout-grid {
