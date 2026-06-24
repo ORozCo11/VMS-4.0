@@ -1210,7 +1210,7 @@ function Workspace() {
               statusOptions={lookups.maintenance_statuses}
               statusLabel="Progress"
             />
-            <DataTable columns={maintenanceColumns(user.role, setEditTarget, updateRecord)} rows={visibleRows} />
+            <DataTable columns={maintenanceColumns(user.role, setEditTarget, updateRecord)} rows={visibleRows} compact />
           </ModulePanel>
           <FormModal open={!!editTarget} title={editTarget?.maintenance_id ? 'Update Maintenance Record' : 'Add Maintenance Record'} onClose={() => setEditTarget(null)}>
             <SmartForm
@@ -2231,7 +2231,7 @@ function PartsTags({ value }) {
   );
 }
 
-function DataTable({ columns, rows }) {
+function DataTable({ columns, rows, compact = false }) {
   if (!rows?.length) {
     return <p className="empty-state">No records found.</p>;
   }
@@ -2239,7 +2239,7 @@ function DataTable({ columns, rows }) {
   const hasWidths = columns.some((column) => column.width);
 
   return (
-    <div className="table-shell">
+    <div className={`table-shell${compact ? ' is-compact' : ''}`}>
       <table>
         {hasWidths && (
           <colgroup>
@@ -2653,17 +2653,18 @@ function issueColumns(role, setEditTarget, onCreateTicketFromIssue) {
 
 function maintenanceColumns(role, setEditTarget, updateRecord) {
   const columns = [
-    { label: 'ID', render: (row) => row.maintenance_id },
-    { label: 'Vehicle', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
-    { label: 'Type', render: (row) => row.maintenance_type },
-    { label: 'Problem / Reason', className: 'cell-text', render: (row) => row.problem_reason },
-    { label: 'Personnel', render: (row) => row.maintenance_personnel?.name ?? '-' },
-    { label: 'Progress', render: (row) => <StatusBadge value={row.progress_status} /> },
-    { label: 'Verification', render: (row) => row.verification_result ? <StatusBadge value={row.verification_result} /> : '-' },
-    { label: 'Date Started', render: (row) => formatDate(row.date_started) },
-    { label: 'Date Completed', render: (row) => formatDate(row.date_completed) },
+    { label: 'ID', width: '4%', render: (row) => row.maintenance_id },
+    { label: 'Vehicle', width: '17%', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
+    { label: 'Type', width: '11%', render: (row) => row.maintenance_type },
+    { label: 'Problem / Reason', width: '17%', className: 'cell-text', render: (row) => row.problem_reason },
+    { label: 'Personnel', width: '11%', render: (row) => row.maintenance_personnel?.name ?? '-' },
+    { label: 'Progress', width: '9%', render: (row) => <StatusBadge value={row.progress_status} /> },
+    { label: 'Verification', width: '9%', render: (row) => row.verification_result ? <StatusBadge value={row.verification_result} /> : '-' },
+    { label: 'Date Started', width: '8%', render: (row) => formatDate(row.date_started) },
+    { label: 'Date Completed', width: '8%', render: (row) => formatDate(row.date_completed) },
     {
       label: 'Action',
+      width: '6%',
       render: (row) => (
         <div className="row-actions">
           <button className="btn-edit-action" onClick={() => setEditTarget(row)} type="button">Edit</button>

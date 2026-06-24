@@ -2759,6 +2759,52 @@ table button,
   overflow: auto;
 }
 
+/* Compact tables: column-heavy tables (e.g. Maintenance Records) tightened so
+   they fit the screen width without horizontal scrolling. */
+.table-shell.is-compact table {
+  font-size: 0.8rem;
+  table-layout: fixed;
+  width: 100%;
+}
+.table-shell.is-compact thead th {
+  padding: 9px 10px;
+  font-size: 0.66rem;
+  letter-spacing: 0.03em;
+  white-space: normal;
+  line-height: 1.25;
+}
+.table-shell.is-compact tbody td {
+  padding: 9px 10px;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+.table-shell.is-compact td.cell-text {
+  min-width: 0;
+  max-width: none;
+  line-height: 1.35;
+}
+.table-shell.is-compact .vehicle-cell {
+  min-width: 0;
+  gap: 6px;
+}
+.table-shell.is-compact .photo-thumb {
+  width: 38px;
+  height: 30px;
+  border-radius: 6px;
+}
+.table-shell.is-compact .vehicle-cell-name {
+  font-size: 0.78rem;
+}
+.table-shell.is-compact .status-badge {
+  padding: 2px 8px;
+  font-size: 0.7rem;
+  white-space: nowrap;
+}
+.table-shell.is-compact .row-actions {
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
 table {
   color: var(--text);
 }
