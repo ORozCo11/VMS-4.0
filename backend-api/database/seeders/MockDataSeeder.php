@@ -12,6 +12,7 @@ use App\Models\VehicleMaintenanceSchedule;
 use App\Models\VehicleMaintenanceRecord;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 
 class MockDataSeeder extends Seeder
 {
@@ -41,6 +42,11 @@ class MockDataSeeder extends Seeder
         // 2. Seed Vehicles
         $baseUrl = rtrim((string) config('app.url'), '/');
 
+        // Resolve each vehicle mockup to a Supabase Storage URL, uploading it on
+        // first run. Falls back to the locally-served /mockups path if Supabase
+        // is unavailable, so seeding never hard-fails on storage issues.
+        $photo = fn (string $file): string => $this->mockupUrl($file, $baseUrl);
+
         // Vehicle 1: AmbuLanz (Lego Model)
         $v1 = Vehicle::updateOrCreate(
             ['plate_number' => 'JSFSD-242'],
@@ -56,7 +62,7 @@ class MockDataSeeder extends Seeder
                 'current_location' => 'Palanan Central Hub',
                 'status'           => 'Available',
                 'condition'        => 'Good',
-                'photo_url'        => $baseUrl . '/mockups/fleet-vehicle.png',
+                'photo_url'        => $photo('ambulance-blue.svg'),
             ]
         );
 
@@ -75,7 +81,7 @@ class MockDataSeeder extends Seeder
                 'current_location' => 'Barangay Hall Hub',
                 'status'           => 'Available',
                 'condition'        => 'Good',
-                'photo_url'        => $baseUrl . '/mockups/fleet-vehicle.png',
+                'photo_url'        => $photo('ambulance-yellow.svg'),
             ]
         );
 
@@ -94,7 +100,7 @@ class MockDataSeeder extends Seeder
                 'current_location' => 'San Isidro Depot',
                 'status'           => 'Available',
                 'condition'        => 'Good',
-                'photo_url'        => $baseUrl . '/mockups/fleet-vehicle.png',
+                'photo_url'        => $photo('rescue-truck.svg'),
             ]
         );
 
@@ -113,7 +119,7 @@ class MockDataSeeder extends Seeder
                 'current_location' => 'Palanan Central Hub',
                 'status'           => 'Under Maintenance',
                 'condition'        => 'Needs Repair',
-                'photo_url'        => $baseUrl . '/mockups/fleet-vehicle.png',
+                'photo_url'        => $photo('ambulance-wagon.svg'),
             ]
         );
 
@@ -268,5 +274,30 @@ class MockDataSeeder extends Seeder
                 'date_completed'            => now()->subDays(10)->format('Y-m-d'),
             ]
         );
+    }
+
+    /**
+     * Upload a bundled vehicle mockup to Supabase Storage (once) and return its
+     * public URL. Falls back to the locally-served /mockups path if Supabase is
+     * not configured or unreachable, so seeding never hard-fails on storage.
+     */
+    private function mockupUrl(string $file, string $baseUrl): string
+    {
+        $localPath = public_path('mockups/' . $file);
+
+        try {
+            $disk = Storage::disk('supabase');
+            $remotePath = 'vehicles/' . $file;
+
+            if (!$disk->exists($remotePath)) {
+                $disk->put($remotePath, file_get_contents($localPath), ['mimetype' => 'image/svg+xml']);
+            }
+
+            $publicBase = rtrim((string) config('filesystems.disks.supabase.url'), '/');
+            return $publicBase . '/' . $remotePath;
+        } catch (\Throwable $e) {
+            $this->command->warn("Supabase upload failed for {$file}; using local mockup. ({$e->getMessage()})");
+            return $baseUrl . '/mockups/' . $file;
+        }
     }
 }

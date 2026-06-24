@@ -140,7 +140,35 @@ class FleetController extends Controller
                 ->latest('history_id')
                 ->limit(8)
                 ->get(),
+            'activity_by_day' => $this->activityByDay(14),
         ]);
+    }
+
+    /**
+     * Fleet activity (history events) per day over the last $days days.
+     * Missing days are filled with 0 so the chart line stays continuous.
+     */
+    private function activityByDay(int $days = 14): array
+    {
+        $start = now()->subDays($days - 1)->startOfDay();
+
+        $counts = VehicleHistory::query()
+            ->where('created_at', '>=', $start)
+            ->selectRaw('DATE(created_at) as day, COUNT(*) as total')
+            ->groupBy('day')
+            ->pluck('total', 'day');
+
+        $series = [];
+        for ($i = 0; $i < $days; $i++) {
+            $date = $start->copy()->addDays($i);
+            $key = $date->toDateString();
+            $series[] = [
+                'label' => $date->format('M j'),
+                'value' => (int) ($counts[$key] ?? 0),
+            ];
+        }
+
+        return $series;
     }
 
     public function categories()
@@ -967,6 +995,11 @@ class FleetController extends Controller
 
             return $this->publicStorageUrl($path);
         } catch (\Throwable $throwable) {
+            // Don't fail the request, but make the fallback visible — a silent
+            // fallback previously hid broken Supabase credentials for a long time.
+            \Illuminate\Support\Facades\Log::warning(
+                "Supabase upload failed for {$directory}/{$filename}; stored locally instead. ({$throwable->getMessage()})"
+            );
             $path = Storage::disk('public')->putFileAs($directory, $file, $filename, 'public');
 
             return $this->publicLocalStorageUrl($path);

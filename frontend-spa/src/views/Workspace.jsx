@@ -2,8 +2,10 @@ import { useCallback, useContext, useEffect, useMemo, useRef, useState, createCo
 import { useNavigate } from 'react-router-dom';
 import api from '../api/axios';
 import LocationDensityMap from '../components/LocationDensityMap';
+import Icon from '../components/Icon';
 import vmsLogo from '../assets/vms-logo.png';
 import { AuthContext } from '../context/AuthContextObject';
+import { getActiveHubs, groupLocationRowsByHub } from '../data/paknaanLocationDensity';
 
 const FormNoticeContext = createContext(null);
 
@@ -237,7 +239,15 @@ function Workspace() {
   // Condition Monitoring Filters
   const [condFilterStartDate, setCondFilterStartDate] = useState('');
   const [condFilterEndDate, setCondFilterEndDate] = useState('');
+  // Draft for the condition filter bar — applied only on "Filter" click.
+  const [condDraft, setCondDraft] = useState({ category: '', status: '', start: '', end: '' });
   const [prefilledTicketData, setPrefilledTicketData] = useState(null);
+  const [allHubs, setAllHubs] = useState(() => getActiveHubs());
+  const [locationsTab, setLocationsTab] = useState('map');
+  const [selectedMapVehicleId, setSelectedMapVehicleId] = useState(null);
+  const [theme, setTheme] = useState(() => {
+    try { return localStorage.getItem('theme') || 'dark'; } catch { return 'dark'; }
+  });
   const notificationsRef = useRef(null);
   const hasVehicles = (lookups.vehicles ?? []).length > 0;
 
@@ -338,6 +348,11 @@ function Workspace() {
   }, [user.role]);
 
   useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    try { localStorage.setItem('theme', theme); } catch { /* ignore */ }
+  }, [theme]);
+
+  useEffect(() => {
     loadLookups().catch((error) => showError(error, setNotice));
     loadTicketLookups().catch(() => {});
   }, [loadLookups, loadTicketLookups]);
@@ -373,6 +388,9 @@ function Workspace() {
      setFilterCapacity('');
      setFilterStatus('');
      setFilterPriority('');
+     setCondFilterStartDate('');
+     setCondFilterEndDate('');
+     setCondDraft({ category: '', status: '', start: '', end: '' });
      setLoading(true);
      loadModule(activeModule)
        .catch((error) => showError(error, setNotice))
@@ -637,6 +655,51 @@ function Workspace() {
     return result;
   }, [rawRows, searchQuery, filterCategory, filterCapacity, filterStatus, filterPriority, activeModule, condFilterStartDate, condFilterEndDate]);
 
+  // For the Vehicle Location module, every vehicle shown on the map should also
+  // appear in the records list. We merge the saved location records (history)
+  // with a synthesized "current" row for each vehicle that has no record yet,
+  // so the list always mirrors the map.
+  const locationRows = useMemo(() => {
+    if (activeModule !== 'locations') {
+      return visibleRows;
+    }
+
+    const vehiclesWithRecord = new Set(visibleRows.map((row) => row.vehicle_id));
+    const query = searchQuery.toLowerCase().trim();
+
+    const syntheticRows = (lookups.vehicles ?? [])
+      .filter((vehicle) => !vehiclesWithRecord.has(vehicle.vehicle_id))
+      .filter((vehicle) => {
+        if (!query) return true;
+        return [vehicle.vehicle_name, vehicle.plate_number, vehicle.current_location]
+          .some((val) => val && String(val).toLowerCase().includes(query));
+      })
+      .map((vehicle) => ({
+        location_record_id: null,
+        vehicle_id: vehicle.vehicle_id,
+        vehicle,
+        current_location: vehicle.current_location,
+        address_area: null,
+        updated_by: null,
+        updated_at: vehicle.updated_at ?? null,
+        is_current_snapshot: true,
+      }));
+
+    return [...visibleRows, ...syntheticRows];
+  }, [activeModule, visibleRows, lookups.vehicles, searchQuery]);
+
+  const viewVehicleOnMap = useCallback((row) => {
+    const vehicleId = row.vehicle_id ?? row.vehicle?.vehicle_id;
+    if (!vehicleId) return;
+    setSelectedMapVehicleId(vehicleId);
+    setLocationsTab('map');
+  }, []);
+
+  const locationTableColumns = useMemo(
+    () => locationColumns(user, viewVehicleOnMap),
+    [user, viewVehicleOnMap],
+  );
+
   const unreadCount = notifications.filter((n) => !n.read_at).length;
 
   return (
@@ -703,7 +766,7 @@ function Workspace() {
                     <div className="notifications-list">
                       {notifications.length === 0 ? (
                         <div className="notifications-empty">
-                          <span style={{ fontSize: '1.5rem' }}>🔔</span>
+                          <span style={{ display: 'inline-flex', opacity: 0.6 }}><Icon name="bell" size={26} /></span>
                           <span>No notifications yet.</span>
                         </div>
                       ) : (
@@ -732,7 +795,7 @@ function Workspace() {
                               title="Delete notification"
                               onClick={() => deleteNotification(n.notification_id)}
                             >
-                              ✕
+                              <Icon name="close" size={14} />
                             </button>
                           </div>
                         </div>
@@ -743,6 +806,25 @@ function Workspace() {
               )}
             </div>
 
+            <button
+              className="icon-btn theme-toggle-btn"
+              type="button"
+              title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+              aria-label="Toggle light and dark mode"
+              onClick={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
+            >
+              {theme === 'dark' ? (
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="4" />
+                  <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+                </svg>
+              )}
+            </button>
+
             <div className="status-pill">
               <span className="status-name">{user.name}</span>
             </div>
@@ -751,7 +833,7 @@ function Workspace() {
 
         {notice ? <p className={`notice ${notice.type}`} style={{margin: '20px 32px 0'}}>{notice.text}</p> : null}
         <div className="content-body">
-          {loading ? <p className="loading">Loading module data...</p> : renderModule()}
+          {loading ? <ModuleLoader /> : renderModule()}
         </div>
       </section>
     </main>
@@ -766,7 +848,7 @@ function Workspace() {
 
   function renderModule() {
     if (activeModule === 'dashboard') {
-      return <Dashboard data={dashboard} user={user} />;
+      return <Dashboard data={dashboard} hubs={allHubs} user={user} />;
     }
 
     if (activeModule === 'vehicles') {
@@ -799,9 +881,9 @@ function Workspace() {
             />
             <DataTable columns={vehicleColumns(user.role, setEditTarget, deleteRecord)} rows={visibleRows} />
           </ModulePanel>
-          <FormModal open={!!editTarget} title={editTarget?.vehicle_id ? 'Edit Vehicle' : 'Add Vehicle'} onClose={() => setEditTarget(null)}>
+          <FormModal open={!!editTarget} title={editTarget?.vehicle_id ? 'Edit Vehicle' : 'Add Vehicle'} onClose={() => setEditTarget(null)} confirmClose wide>
             <SmartForm
-              fields={vehicleFields(lookups)}
+              fields={vehicleFields(lookups, allHubs)}
               initialValues={editTarget?.vehicle_id ? editTarget : EMPTY_OBJ}
               key={editTarget?.vehicle_id ?? 'vehicle-create'}
               onCancel={() => setEditTarget(null)}
@@ -846,33 +928,75 @@ function Workspace() {
       return (
         <>
           <ModulePanel description="Record current vehicle stationing and keep a location history.">
-            <div className="module-action-bar">
-              <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                <h3>Vehicle Locations ({visibleRows.length})</h3>
-                <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search locations..." />
-              </div>
-              <button className="primary-button" type="button" onClick={() => setEditTarget({})}>+ Update Location</button>
+            <div className="locations-tab-bar">
+              <button
+                className={`locations-tab-button ${locationsTab === 'map' ? 'active' : ''}`}
+                onClick={() => setLocationsTab('map')}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                  <polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21" />
+                  <line x1="9" y1="3" x2="9" y2="18" />
+                  <line x1="15" y1="6" x2="15" y2="21" />
+                </svg>
+                Vehicles Map
+              </button>
+              <button
+                className={`locations-tab-button ${locationsTab === 'records' ? 'active' : ''}`}
+                onClick={() => setLocationsTab('records')}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <polyline points="14 2 14 8 20 8" />
+                  <line x1="16" y1="13" x2="8" y2="13" />
+                  <line x1="16" y1="17" x2="8" y2="17" />
+                  <polyline points="10 9 9 9 8 9" />
+                </svg>
+                Vehicle Location Record
+              </button>
             </div>
-            <div className="location-layout-grid">
-              <div>
-                <DataTable columns={locationColumns} rows={visibleRows} />
+
+            {locationsTab === 'map' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', height: '100%' }}>
+                <div className="map-container-full">
+                  <LocationDensityMap
+                    selectedVehicleId={selectedMapVehicleId}
+                    vehicles={lookups.vehicles ?? []}
+                    onClearSelectedVehicle={() => setSelectedMapVehicleId(null)}
+                    onHubsChange={setAllHubs}
+                  />
+                </div>
               </div>
-              <div className="map-card">
-                <LocationDensityMap vehicles={lookups.vehicles ?? []} />
+            )}
+
+            {locationsTab === 'records' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <div className="module-action-bar">
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                    <h3>Location Records ({locationRows.length})</h3>
+                    <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search records..." />
+                  </div>
+                  <button className="primary-button" type="button" onClick={() => setEditTarget({})}>+ Add Record</button>
+                </div>
+                <div style={{ overflowX: 'auto' }}>
+                  <DataTable columns={locationTableColumns} rows={locationRows} />
+                </div>
+                {editTarget !== null && (
+                  <div className="location-form-panel">
+                    <h3>{editTarget?.location_record_id ? 'Update Location Record' : 'Add Location Record'}</h3>
+                    <SmartForm
+                      fields={locationFields(lookups, allHubs)}
+                      initialValues={editTarget?.vehicle_id ? editTarget : EMPTY_OBJ}
+                      key="location-create"
+                      onCancel={() => setEditTarget(null)}
+                      onSubmit={submitModuleForm}
+                      submitLabel={editTarget?.location_record_id ? 'Update Record' : 'Add Record'}
+                      title=""
+                    />
+                  </div>
+                )}
               </div>
-            </div>
+            )}
           </ModulePanel>
-          <FormModal open={!!editTarget} title="Update Vehicle Location" onClose={() => setEditTarget(null)}>
-            <SmartForm
-              fields={locationFields(lookups)}
-              initialValues={editTarget?.vehicle_id ? editTarget : EMPTY_OBJ}
-              key="location-create"
-              onCancel={() => setEditTarget(null)}
-              onSubmit={submitModuleForm}
-              submitLabel="Update Location"
-              title=""
-            />
-          </FormModal>
         </>
       );
     }
@@ -899,8 +1023,8 @@ function Workspace() {
               {/* Category Dropdown */}
               <select
                 className="filter-select"
-                value={filterCategory}
-                onChange={(e) => setFilterCategory(e.target.value)}
+                value={condDraft.category}
+                onChange={(e) => setCondDraft((d) => ({ ...d, category: e.target.value }))}
               >
                 <option value="">All Categories</option>
                 {(lookups.categories ?? []).map((cat) => (
@@ -913,8 +1037,8 @@ function Workspace() {
               {/* Condition Dropdown */}
               <select
                 className="filter-select"
-                value={filterStatus}
-                onChange={(e) => setFilterStatus(e.target.value)}
+                value={condDraft.status}
+                onChange={(e) => setCondDraft((d) => ({ ...d, status: e.target.value }))}
               >
                 <option value="">All Conditions</option>
                 {['Good', 'Needs Inspection', 'Needs Repair', 'Damaged'].map((cond) => (
@@ -931,8 +1055,8 @@ function Workspace() {
                   type="date"
                   className="filter-select"
                   style={{ minWidth: 'auto' }}
-                  value={condFilterStartDate}
-                  onChange={(e) => setCondFilterStartDate(e.target.value)}
+                  value={condDraft.start}
+                  onChange={(e) => setCondDraft((d) => ({ ...d, start: e.target.value }))}
                 />
               </div>
 
@@ -943,21 +1067,43 @@ function Workspace() {
                   type="date"
                   className="filter-select"
                   style={{ minWidth: 'auto' }}
-                  value={condFilterEndDate}
-                  onChange={(e) => setCondFilterEndDate(e.target.value)}
+                  value={condDraft.end}
+                  onChange={(e) => setCondDraft((d) => ({ ...d, end: e.target.value }))}
                 />
               </div>
 
-              {/* Action Buttons */}
-              {(filterCategory || filterStatus || condFilterStartDate || condFilterEndDate) && (
-                <button 
-                  type="button" 
+              {/* Apply Filter */}
+              <button
+                type="button"
+                className="filter-apply-btn"
+                disabled={
+                  condDraft.category === filterCategory
+                  && condDraft.status === filterStatus
+                  && condDraft.start === condFilterStartDate
+                  && condDraft.end === condFilterEndDate
+                }
+                onClick={() => {
+                  setFilterCategory(condDraft.category);
+                  setFilterStatus(condDraft.status);
+                  setCondFilterStartDate(condDraft.start);
+                  setCondFilterEndDate(condDraft.end);
+                }}
+              >
+                Filter
+              </button>
+
+              {/* Clear Filters */}
+              {(filterCategory || filterStatus || condFilterStartDate || condFilterEndDate
+                || condDraft.category || condDraft.status || condDraft.start || condDraft.end) && (
+                <button
+                  type="button"
                   className="filter-clear-btn"
                   onClick={() => {
                     setFilterCategory('');
                     setFilterStatus('');
                     setCondFilterStartDate('');
                     setCondFilterEndDate('');
+                    setCondDraft({ category: '', status: '', start: '', end: '' });
                   }}
                 >
                   Clear Filters
@@ -1328,7 +1474,7 @@ function Workspace() {
   }
 }
 
-function Dashboard({ data, user }) {
+function Dashboard({ data, hubs = null, user }) {
   const [weather, setWeather] = useState(null);
   const [greeting, setGreeting] = useState(() => buildLocalGreeting(user?.name));
   const [greetingRole, setGreetingRole] = useState(() => dashboardRoleLabel(user?.role));
@@ -1406,6 +1552,10 @@ function Dashboard({ data, user }) {
   const maintenanceExpenses = data.metrics.find((metric) => metric.label === 'Total Maintenance Expenses')?.value ?? '0';
   const availabilityRate = totalVehicles ? Math.round((availableVehicles / totalVehicles) * 100) : 0;
 
+  // Re-group raw location rows into the same hubs the map shows, so the
+  // "Vehicles by Location" chart always matches the map's pins.
+  const locationsByHub = groupLocationRowsByHub(data.vehicles_by_location ?? [], hubs);
+
   const fleetStatus = [
     { label: 'Available', value: availableVehicles, color: '#36c66d' },
     { label: 'Under Maintenance', value: maintenanceVehicles, color: '#ff7a1a' },
@@ -1477,8 +1627,8 @@ function Dashboard({ data, user }) {
           <HorizontalBarChart rows={data.vehicles_by_type} />
         </GraphPanel>
 
-        <GraphPanel title="Vehicles by Location" stat={`${data.vehicles_by_location?.length ?? 0} sites`}>
-          <HorizontalBarChart rows={data.vehicles_by_location} />
+        <GraphPanel title="Vehicles by Location" stat={`${locationsByHub.length} sites`}>
+          <HorizontalBarChart rows={locationsByHub} />
         </GraphPanel>
 
         <GraphPanel title="Operations Queue" stat={String(maintenanceExpenses)}>
@@ -1490,8 +1640,13 @@ function Dashboard({ data, user }) {
         </GraphPanel>
       </section>
 
-      <ValueList title="Vehicles by Type" rows={data.vehicles_by_type} />
-      <ValueList title="Vehicles by Location" rows={data.vehicles_by_location} />
+      <section className="panel full-span area-chart-panel">
+        <div className="panel-header area-chart-header">
+          <h3>Fleet Activity by Day</h3>
+          <span className="area-chart-tag">Last 14 days</span>
+        </div>
+        <AreaChart rows={data.activity_by_day ?? []} />
+      </section>
 
       <section className="panel full-span">
         <div className="panel-header">
@@ -1699,6 +1854,93 @@ function ColumnChart({ rows = [] }) {
   );
 }
 
+function AreaChart({ rows = [], height = 180 }) {
+  if (!rows.length) {
+    return <p className="empty-state">No activity data yet.</p>;
+  }
+
+  const width = 560;
+  const padX = 36;
+  const padTop = 16;
+  const padBottom = 26;
+  const innerW = width - padX * 2;
+  const innerH = height - padTop - padBottom;
+
+  const values = rows.map((r) => Number(r.value) || 0);
+  const rawMax = Math.max(1, ...values);
+  // Choose a "nice" integer step so the Y axis has clean, unique labels
+  // (counts are whole numbers, so the step is always >= 1).
+  const niceStep = (() => {
+    const rough = rawMax / 4; // aim for ~4 gridline intervals
+    const pow = Math.pow(10, Math.floor(Math.log10(rough)));
+    const norm = rough / pow;
+    let s;
+    if (norm <= 1) s = 1;
+    else if (norm <= 2) s = 2;
+    else if (norm <= 5) s = 5;
+    else s = 10;
+    return Math.max(1, s * pow);
+  })();
+  const niceMax = Math.ceil(rawMax / niceStep) * niceStep;
+  // Top-to-bottom integer ticks (e.g. 3, 2, 1, 0) — no rounding duplicates.
+  const yTicks = [];
+  for (let v = niceMax; v >= 0; v -= niceStep) yTicks.push(v);
+
+  const stepX = rows.length > 1 ? innerW / (rows.length - 1) : 0;
+  const points = rows.map((row, i) => {
+    const x = padX + stepX * i;
+    const y = padTop + innerH - ((Number(row.value) || 0) / niceMax) * innerH;
+    return { x, y, ...row };
+  });
+
+  const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
+  const areaPath = `${linePath} L ${points[points.length - 1].x.toFixed(1)} ${(padTop + innerH).toFixed(1)} L ${points[0].x.toFixed(1)} ${(padTop + innerH).toFixed(1)} Z`;
+
+  // Show at most ~8 x-axis labels to avoid crowding.
+  const labelStep = Math.ceil(rows.length / 8);
+
+  return (
+    <div className="area-chart">
+      <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" role="img" aria-label="Activity by day">
+        <defs>
+          <linearGradient id="areaFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#ff7a1a" stopOpacity="0.45" />
+            <stop offset="100%" stopColor="#ff7a1a" stopOpacity="0" />
+          </linearGradient>
+        </defs>
+
+        {yTicks.map((val) => {
+          const y = padTop + innerH * (1 - val / niceMax);
+          return (
+            <g key={val}>
+              <line
+                className="area-grid-line"
+                x1={padX} y1={y} x2={width - padX} y2={y}
+                strokeDasharray="3 4"
+              />
+              <text className="area-axis-label" x={padX - 8} y={y + 3} textAnchor="end">{val}</text>
+            </g>
+          );
+        })}
+
+        <path d={areaPath} fill="url(#areaFill)" />
+        <path d={linePath} className="area-line" fill="none" />
+
+        {points.map((p, i) => (
+          <g key={i}>
+            <circle className="area-dot" cx={p.x} cy={p.y} r="3.2">
+              <title>{`${p.label}: ${p.value}`}</title>
+            </circle>
+            {i % labelStep === 0 && (
+              <text className="area-axis-label" x={p.x} y={height - 8} textAnchor="middle">{p.label}</text>
+            )}
+          </g>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
 function ModulePanel({ children, description }) {
   return (
     <div className="module-grid">
@@ -1718,23 +1960,58 @@ function ModulePanel({ children, description }) {
 }
 
 /** Generic modal wrapper that hosts a SmartForm popup. */
-function FormModal({ open, title, onClose, children }) {
+function FormModal({ open, title, onClose, children, confirmClose = false, wide = false }) {
   const notice = useContext(FormNoticeContext);
+  const [confirming, setConfirming] = useState(false);
+
+  useEffect(() => {
+    if (!open) setConfirming(false);
+  }, [open]);
+
   if (!open) return null;
+
+  const requestClose = () => {
+    if (confirmClose) {
+      setConfirming(true);
+    } else {
+      onClose();
+    }
+  };
+
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-box" onClick={(e) => e.stopPropagation()}>
+    <div className="modal-overlay" onClick={requestClose}>
+      <div className={`modal-box${wide ? ' modal-box-wide' : ''}`} onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h3>{title}</h3>
-          <button className="modal-close-btn" onClick={onClose} type="button" aria-label="Close">✕</button>
+          <button className="modal-close-btn" onClick={requestClose} type="button" aria-label="Close"><Icon name="close" size={18} /></button>
         </div>
         {notice && notice.type === 'error' && (
           <div className="notice error" style={{ margin: '12px 28px 0', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span>⚠️</span>
+            <span style={{ display: 'inline-flex', flexShrink: 0 }}><Icon name="alert" size={16} /></span>
             <span>{notice.text}</span>
           </div>
         )}
         <div className="modal-body">{children}</div>
+
+        {confirming && (
+          <div className="modal-confirm-overlay" onClick={() => setConfirming(false)}>
+            <div className="modal-confirm-box" onClick={(e) => e.stopPropagation()} role="alertdialog" aria-modal="true">
+              <div className="modal-confirm-icon" aria-hidden="true">
+                <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
+                  <line x1="12" y1="9" x2="12" y2="13" />
+                  <line x1="12" y1="17" x2="12.01" y2="17" />
+                </svg>
+              </div>
+              <h4>Discard and exit?</h4>
+              <p>Anything you entered in this form will be lost.</p>
+              <div className="modal-confirm-actions">
+                <button className="ghost-button" type="button" onClick={() => setConfirming(false)}>Keep editing</button>
+                <button className="modal-confirm-exit" type="button" onClick={() => { setConfirming(false); onClose(); }}>Exit without saving</button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1831,8 +2108,8 @@ function ProfilePanel({ user, onLogout, setNotice }) {
           </dl>
 
           <div className="profile-actions">
-            <button className="ghost-button" style={{width:'100%',height:36,fontSize:'0.82rem'}} onClick={() => setPwOpen(true)} type="button">
-              🔑 Change Password
+            <button className="ghost-button" style={{width:'100%',height:36,fontSize:'0.82rem',display:'inline-flex',alignItems:'center',justifyContent:'center',gap:7}} onClick={() => setPwOpen(true)} type="button">
+              <Icon name="key" size={15} /> Change Password
             </button>
             <button className="logout-button" onClick={onLogout} type="button">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{width:16,height:16}}>
@@ -1957,9 +2234,18 @@ function DataTable({ columns, rows }) {
     return <p className="empty-state">No records found.</p>;
   }
 
+  const hasWidths = columns.some((column) => column.width);
+
   return (
     <div className="table-shell">
       <table>
+        {hasWidths && (
+          <colgroup>
+            {columns.map((column) => (
+              <col key={column.label} style={column.width ? { width: column.width } : undefined} />
+            ))}
+          </colgroup>
+        )}
         <thead>
           <tr>
             {columns.map((column) => (
@@ -1971,7 +2257,7 @@ function DataTable({ columns, rows }) {
           {rows.map((row, index) => (
             <tr key={rowKey(row, index)}>
               {columns.map((column) => (
-                <td key={column.label}>{column.render ? column.render(row) : row[column.key]}</td>
+                <td key={column.label} className={column.className}>{column.render ? column.render(row) : row[column.key]}</td>
               ))}
             </tr>
           ))}
@@ -1981,23 +2267,30 @@ function DataTable({ columns, rows }) {
   );
 }
 
-function ValueList({ rows, title }) {
+function ModuleLoader({ label = 'Loading module data' }) {
   return (
-    <section className="panel">
-      <div className="panel-header">
-        <h3>{title}</h3>
+    <div className="module-loader" role="status" aria-live="polite">
+      <div className="module-loader-card">
+        <span className="module-loader-spinner" aria-hidden="true">
+          <svg viewBox="0 0 50 50" width="44" height="44">
+            <circle className="module-loader-track" cx="25" cy="25" r="20" fill="none" strokeWidth="5" />
+            <circle className="module-loader-arc" cx="25" cy="25" r="20" fill="none" strokeWidth="5" strokeLinecap="round" />
+          </svg>
+        </span>
+        <span className="module-loader-label">{label}<span className="module-loader-dots" /></span>
       </div>
-      {rows?.length ? (
-        <ul className="value-list">
-          {rows.map((row) => (
-            <li key={row.label ?? 'blank'}>
-              <span>{row.label || 'Unassigned'}</span>
-              <strong>{row.value}</strong>
-            </li>
-          ))}
-        </ul>
-      ) : <p className="empty-state">No grouped data yet.</p>}
-    </section>
+
+      <div className="skeleton-table" aria-hidden="true">
+        <div className="skeleton-row skeleton-head">
+          {Array.from({ length: 5 }).map((_, i) => <span className="skeleton-cell" key={i} />)}
+        </div>
+        {Array.from({ length: 5 }).map((_, r) => (
+          <div className="skeleton-row" key={r} style={{ animationDelay: `${r * 0.08}s` }}>
+            {Array.from({ length: 5 }).map((_, c) => <span className="skeleton-cell" key={c} />)}
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -2071,7 +2364,9 @@ const passwordFields = [
   { label: 'Confirm New Password', name: 'new_password_confirmation', required: true, type: 'password' },
 ];
 
-function vehicleFields(lookups) {
+function vehicleFields(lookups, allHubs = []) {
+  const hubOptions = allHubs.map((hub) => ({ value: hub.name, label: hub.name }));
+
   return [
     { label: 'Vehicle Name', name: 'vehicle_name', required: true, type: 'text' },
     { label: 'Plate Number', name: 'plate_number', required: true, type: 'text' },
@@ -2083,15 +2378,20 @@ function vehicleFields(lookups) {
     { label: 'Capacity', name: 'capacity', required: true, type: 'text' },
     { label: 'Vehicle Color', name: 'vehicle_color', required: true, type: 'text' },
     { label: 'Fuel Type', name: 'fuel_type', type: 'text' },
-    { label: 'Current Location', name: 'current_location', required: true, type: 'text' },
+    { label: 'Current Location', name: 'current_location', options: hubOptions, required: true, type: 'select' },
     { label: 'Remarks', name: 'remarks', type: 'textarea' },
   ];
 }
 
-function locationFields(lookups) {
+function locationFields(lookups, allHubs = []) {
+  const hubOptions = allHubs.map((hub) => ({
+    value: hub.name,
+    label: hub.name,
+  }));
+
   return [
     { label: 'Vehicle', name: 'vehicle_id', options: vehicleOptions(lookups), required: true, type: 'select' },
-    { label: 'Current Location', name: 'current_location', required: true, type: 'text' },
+    { label: 'Current Location', name: 'current_location', options: hubOptions, required: true, type: 'select' },
     { label: 'Address / Area', name: 'address_area', type: 'text' },
     { label: 'Remarks', name: 'remarks', type: 'textarea' },
   ];
@@ -2238,22 +2538,48 @@ function categoryColumns(setEditTarget, deleteRecord) {
   ];
 }
 
-const locationColumns = [
-  { label: 'Record ID', render: (row) => row.location_record_id },
+function locationColumns(currentUser, onViewOnMap) {
+  return [
+  { label: 'ID', render: (row) => row.location_record_id ?? '—' },
   { label: 'Vehicle', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
-  { label: 'Current Location', render: (row) => row.current_location },
+  { label: 'Current Location', render: (row) => row.current_location ?? '-' },
   { label: 'Address / Area', render: (row) => row.address_area ?? '-' },
-  { label: 'Updated By', render: (row) => row.updated_by?.name ?? row.updated_by?.email ?? '-' },
-  { label: 'Date Updated', render: (row) => formatDate(row.updated_at) },
-];
+  {
+    label: 'Updated By',
+    render: (row) => (
+      row.is_current_snapshot
+        ? (currentUser?.name ?? currentUser?.email ?? '-')
+        : (row.updated_by?.name ?? row.updated_by?.email ?? '-')
+    ),
+  },
+  { label: 'Date Updated', render: (row) => (row.updated_at ? formatDate(row.updated_at) : '-') },
+  {
+    label: 'View',
+    render: (row) => (
+      <button
+        className="btn-view-action"
+        onClick={() => onViewOnMap(row)}
+        title="View vehicle on map"
+        type="button"
+      >
+        <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" />
+          <circle cx="12" cy="12" r="3" />
+        </svg>
+        View
+      </button>
+    ),
+  },
+  ];
+}
 
 function conditionColumns(role, setEditTarget, deleteRecord) {
   const columns = [
-    { label: 'Check ID', render: (row) => row.condition_check_id },
+    { label: 'ID', render: (row) => row.condition_check_id },
     { label: 'Vehicle', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
     { label: 'Result', render: (row) => <StatusBadge value={row.condition_result} /> },
     { label: 'Checked By', render: (row) => row.checked_by?.name ?? '-' },
-    { label: 'Observations', render: (row) => row.observations ?? '-' },
+    { label: 'Observations', className: 'cell-text', render: (row) => row.observations ?? '-' },
     { label: 'Date', render: (row) => formatDate(row.created_at) },
   ];
 
@@ -2274,15 +2600,33 @@ function conditionColumns(role, setEditTarget, deleteRecord) {
 
 function issueColumns(role, setEditTarget, onCreateTicketFromIssue) {
   const columns = [
-    { label: 'Issue ID', render: (row) => row.issue_report_id },
-    { label: 'Vehicle', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
-    { label: 'Issue Type', render: (row) => row.issue_type },
-    { label: 'Severity', render: (row) => <StatusBadge value={row.severity_level} /> },
-    { label: 'Status', render: (row) => <StatusBadge value={row.status} /> },
-    { label: 'Reported By', render: (row) => row.reported_by?.name ?? '-' },
-    { label: 'Description', render: (row) => row.issue_description },
+    {
+      label: 'Issue',
+      width: '28%',
+      render: (row) => (
+        <div className="issue-cell">
+          <div className="issue-cell-top">
+            <span className="issue-id-badge">#{row.issue_report_id}</span>
+            <span className="issue-type">{row.issue_type}</span>
+          </div>
+          {row.issue_description && (
+            <p className="issue-desc" title={row.issue_description}>{row.issue_description}</p>
+          )}
+        </div>
+      ),
+    },
+    { label: 'Vehicle', width: '16%', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
+    { label: 'Severity', width: '10%', render: (row) => <StatusBadge value={row.severity_level} /> },
+    { label: 'Status', width: '10%', render: (row) => <StatusBadge value={row.status} /> },
+    {
+      label: 'Reported By',
+      width: '12%',
+      render: (row) => <span className="issue-reporter">{row.reported_by?.name ?? '-'}</span>,
+    },
     {
       label: 'Photo',
+      width: '7%',
+      className: 'cell-center',
       render: (row) => <PhotoCell alt={`Issue #${row.issue_report_id}`} url={row.photo_url} />,
     },
   ];
@@ -2290,6 +2634,7 @@ function issueColumns(role, setEditTarget, onCreateTicketFromIssue) {
   if (['Admin', 'Maintenance Personnel'].includes(role)) {
     columns.push({
       label: 'Action',
+      width: '17%',
       render: (row) => (
         <div className="row-actions">
           <button className="btn-edit-action" onClick={() => setEditTarget(row)} type="button">Update</button>
@@ -2306,10 +2651,10 @@ function issueColumns(role, setEditTarget, onCreateTicketFromIssue) {
 
 function maintenanceColumns(role, setEditTarget, updateRecord) {
   const columns = [
-    { label: 'Maintenance ID', render: (row) => row.maintenance_id },
+    { label: 'ID', render: (row) => row.maintenance_id },
     { label: 'Vehicle', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
     { label: 'Type', render: (row) => row.maintenance_type },
-    { label: 'Problem / Reason', render: (row) => row.problem_reason },
+    { label: 'Problem / Reason', className: 'cell-text', render: (row) => row.problem_reason },
     { label: 'Personnel', render: (row) => row.maintenance_personnel?.name ?? '-' },
     { label: 'Progress', render: (row) => <StatusBadge value={row.progress_status} /> },
     { label: 'Verification', render: (row) => row.verification_result ? <StatusBadge value={row.verification_result} /> : '-' },
@@ -2336,11 +2681,11 @@ function maintenanceColumns(role, setEditTarget, updateRecord) {
 
 function maintenanceStatusColumns(setEditTarget) {
   return [
-    { label: 'Maintenance ID', render: (row) => row.maintenance_id },
+    { label: 'ID', render: (row) => row.maintenance_id },
     { label: 'Vehicle', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
     { label: 'Type', render: (row) => row.maintenance_type },
-    { label: 'Problem / Reason', render: (row) => row.problem_reason },
-    { label: 'Action Taken', render: (row) => row.action_taken ?? '-' },
+    { label: 'Problem / Reason', className: 'cell-text', render: (row) => row.problem_reason },
+    { label: 'Action Taken', className: 'cell-text', render: (row) => row.action_taken ?? '-' },
     { label: 'Personnel', render: (row) => row.maintenance_personnel?.name ?? '-' },
     { label: 'Progress', render: (row) => <StatusBadge value={row.progress_status} /> },
     { label: 'Action', render: (row) => <button className="btn-edit-action" onClick={() => setEditTarget(row)} type="button">Verify</button> },
@@ -2349,7 +2694,7 @@ function maintenanceStatusColumns(setEditTarget) {
 
 function scheduleColumns(setEditTarget, deleteRecord) {
   return [
-    { label: 'Schedule ID', render: (row) => row.schedule_id },
+    { label: 'ID', render: (row) => row.schedule_id },
     { label: 'Vehicle', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
     { label: 'Type', render: (row) => row.maintenance_type },
     { label: 'Date', render: (row) => formatDate(row.scheduled_date) },
@@ -2369,34 +2714,34 @@ function scheduleColumns(setEditTarget, deleteRecord) {
 }
 
 const maintenanceHistoryColumns = [
-  { label: 'History ID', render: (row) => row.maintenance_id },
+  { label: 'ID', render: (row) => row.maintenance_id },
   { label: 'Vehicle', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
   { label: 'Type', render: (row) => row.maintenance_type },
-  { label: 'Problem / Reason', render: (row) => row.problem_reason },
-  { label: 'Action Taken', render: (row) => row.action_taken ?? '-' },
+  { label: 'Problem / Reason', className: 'cell-text', render: (row) => row.problem_reason },
+  { label: 'Action Taken', className: 'cell-text', render: (row) => row.action_taken ?? '-' },
   { label: 'Parts Used', render: (row) => <PartsTags value={row.parts_used} /> },
   { label: 'Personnel', render: (row) => row.maintenance_personnel?.name ?? '-' },
   { label: 'Completed', render: (row) => formatDate(row.date_completed ?? row.updated_at) },
 ];
 
 const historyColumns = [
-  { label: 'History ID', render: (row) => row.history_id },
+  { label: 'ID', render: (row) => row.history_id },
   { label: 'Vehicle', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
   { label: 'Activity', render: (row) => row.activity_type },
-  { label: 'Description', render: (row) => row.description },
+  { label: 'Description', className: 'cell-text', render: (row) => row.description },
   { label: 'Related Record', render: (row) => row.related_record_id ?? '-' },
   { label: 'Updated By', render: (row) => row.updated_by?.name ?? '-' },
   { label: 'Date and Time', render: (row) => formatDate(row.created_at) },
 ];
 
 const logColumns = [
-  { label: 'Log ID', render: (row) => row.log_id },
+  { label: 'ID', render: (row) => row.log_id },
   { label: 'User', render: (row) => row.user?.name ?? '-' },
   { label: 'Role', render: (row) => row.role ?? '-' },
   { label: 'Action', render: (row) => row.action },
   { label: 'Module', render: (row) => row.module },
   { label: 'Record ID', render: (row) => row.affected_record_id ?? '-' },
-  { label: 'Details', render: (row) => row.details ?? '-' },
+  { label: 'Details', className: 'cell-text', render: (row) => row.details ?? '-' },
   { label: 'Date and Time', render: (row) => formatDate(row.created_at) },
 ];
 
@@ -2418,14 +2763,38 @@ function StatusBadge({ value }) {
   return <span className={`status-badge ${String(value).toLowerCase().replaceAll(' ', '-')}`}>{value ?? '-'}</span>;
 }
 
+// The backend stores absolute image URLs built from APP_URL, which often points
+// at a different host/port than where the API is actually served (e.g. stored as
+// localhost:8000 but served on 127.0.0.1:8001). Rewrite local-host URLs to the
+// real API origin so images load; leave external URLs (e.g. Supabase) untouched.
+const API_ORIGIN = (api.defaults.baseURL || '').replace(/\/api\/?$/, '');
+
+function resolvePhotoUrl(url) {
+  if (!url) return url;
+  try {
+    const parsed = new URL(url, window.location.origin);
+    const isLocalHost = ['localhost', '127.0.0.1', '0.0.0.0'].includes(parsed.hostname);
+    if (isLocalHost && API_ORIGIN) {
+      const base = new URL(API_ORIGIN);
+      parsed.protocol = base.protocol;
+      parsed.host = base.host;
+    }
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
 function PhotoCell({ url, alt }) {
   if (!url) {
     return '-';
   }
 
+  const resolved = resolvePhotoUrl(url);
+
   return (
-    <a className="photo-cell" href={url} rel="noreferrer" target="_blank">
-      <img alt={alt} className="photo-thumb" src={url} />
+    <a className="photo-cell" href={resolved} rel="noreferrer" target="_blank">
+      <img alt={alt} className="photo-thumb" src={resolved} loading="lazy" />
     </a>
   );
 }
@@ -2436,9 +2805,9 @@ function VehicleCell({ vehicle }) {
   }
 
   return (
-    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+    <div className="vehicle-cell">
       <PhotoCell alt={vehicle.vehicle_name} url={vehicle.photo_url} />
-      <span>{vehicleLabel(vehicle)}</span>
+      <span className="vehicle-cell-name">{vehicleLabel(vehicle)}</span>
     </div>
   );
 }
@@ -2712,23 +3081,37 @@ function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm,
             <div className="ticket-detail-meta">
               <TicketStatusBadge value={ticket.status} size="large" />
               <TicketStatusBadge value={ticket.priority} />
-              <span className="ticket-meta-item">📅 {formatDate(ticket.created_at)}</span>
+              <span className="ticket-meta-item"><Icon name="calendar" size={14} /> {formatDate(ticket.created_at)}</span>
             </div>
           </div>
-          <button className="icon-btn" onClick={onClose} type="button" title="Close">✕</button>
+          <button className="icon-btn" onClick={onClose} type="button" title="Close" aria-label="Close"><Icon name="close" size={18} /></button>
         </div>
 
-        <div className="ticket-detail-phase-bar">
-          {['Open','For Maintenance','Under Repair','For Inspection','For Confirmation','Done'].map((s) => (
-            <div key={s} className={`phase-step ${ticket.status === s ? 'phase-step-active' : ''} ${phaseIsPast(ticket.status, s) ? 'phase-step-done' : ''}`}>
-              <span>{s}</span>
-            </div>
-          ))}
+        <div className="ticket-progress-tracker" role="list" aria-label="Ticket progress">
+          {phaseOrder.map((s, i) => {
+            const current = phaseOrder.indexOf(ticket.status);
+            const state = i < current ? 'done' : i === current ? 'active' : 'upcoming';
+            return (
+              <div key={s} className={`ticket-progress-step is-${state}`} role="listitem">
+                <span className="ticket-progress-marker">
+                  {state === 'done' ? (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  ) : (
+                    <span className="ticket-progress-dot" />
+                  )}
+                </span>
+                <span className="ticket-progress-label">{s}</span>
+                <span className="ticket-progress-stage">Stage {i + 1}</span>
+              </div>
+            );
+          })}
         </div>
 
         <div className="ticket-detail-body">
           <section className="ticket-section">
-            <h4>🚗 Vehicle</h4>
+            <h4><Icon name="vehicle" size={16} /> Vehicle</h4>
             <div className="ticket-detail-vehicle-layout">
               {ticket.vehicle?.photo_url && (
                 <div className="ticket-detail-vehicle-photo">
@@ -2743,13 +3126,13 @@ function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm,
           </section>
 
           <section className="ticket-section">
-            <h4>📋 Description</h4>
+            <h4><Icon name="clipboard" size={16} /> Description</h4>
             <p>{ticket.ticket_description}</p>
           </section>
 
           {ticket.assigned_custodian_id && (
             <section className="ticket-section">
-              <h4>🔍 Phase 1–2 · Custodian Inspection</h4>
+              <h4><Icon name="search" size={16} /> Phase 1–2 · Custodian Inspection</h4>
               <p>Assigned to: <strong>{ticket.assigned_custodian?.name ?? '—'}</strong></p>
               {ticket.inspection_result && <>
                 <p>Result: <TicketStatusBadge value={ticket.inspection_result} /></p>
@@ -2761,7 +3144,7 @@ function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm,
 
           {ticket.assigned_mechanic_id && (
             <section className="ticket-section">
-              <h4>🔧 Phase 3 · Work Order</h4>
+              <h4><Icon name="wrench" size={16} /> Phase 3 · Work Order</h4>
               <p>Mechanic: <strong>{ticket.assigned_mechanic?.name ?? '—'}</strong></p>
               <p>Type: {ticket.maintenance_type}</p>
               {ticket.work_order_notes && <p className="muted">{ticket.work_order_notes}</p>}
@@ -2787,7 +3170,7 @@ function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm,
 
           {ticket.verification_verdict && (
             <section className="ticket-section">
-              <h4>✅ Phase 4T1 · Custodian Verification</h4>
+              <h4><Icon name="checkCircle" size={16} /> Phase 4T1 · Custodian Verification</h4>
               <p>Verdict: <TicketStatusBadge value={ticket.verification_verdict} /></p>
               <p className="muted">{ticket.verification_notes}</p>
               <p className="muted">By {ticket.verified_by?.name} on {formatDate(ticket.verified_at)}</p>
@@ -2796,7 +3179,7 @@ function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm,
 
           {ticket.confirmation_verdict && (
             <section className="ticket-section">
-              <h4>🏁 Phase 4T2 · Admin Confirmation</h4>
+              <h4><Icon name="flag" size={16} /> Phase 4T2 · Admin Confirmation</h4>
               <p>Verdict: <TicketStatusBadge value={ticket.confirmation_verdict} /></p>
               {ticket.maintenance_cost !== null && ticket.maintenance_cost !== undefined && (
                 <p style={{ marginTop: '4px', marginBottom: '4px' }}>
@@ -2812,7 +3195,7 @@ function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm,
         {/* Phase 3 Action — Admin assigns mechanic when status is For Maintenance */}
         {ticket.status === 'For Maintenance' && !mechanicForm && (
           <div className="ticket-detail-actions">
-            <p className="notice warning" style={{marginBottom: 12}}>⚠️ Maintenance Trigger — This vehicle needs a mechanic assigned.</p>
+            <p className="notice warning" style={{marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8}}><Icon name="alert" size={15} /> Maintenance Trigger — This vehicle needs a mechanic assigned.</p>
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
               <button className="primary-button" type="button" onClick={() => setMechanicForm(true)}>Assign Mechanic (Work Order)</button>
               <button className="ghost-button" type="button" onClick={() => onCancel(ticket)}>Cancel Ticket</button>
@@ -2838,7 +3221,7 @@ function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm,
         {/* Phase 4T2 Action — Admin confirms or reopens when status is For Confirmation */}
         {ticket.status === 'For Confirmation' && !confirmForm && (
           <div className="ticket-detail-actions">
-            <p className="notice success" style={{marginBottom: 12}}>✅ Custodian has approved the repair. Your final confirmation is required.</p>
+            <p className="notice success" style={{marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8}}><Icon name="checkCircle" size={15} /> Custodian has approved the repair. Your final confirmation is required.</p>
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
               <button className="primary-button" type="button" onClick={() => setConfirmForm(true)}>Issue Confirmation Verdict</button>
               <button className="danger-button" type="button" onClick={requestDelete}>Delete Ticket</button>
@@ -2858,7 +3241,7 @@ function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm,
               marginBottom: '16px',
               fontSize: '0.88rem'
             }}>
-              <h5 style={{ margin: '0 0 8px 0', fontSize: '0.9rem', color: '#1e293b', fontWeight: 600 }}>🛠️ Repair Summary</h5>
+              <h5 style={{ margin: '0 0 8px 0', fontSize: '0.9rem', color: '#1e293b', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}><Icon name="tools" size={15} /> Repair Summary</h5>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px' }}>
                 <div>
                   <span className="muted" style={{ display: 'block', fontSize: '0.72rem', fontWeight: 600, color: '#64748b' }}>MECHANIC</span>
@@ -2972,12 +3355,12 @@ function TicketModule({
         {/* Alert banners */}
         {forMaintCount > 0 && (
           <div className="ticket-alert-banner formaint">
-            ⚠️ <strong>{forMaintCount}</strong> ticket{forMaintCount > 1 ? 's' : ''} waiting for mechanic assignment — Maintenance Trigger active!
+            <Icon name="alert" size={16} /> <strong>{forMaintCount}</strong> ticket{forMaintCount > 1 ? 's' : ''} waiting for mechanic assignment — Maintenance Trigger active!
           </div>
         )}
         {forConfirmCount > 0 && (
           <div className="ticket-alert-banner forconfirm">
-            ✅ <strong>{forConfirmCount}</strong> ticket{forConfirmCount > 1 ? 's' : ''} awaiting your final confirmation.
+            <Icon name="checkCircle" size={16} /> <strong>{forConfirmCount}</strong> ticket{forConfirmCount > 1 ? 's' : ''} awaiting your final confirmation.
           </div>
         )}
 
@@ -3024,7 +3407,7 @@ function TicketModule({
       <FormModal open={showCreate} title="Phase 1 — Create Ticket" onClose={() => { setShowCreate(false); if (setPrefilledTicketData) setPrefilledTicketData(null); }}>
         {prefilledTicketData && (
           <div className="info-callout" style={{ marginBottom: '16px', background: 'rgba(59, 130, 246, 0.1)', borderColor: '#3b82f6' }}>
-            <span style={{ marginRight: '8px' }}>🔗</span>
+            <span style={{ marginRight: '8px', color: '#3b82f6', display: 'inline-flex' }}><Icon name="link" size={16} /></span>
             <p className="module-description" style={{ color: '#3b82f6', margin: 0 }}>
               Linking this ticket to <strong>Issue Report #{prefilledTicketData.issue_report_id}</strong>.
             </p>
@@ -3358,12 +3741,12 @@ function MechanicWorkOrderModule({
                     <div>
                       <div style={{ fontWeight: 600 }}>{r.ticket_title}</div>
                       {r.confirmation_verdict === 'Reopened' ? (
-                        <span className="status-badge rework-danger" style={{ fontSize: '0.75rem', padding: '3px 8px', marginTop: 4, display: 'inline-block' }}>
-                          ⚠️ Admin Reopened Rework
+                        <span className="status-badge rework-danger" style={{ fontSize: '0.75rem', padding: '3px 8px', marginTop: 4, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                          <Icon name="alert" size={13} /> Admin Reopened Rework
                         </span>
                       ) : r.verification_verdict === 'Rejected' ? (
-                        <span className="status-badge rework-warning" style={{ fontSize: '0.75rem', padding: '3px 8px', marginTop: 4, display: 'inline-block' }}>
-                          ⚠️ Custodian Rejected Rework
+                        <span className="status-badge rework-warning" style={{ fontSize: '0.75rem', padding: '3px 8px', marginTop: 4, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                          <Icon name="alert" size={13} /> Custodian Rejected Rework
                         </span>
                       ) : null}
                     </div>
@@ -3382,13 +3765,13 @@ function MechanicWorkOrderModule({
       <FormModal open={!!editTarget} title={`Log Repairs — Ticket #${editTarget?.ticket_id}`} onClose={onCancelEdit}>
         {editTarget?.confirmation_verdict === 'Reopened' && (
           <div className="notice danger" style={{ marginBottom: 16 }}>
-            <h4>⚠️ Reopened by Admin ({editTarget.confirmed_by?.name ?? 'Roel Degulacion'})</h4>
+            <h4 style={{ display: 'flex', alignItems: 'center', gap: 7 }}><Icon name="alert" size={16} /> Reopened by Admin ({editTarget.confirmed_by?.name ?? 'Roel Degulacion'})</h4>
             <p><strong>Feedback/Reason:</strong> {editTarget.confirmation_notes ?? 'No feedback notes provided.'}</p>
           </div>
         )}
         {editTarget?.verification_verdict === 'Rejected' && (
           <div className="notice warning" style={{ marginBottom: 16 }}>
-            <h4>⚠️ Rejected by Custodian ({editTarget.verified_by?.name ?? 'Nicole'})</h4>
+            <h4 style={{ display: 'flex', alignItems: 'center', gap: 7 }}><Icon name="alert" size={16} /> Rejected by Custodian ({editTarget.verified_by?.name ?? 'Nicole'})</h4>
             <p><strong>Feedback/Reason:</strong> {editTarget.verification_notes ?? 'No feedback notes provided.'}</p>
           </div>
         )}
@@ -3481,19 +3864,57 @@ function FilterBar({
     return Array.from(caps).sort();
   }, [vehicles]);
 
+  // Draft selections — only applied to the table when "Filter" is clicked.
+  const [draft, setDraft] = useState({
+    category: filterCategory,
+    capacity: filterCapacity,
+    status: filterStatus,
+    priority: filterPriority,
+  });
+
+  // Keep the draft in sync when applied filters are reset externally
+  // (e.g. switching modules clears all filters).
+  useEffect(() => {
+    setDraft({
+      category: filterCategory,
+      capacity: filterCapacity,
+      status: filterStatus,
+      priority: filterPriority,
+    });
+  }, [filterCategory, filterCapacity, filterStatus, filterPriority]);
+
   const hasActiveFilters = filterCategory || filterCapacity || filterStatus || filterPriority;
+  const isDirty = draft.category !== filterCategory
+    || draft.capacity !== filterCapacity
+    || draft.status !== filterStatus
+    || draft.priority !== filterPriority;
+
+  const applyFilters = () => {
+    setFilterCategory(draft.category);
+    setFilterCapacity(draft.capacity);
+    setFilterStatus(draft.status);
+    if (setFilterPriority) setFilterPriority(draft.priority);
+  };
+
+  const clearFilters = () => {
+    setDraft({ category: '', capacity: '', status: '', priority: '' });
+    setFilterCategory('');
+    setFilterCapacity('');
+    setFilterStatus('');
+    if (setFilterPriority) setFilterPriority('');
+  };
 
   return (
     <div className="filter-bar-container">
       <div className="filter-label">
         <span>Filters:</span>
       </div>
-      
+
       {/* Category Dropdown */}
       <select
         className="filter-select"
-        value={filterCategory}
-        onChange={(e) => setFilterCategory(e.target.value)}
+        value={draft.category}
+        onChange={(e) => setDraft((d) => ({ ...d, category: e.target.value }))}
       >
         <option value="">All Categories</option>
         {categories.map((cat) => (
@@ -3506,8 +3927,8 @@ function FilterBar({
       {/* Capacity Dropdown */}
       <select
         className="filter-select"
-        value={filterCapacity}
-        onChange={(e) => setFilterCapacity(e.target.value)}
+        value={draft.capacity}
+        onChange={(e) => setDraft((d) => ({ ...d, capacity: e.target.value }))}
       >
         <option value="">All Capacities</option>
         {capacities.map((cap) => (
@@ -3521,8 +3942,8 @@ function FilterBar({
       {statusOptions && statusOptions.length > 0 && (
         <select
           className="filter-select"
-          value={filterStatus}
-          onChange={(e) => setFilterStatus(e.target.value)}
+          value={draft.status}
+          onChange={(e) => setDraft((d) => ({ ...d, status: e.target.value }))}
         >
           <option value="">All {statusLabel}es</option>
           {statusOptions.map((opt) => (
@@ -3537,8 +3958,8 @@ function FilterBar({
       {priorityOptions && priorityOptions.length > 0 && (
         <select
           className="filter-select"
-          value={filterPriority}
-          onChange={(e) => setFilterPriority(e.target.value)}
+          value={draft.priority}
+          onChange={(e) => setDraft((d) => ({ ...d, priority: e.target.value }))}
         >
           <option value="">All {priorityLabel}s</option>
           {priorityOptions.map((opt) => (
@@ -3549,17 +3970,22 @@ function FilterBar({
         </select>
       )}
 
+      {/* Apply Filter button */}
+      <button
+        type="button"
+        className="filter-apply-btn"
+        onClick={applyFilters}
+        disabled={!isDirty}
+      >
+        Filter
+      </button>
+
       {/* Clear Filters button */}
-      {hasActiveFilters && (
+      {(hasActiveFilters || isDirty) && (
         <button
           type="button"
           className="filter-clear-btn"
-          onClick={() => {
-            setFilterCategory('');
-            setFilterCapacity('');
-            setFilterStatus('');
-            if (setFilterPriority) setFilterPriority('');
-          }}
+          onClick={clearFilters}
         >
           Clear Filters
         </button>
@@ -3584,7 +4010,7 @@ function LocalSearchInput({ value, onChange, placeholder = "Search..." }) {
       />
       {value && (
         <button className="local-search-clear" onClick={() => onChange('')} type="button" title="Clear search">
-          ✕
+          <Icon name="close" size={14} />
         </button>
       )}
     </div>

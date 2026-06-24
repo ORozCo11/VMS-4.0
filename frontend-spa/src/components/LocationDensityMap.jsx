@@ -1,22 +1,46 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { MapContainer, Marker, Polygon, Popup, TileLayer, Tooltip, useMap, ZoomControl } from 'react-leaflet';
-import { PAKNAAN_BOUNDS, PAKNAAN_CENTER, PAKNAAN_HUBS, PAKNAAN_POLYGON } from '../data/paknaanLocationDensity';
+import { toPng } from 'html-to-image';
+import {
+  HIDDEN_HUBS_STORAGE_KEY,
+  HUBS_STORAGE_KEY,
+  PAKNAAN_BOUNDS,
+  PAKNAAN_CENTER,
+  PAKNAAN_POLYGON,
+  getActiveHubs,
+  readCustomHubs,
+  readHiddenHubIds,
+} from '../data/paknaanLocationDensity';
 
 const CARTO_DARK_TILE_URL = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
 const CARTO_ATTRIBUTION = '&copy; OpenStreetMap contributors &copy; CARTO';
 
-function createHubIcon(label) {
+function escapeSvgText(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function createHubIcon(label, isCustom = false) {
+  const borderColor = isCustom ? '#4ADE80' : '#22C55E';
+  const bgColor = isCustom ? '#064E3B' : '#052E16';
+  const innerColor = isCustom ? '#15803D' : '#14532D';
+  const safeLabel = escapeSvgText(label);
+
   return L.divIcon({
     className: 'location-density-hub-icon',
     html: `
       <svg xmlns="http://www.w3.org/2000/svg" width="42" height="42" viewBox="0 0 42 42" aria-hidden="true">
-        <circle cx="21" cy="21" r="20" fill="#052E16" stroke="#22C55E" stroke-width="2"/>
-        <circle cx="21" cy="21" r="15" fill="#14532D" stroke="#86EFAC" stroke-width="1"/>
+        <circle cx="21" cy="21" r="20" fill="${bgColor}" stroke="${borderColor}" stroke-width="2"/>
+        <circle cx="21" cy="21" r="15" fill="${innerColor}" stroke="#86EFAC" stroke-width="1"/>
         <path d="M12 24.5 21 17l9 7.5" fill="none" stroke="#DCFCE7" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
         <path d="M15.5 23.5v8h11v-8" fill="none" stroke="#DCFCE7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-        <text x="21" y="15" text-anchor="middle" fill="#BBF7D0" font-size="8" font-family="Arial, sans-serif" font-weight="800">${label}</text>
+        <text x="21" y="15" text-anchor="middle" fill="#BBF7D0" font-size="8" font-family="Arial, sans-serif" font-weight="800">${safeLabel}</text>
       </svg>
     `,
     iconSize: [42, 42],
@@ -39,6 +63,23 @@ function createVehicleDotIcon(count) {
   });
 }
 
+function createSelectedVehicleIcon() {
+  return L.divIcon({
+    className: 'location-density-selected-vehicle-icon',
+    html: `
+      <span class="location-density-selected-vehicle">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z"/>
+          <circle cx="12" cy="12" r="3"/>
+        </svg>
+      </span>
+    `,
+    iconSize: [34, 34],
+    iconAnchor: [17, 17],
+    popupAnchor: [0, -17],
+  });
+}
+
 function isValidCoordinate(value) {
   return Number.isFinite(value);
 }
@@ -50,27 +91,51 @@ function normalizeLocation(value = '') {
     .replace(/\s+/g, ' ');
 }
 
-function findHubForVehicle(vehicle) {
+// Vehicles whose recorded location does not match any known hub are still
+// pinned here so every vehicle is accounted for on the map.
+const FALLBACK_HUB = {
+  id: 'paknaan-area-unassigned',
+  name: 'Paknaan Area (Unassigned)',
+  address: 'Within Paknaan barangay boundary',
+  lat: PAKNAAN_CENTER.lat,
+  lng: PAKNAAN_CENTER.lng,
+  label: 'PK',
+  matchNames: [],
+};
+
+function findHubForVehicle(vehicle, hubs) {
   const location = normalizeLocation(vehicle.current_location);
 
   if (!location) {
     return null;
   }
 
-  return PAKNAAN_HUBS.find((hub) => (
-    hub.matchNames.some((name) => location === normalizeLocation(name))
+  // 1. Exact match against any hub alias.
+  const exact = hubs.find((hub) => (
+    (hub.matchNames ?? [hub.name]).some((name) => location === normalizeLocation(name))
+  ));
+
+  if (exact) {
+    return exact;
+  }
+
+  // 2. Loose contains-match so minor wording differences still land on a hub.
+  return hubs.find((hub) => (
+    (hub.matchNames ?? [hub.name]).some((name) => {
+      const normalized = normalizeLocation(name);
+      return location.includes(normalized) || normalized.includes(location);
+    })
   )) ?? null;
 }
 
-function groupVehiclesByHub(vehicles) {
+function groupVehiclesByHub(vehicles, hubs) {
   const groups = new Map();
 
   vehicles.forEach((vehicle) => {
-    const hub = findHubForVehicle(vehicle);
-
-    if (!hub || !isValidCoordinate(hub.lat) || !isValidCoordinate(hub.lng)) {
-      return;
-    }
+    const matchedHub = findHubForVehicle(vehicle, hubs);
+    const hub = (matchedHub && isValidCoordinate(matchedHub.lat) && isValidCoordinate(matchedHub.lng))
+      ? matchedHub
+      : FALLBACK_HUB;
 
     const currentGroup = groups.get(hub.id) ?? { hub, vehicles: [] };
     currentGroup.vehicles.push(vehicle);
@@ -78,6 +143,58 @@ function groupVehiclesByHub(vehicles) {
   });
 
   return Array.from(groups.values());
+}
+
+function MapClickHandler({ addMode, onPickLocation }) {
+  const map = useMap();
+
+  useEffect(() => {
+    const container = map.getContainer();
+
+    if (addMode) {
+      map.dragging.disable();
+      container.style.cursor = 'crosshair';
+    } else {
+      map.dragging.enable();
+      container.style.cursor = '';
+    }
+
+    const handleClick = (e) => {
+      if (!addMode) return;
+      onPickLocation({ lat: e.latlng.lat, lng: e.latlng.lng });
+    };
+
+    map.on('click', handleClick);
+
+    return () => {
+      map.off('click', handleClick);
+      container.style.cursor = '';
+    };
+  }, [map, addMode, onPickLocation]);
+
+  return null;
+}
+
+// Captures the live Leaflet map (tiles + overlays) to a PNG and triggers a download.
+async function captureMapToPng(mapEl) {
+  if (!mapEl) {
+    throw new Error('Map element not found');
+  }
+
+  const dataUrl = await toPng(mapEl, {
+    cacheBust: true,
+    pixelRatio: 2,
+    // Skip Leaflet's interactive controls so the export is a clean map snapshot.
+    filter: (node) => !(node.classList && (
+      node.classList.contains('leaflet-control-zoom')
+      || node.classList.contains('leaflet-control-attribution')
+    )),
+  });
+
+  const link = document.createElement('a');
+  link.href = dataUrl;
+  link.download = `vehicle-map-${new Date().toISOString().split('T')[0]}.png`;
+  link.click();
 }
 
 function FitBoundsToPolygon() {
@@ -91,26 +208,291 @@ function FitBoundsToPolygon() {
   return null;
 }
 
-function LocationDensityMap({ vehicles = [] }) {
+function FocusVehicleOnMap({ target }) {
+  const map = useMap();
+  const hubId = target?.hub.id;
+  const lat = target?.hub.lat;
+  const lng = target?.hub.lng;
+
+  useEffect(() => {
+    if (!isValidCoordinate(lat) || !isValidCoordinate(lng)) return;
+    map.flyTo([lat, lng], Math.max(map.getZoom(), 18), {
+      animate: true,
+      duration: 0.8,
+    });
+  }, [hubId, lat, lng, map]);
+
+  return null;
+}
+
+function ResetMapView({ requestKey }) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (!requestKey) return;
+    const bounds = L.latLngBounds(PAKNAAN_POLYGON);
+    map.flyToBounds(bounds, { animate: true, duration: 0.8, padding: [24, 24], maxZoom: 16 });
+  }, [map, requestKey]);
+
+  return null;
+}
+
+function LocationDensityMap({
+  vehicles = [],
+  selectedVehicleId = null,
+  onClearSelectedVehicle = null,
+  onHubsChange = null,
+}) {
+  const [customHubs, setCustomHubs] = useState(() => readCustomHubs());
+  const [hiddenHubIds, setHiddenHubIds] = useState(() => readHiddenHubIds());
+  const [addMode, setAddMode] = useState(false);
+  const [pendingLatLng, setPendingLatLng] = useState(null);
+  const [deleteCandidate, setDeleteCandidate] = useState(null);
+  const [hubNameDraft, setHubNameDraft] = useState('');
+  const [capturing, setCapturing] = useState(false);
+  const [mapNotice, setMapNotice] = useState(null);
+  const [resetViewRequest, setResetViewRequest] = useState(0);
+  const mapShellRef = useRef(null);
+  const nameInputRef = useRef(null);
+
+  const updateHubState = useCallback((nextCustomHubs, nextHiddenHubIds) => {
+    localStorage.setItem(HUBS_STORAGE_KEY, JSON.stringify(nextCustomHubs));
+    localStorage.setItem(HIDDEN_HUBS_STORAGE_KEY, JSON.stringify(nextHiddenHubIds));
+    setCustomHubs(nextCustomHubs);
+    setHiddenHubIds(nextHiddenHubIds);
+    if (onHubsChange) {
+      onHubsChange(getActiveHubs(nextCustomHubs, nextHiddenHubIds));
+    }
+  }, [onHubsChange]);
+
+  // When the naming modal opens, focus the input.
+  useEffect(() => {
+    if (pendingLatLng && nameInputRef.current) {
+      nameInputRef.current.focus();
+    }
+  }, [pendingLatLng]);
+
+  const handlePickLocation = useCallback((latLng) => {
+    setAddMode(false);
+    setHubNameDraft('');
+    setPendingLatLng(latLng);
+  }, []);
+
+  const cancelNaming = useCallback(() => {
+    setPendingLatLng(null);
+    setHubNameDraft('');
+  }, []);
+
+  const confirmNaming = useCallback(() => {
+    const name = hubNameDraft.trim();
+    if (!name || !pendingLatLng) {
+      return;
+    }
+
+    const newHub = {
+      id: `custom-hub-${Date.now()}`,
+      name,
+      address: name,
+      lat: pendingLatLng.lat,
+      lng: pendingLatLng.lng,
+      label: name.substring(0, 2).toUpperCase(),
+      matchNames: [name.toLowerCase()],
+      isCustom: true,
+    };
+
+    updateHubState([...customHubs, newHub], hiddenHubIds);
+    setMapNotice({ type: 'success', text: `${name} hub added.` });
+    setPendingLatLng(null);
+    setHubNameDraft('');
+  }, [customHubs, hiddenHubIds, hubNameDraft, pendingLatLng, updateHubState]);
+
+  const captureMap = useCallback(async () => {
+    setCapturing(true);
+    setMapNotice(null);
+    try {
+      await captureMapToPng(mapShellRef.current?.querySelector('.location-density-map'));
+      setMapNotice({ type: 'success', text: 'Map image downloaded.' });
+    } catch (error) {
+      console.error('Failed to capture map:', error);
+      setMapNotice({ type: 'error', text: 'The map could not be captured. Please try again.' });
+    } finally {
+      setCapturing(false);
+    }
+  }, []);
+
+  const requestDeleteHub = useCallback((hub) => {
+    setDeleteCandidate(hub);
+  }, []);
+
+  const cancelDeleteHub = useCallback(() => {
+    setDeleteCandidate(null);
+  }, []);
+
+  const confirmDeleteHub = useCallback(() => {
+    if (!deleteCandidate) return;
+
+    const nextCustomHubs = deleteCandidate.isCustom
+      ? customHubs.filter((hub) => hub.id !== deleteCandidate.id)
+      : customHubs;
+    const nextHiddenHubIds = deleteCandidate.isCustom
+      ? hiddenHubIds
+      : Array.from(new Set([...hiddenHubIds, deleteCandidate.id]));
+
+    updateHubState(nextCustomHubs, nextHiddenHubIds);
+    setMapNotice({ type: 'success', text: `${deleteCandidate.name} removed from the map.` });
+    setDeleteCandidate(null);
+  }, [customHubs, deleteCandidate, hiddenHubIds, updateHubState]);
+
+  const restoreDefaultHubs = useCallback(() => {
+    updateHubState(customHubs, []);
+    setMapNotice({ type: 'success', text: 'Default hubs restored.' });
+  }, [customHubs, updateHubState]);
+
+  const cancelFocusMode = useCallback(() => {
+    setResetViewRequest((value) => value + 1);
+    setMapNotice({ type: 'success', text: 'Vehicle focus cleared.' });
+    if (onClearSelectedVehicle) {
+      onClearSelectedVehicle();
+    }
+  }, [onClearSelectedVehicle]);
+
+  const allHubs = useMemo(
+    () => getActiveHubs(customHubs, hiddenHubIds).filter((hub) => isValidCoordinate(hub.lat) && isValidCoordinate(hub.lng)),
+    [customHubs, hiddenHubIds],
+  );
+
   const hubs = useMemo(
-    () => PAKNAAN_HUBS.filter((hub) => isValidCoordinate(hub.lat) && isValidCoordinate(hub.lng)),
-    [],
+    () => allHubs,
+    [allHubs],
   );
 
   const hubIcons = useMemo(
-    () => Object.fromEntries(hubs.map((hub) => [hub.id, createHubIcon(hub.label)])),
+    () => Object.fromEntries(hubs.map((hub) => [hub.id, createHubIcon(hub.label, hub.isCustom)])),
     [hubs],
   );
-  const vehicleGroups = useMemo(() => groupVehiclesByHub(vehicles), [vehicles]);
+  const vehicleGroups = useMemo(() => groupVehiclesByHub(vehicles, hubs), [hubs, vehicles]);
   const vehicleIcons = useMemo(
     () => Object.fromEntries(
       vehicleGroups.map((group) => [group.hub.id, createVehicleDotIcon(group.vehicles.length)]),
     ),
     [vehicleGroups],
   );
+  const selectedId = selectedVehicleId == null ? null : String(selectedVehicleId);
+  let selectedVehicleGroup = null;
+  if (selectedId) {
+    for (const group of vehicleGroups) {
+      const vehicle = group.vehicles.find((candidate) => String(candidate.vehicle_id) === selectedId);
+      if (vehicle) {
+        selectedVehicleGroup = { hub: group.hub, vehicle };
+        break;
+      }
+    }
+  }
+  const selectedVehicleIcon = useMemo(() => createSelectedVehicleIcon(), []);
 
   return (
-    <div className="location-density-map-shell">
+    <div className="location-density-map-shell" ref={mapShellRef}>
+      <div className="location-density-toolbar">
+        <span className="location-density-hint">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" y1="8" x2="12" y2="12" />
+            <line x1="12" y1="16" x2="12.01" y2="16" />
+          </svg>
+          {addMode ? 'Click anywhere on the map to drop the new hub.' : 'Click "Add Hub", then click the map to pin a new location.'}
+        </span>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          {selectedVehicleId != null && (
+            <button
+              type="button"
+              className="location-density-btn is-secondary is-focus-cancel"
+              onClick={cancelFocusMode}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M2 12s3.5-6 10-6c2.2 0 4.1.7 5.7 1.7" />
+                <path d="M22 12s-3.5 6-10 6c-2.2 0-4.1-.7-5.7-1.7" />
+                <path d="M3 3l18 18" />
+                <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
+              </svg>
+              Cancel Focus
+            </button>
+          )}
+          {hiddenHubIds.length > 0 && (
+            <button
+              type="button"
+              className="location-density-btn is-secondary"
+              onClick={restoreDefaultHubs}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 12a9 9 0 1 0 3-6.7" />
+                <path d="M3 4v6h6" />
+              </svg>
+              Restore Hubs
+            </button>
+          )}
+          <button
+            type="button"
+            className={`location-density-btn ${addMode ? 'is-active' : 'is-primary'}`}
+            onClick={() => setAddMode((prev) => !prev)}
+          >
+            {addMode ? (
+              <>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+                Cancel
+              </>
+            ) : (
+              <>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z" />
+                  <circle cx="12" cy="9" r="2.5" fill="currentColor" stroke="none" />
+                </svg>
+                Add Hub
+              </>
+            )}
+          </button>
+          <button
+            type="button"
+            className="location-density-btn is-secondary"
+            onClick={captureMap}
+            disabled={capturing}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="7 10 12 15 17 10" />
+              <line x1="12" y1="15" x2="12" y2="3" />
+            </svg>
+            {capturing ? 'Capturing…' : 'Download Map'}
+          </button>
+        </div>
+      </div>
+      <div className="location-density-legend" aria-label="Map legend">
+        <span className="location-density-legend-item">
+          <span className="legend-symbol legend-symbol-hub" aria-hidden="true" />
+          Hub
+        </span>
+        <span className="location-density-legend-item">
+          <span className="legend-symbol legend-symbol-vehicle" aria-hidden="true" />
+          Vehicle count
+        </span>
+        <span className="location-density-legend-item">
+          <span className="legend-symbol legend-symbol-boundary" aria-hidden="true" />
+          Paknaan boundary
+        </span>
+      </div>
+      {mapNotice && (
+        <div className={`location-density-notice ${mapNotice.type}`} role="status">
+          <span>{mapNotice.text}</span>
+          <button type="button" onClick={() => setMapNotice(null)} aria-label="Dismiss map notice">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
+      )}
       <MapContainer
         attributionControl
         center={[PAKNAAN_CENTER.lat, PAKNAAN_CENTER.lng]}
@@ -121,6 +503,7 @@ function LocationDensityMap({ vehicles = [] }) {
         zoom={16}
         zoomControl={false}
       >
+        <MapClickHandler addMode={addMode} onPickLocation={handlePickLocation} />
         <TileLayer attribution={CARTO_ATTRIBUTION} maxZoom={19} url={CARTO_DARK_TILE_URL} />
         <Polygon
           pathOptions={{
@@ -151,8 +534,19 @@ function LocationDensityMap({ vehicles = [] }) {
               <div className="location-density-popup">
                 <strong>{hub.name}</strong>
                 <span>{hub.address}</span>
-                <span>Latitude: {hub.lat}</span>
-                <span>Longitude: {hub.lng}</span>
+                <span>Latitude: {hub.lat.toFixed(6)}</span>
+                <span>Longitude: {hub.lng.toFixed(6)}</span>
+                <div className="location-density-popup-actions">
+                  <button type="button" className="location-density-delete-hub" onClick={() => requestDeleteHub(hub)}>
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="3 6 5 6 21 6" />
+                      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                      <path d="M10 11v6M14 11v6" />
+                      <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+                    </svg>
+                    Delete Hub
+                  </button>
+                </div>
               </div>
             </Popup>
           </Marker>
@@ -193,9 +587,134 @@ function LocationDensityMap({ vehicles = [] }) {
             </Popup>
           </Marker>
         ))}
+        {selectedVehicleGroup && (
+          <Marker
+            icon={selectedVehicleIcon}
+            key={`selected-vehicle-${selectedVehicleGroup.vehicle.vehicle_id}`}
+            position={[selectedVehicleGroup.hub.lat, selectedVehicleGroup.hub.lng]}
+            zIndexOffset={1750}
+          >
+            <Tooltip
+              className="location-density-selected-vehicle-tooltip"
+              direction="top"
+              offset={[0, -25]}
+              permanent
+            >
+              Viewing {selectedVehicleGroup.vehicle.vehicle_name}
+            </Tooltip>
+            <Popup className="location-density-vehicle-popup">
+              <div className="location-density-vehicle-popup-content">
+                <strong>{selectedVehicleGroup.vehicle.vehicle_name}</strong>
+                <span>Plate: {selectedVehicleGroup.vehicle.plate_number}</span>
+                <span>Current Location: {selectedVehicleGroup.vehicle.current_location}</span>
+                <span>Hub: {selectedVehicleGroup.hub.name}</span>
+              </div>
+            </Popup>
+          </Marker>
+        )}
         <ZoomControl position="bottomright" />
         <FitBoundsToPolygon />
+        <FocusVehicleOnMap target={selectedVehicleGroup} />
+        <ResetMapView requestKey={resetViewRequest} />
       </MapContainer>
+
+      {pendingLatLng && (
+        <div className="hub-modal-overlay" onMouseDown={cancelNaming}>
+          <div
+            className="hub-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="hub-modal-title"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <div className="hub-modal-header">
+              <span className="hub-modal-icon">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z" />
+                  <circle cx="12" cy="9" r="2.5" fill="currentColor" stroke="none" />
+                </svg>
+              </span>
+              <h3 id="hub-modal-title">Name this location hub</h3>
+            </div>
+
+            <p className="hub-modal-coords">
+              Lat {pendingLatLng.lat.toFixed(6)} · Lng {pendingLatLng.lng.toFixed(6)}
+            </p>
+
+            <label className="hub-modal-label" htmlFor="hub-name-input">Hub name</label>
+            <input
+              id="hub-name-input"
+              ref={nameInputRef}
+              className="hub-modal-input"
+              type="text"
+              placeholder="e.g. Paknaan Health Center"
+              value={hubNameDraft}
+              onChange={(e) => setHubNameDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') confirmNaming();
+                if (e.key === 'Escape') cancelNaming();
+              }}
+              maxLength={60}
+            />
+
+            <div className="hub-modal-actions">
+              <button type="button" className="hub-modal-btn hub-modal-cancel" onClick={cancelNaming}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="hub-modal-btn hub-modal-save"
+                onClick={confirmNaming}
+                disabled={!hubNameDraft.trim()}
+              >
+                Save Hub
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deleteCandidate && (
+        <div className="hub-modal-overlay" onMouseDown={cancelDeleteHub}>
+          <div
+            className="hub-modal hub-modal-danger"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="hub-delete-title"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <div className="hub-modal-header">
+              <span className="hub-modal-icon">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="3 6 5 6 21 6" />
+                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                  <path d="M10 11v6M14 11v6" />
+                  <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+                </svg>
+              </span>
+              <h3 id="hub-delete-title">Delete hub</h3>
+            </div>
+
+            <p className="hub-modal-message">
+              Remove <strong>{deleteCandidate.name}</strong> from the map and location choices?
+            </p>
+            {!deleteCandidate.isCustom && (
+              <p className="hub-modal-coords">
+                Built-in hubs are hidden locally and can be restored later.
+              </p>
+            )}
+
+            <div className="hub-modal-actions">
+              <button type="button" className="hub-modal-btn hub-modal-cancel" onClick={cancelDeleteHub}>
+                Cancel
+              </button>
+              <button type="button" className="hub-modal-btn hub-modal-delete" onClick={confirmDeleteHub}>
+                Delete Hub
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
