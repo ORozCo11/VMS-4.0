@@ -918,7 +918,7 @@ function Workspace() {
             </div>
             <DataTable columns={categoryColumns(setEditTarget, deleteRecord)} rows={visibleRows} />
           </ModulePanel>
-          <FormModal open={!!editTarget} title={editTarget?.category_id ? 'Edit Vehicle Type' : 'Add Vehicle Type'} onClose={() => setEditTarget(null)}>
+          <FormModal open={!!editTarget} title={editTarget?.category_id ? 'Edit Vehicle Type' : 'Add Vehicle Type'} onClose={() => setEditTarget(null)} confirmClose>
             <SmartForm
               fields={categoryFields}
               initialValues={editTarget?.category_id ? editTarget : EMPTY_OBJ}
@@ -1122,7 +1122,7 @@ function Workspace() {
 
             <DataTable columns={conditionColumns(user.role, setEditTarget, deleteRecord)} rows={visibleRows} />
           </ModulePanel>
-          <FormModal open={!!editTarget} title={editTarget?.condition_check_id ? 'Edit Condition Check' : 'Add Condition Check'} onClose={() => setEditTarget(null)}>
+          <FormModal open={!!editTarget} title={editTarget?.condition_check_id ? 'Edit Condition Check' : 'Add Condition Check'} onClose={() => setEditTarget(null)} confirmClose>
             <SmartForm
               fields={conditionFields(lookups)}
               initialValues={editTarget?.condition_check_id ? editTarget : EMPTY_OBJ}
@@ -1220,7 +1220,7 @@ function Workspace() {
             />
             <DataTable columns={maintenanceColumns(user.role, setEditTarget, updateRecord)} rows={visibleRows} compact />
           </ModulePanel>
-          <FormModal open={!!editTarget} title={editTarget?.maintenance_id ? 'Update Maintenance Record' : 'Add Maintenance Record'} onClose={() => setEditTarget(null)}>
+          <FormModal open={!!editTarget} title={editTarget?.maintenance_id ? 'Update Maintenance Record' : 'Add Maintenance Record'} onClose={() => setEditTarget(null)} confirmClose>
             <SmartForm
               fields={maintenanceFields(lookups, user.role)}
               initialValues={editTarget?.maintenance_id ? editTarget : EMPTY_OBJ}
@@ -1245,7 +1245,7 @@ function Workspace() {
             </div>
             <DataTable columns={maintenanceStatusColumns(setEditTarget)} rows={visibleRows} />
           </ModulePanel>
-          <FormModal open={!!editTarget} title={`Verify Maintenance #${editTarget?.maintenance_id}`} onClose={() => setEditTarget(null)}>
+          <FormModal open={!!editTarget} title={`Verify Maintenance #${editTarget?.maintenance_id}`} onClose={() => setEditTarget(null)} confirmClose>
             <SmartForm
               fields={verificationFields}
               key={editTarget?.maintenance_id}
@@ -1272,7 +1272,7 @@ function Workspace() {
             </div>
             <DataTable columns={scheduleColumns(setEditTarget, deleteRecord)} rows={visibleRows} />
           </ModulePanel>
-          <FormModal open={!!editTarget} title={editTarget?.schedule_id ? 'Update Schedule' : 'Add Maintenance Schedule'} onClose={() => setEditTarget(null)}>
+          <FormModal open={!!editTarget} title={editTarget?.schedule_id ? 'Update Schedule' : 'Add Maintenance Schedule'} onClose={() => setEditTarget(null)} confirmClose>
             <SmartForm
               fields={scheduleFields(lookups)}
               initialValues={editTarget?.schedule_id ? editTarget : EMPTY_OBJ}
@@ -3415,7 +3415,7 @@ function TicketModule({
         }
       </section>
 
-      <FormModal open={showCreate} title="Phase 1 — Create Ticket" onClose={() => { setShowCreate(false); if (setPrefilledTicketData) setPrefilledTicketData(null); }}>
+      <FormModal open={showCreate} title="Phase 1 — Create Ticket" onClose={() => { setShowCreate(false); if (setPrefilledTicketData) setPrefilledTicketData(null); }} confirmClose>
         {prefilledTicketData && (
           <div className="info-callout" style={{ marginBottom: '16px', background: 'rgba(59, 130, 246, 0.1)', borderColor: '#3b82f6' }}>
             <span style={{ marginRight: '8px', color: '#3b82f6', display: 'inline-flex' }}><Icon name="link" size={16} /></span>
@@ -3542,7 +3542,7 @@ function CustodianInspectionModule({
           )
         }
       </section>
-      <FormModal open={!!editTarget} title={`Inspect Ticket #${editTarget?.ticket_id}`} onClose={onCancelEdit}>
+      <FormModal open={!!editTarget} title={`Inspect Ticket #${editTarget?.ticket_id}`} onClose={onCancelEdit} confirmClose>
         <SmartForm
           fields={inspectionFields}
           key={editTarget?.ticket_id}
@@ -3628,7 +3628,7 @@ function CustodianVerificationModule({
           )
         }
       </section>
-      <FormModal open={!!editTarget} title={`Verify Repair — Ticket #${editTarget?.ticket_id}`} onClose={onCancelEdit}>
+      <FormModal open={!!editTarget} title={`Verify Repair — Ticket #${editTarget?.ticket_id}`} onClose={onCancelEdit} confirmClose>
         <SmartForm
           fields={verifyRepairFields}
           key={editTarget?.ticket_id}
@@ -3773,7 +3773,7 @@ function MechanicWorkOrderModule({
           )
         }
       </section>
-      <FormModal open={!!editTarget} title={`Log Repairs — Ticket #${editTarget?.ticket_id}`} onClose={onCancelEdit}>
+      <FormModal open={!!editTarget} title={`Log Repairs — Ticket #${editTarget?.ticket_id}`} onClose={onCancelEdit} confirmClose>
         {editTarget?.confirmation_verdict === 'Reopened' && (
           <div className="notice danger" style={{ marginBottom: 16 }}>
             <h4 style={{ display: 'flex', alignItems: 'center', gap: 7 }}><Icon name="alert" size={16} /> Reopened by Admin ({editTarget.confirmed_by?.name ?? 'Roel Degulacion'})</h4>
