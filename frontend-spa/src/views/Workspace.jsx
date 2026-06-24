@@ -626,10 +626,18 @@ function Workspace() {
           matchesField(row.ticket_id) ||
           matchesField(row.maintenance_id) ||
           matchesField(row.issue_report_id) ||
-          matchesField(row.schedule_id)
+          matchesField(row.schedule_id) ||
+          matchesField(row.action) ||
+          matchesField(row.module) ||
+          matchesField(row.role) ||
+          matchesField(row.details) ||
+          matchesField(row.affected_record_id) ||
+          matchesField(row.log_id)
         ) {
           return true;
         }
+
+        if (row.user && matchesField(row.user.name)) return true;
 
         if (row.vehicle) {
           if (
