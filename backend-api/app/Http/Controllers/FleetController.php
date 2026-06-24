@@ -12,6 +12,8 @@ use App\Models\VehicleIssueReport;
 use App\Models\VehicleLocation;
 use App\Models\VehicleMaintenanceRecord;
 use App\Models\VehicleMaintenanceSchedule;
+use App\Rules\NumberOnly;
+use App\Rules\TextOnly;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -971,10 +973,10 @@ class FleetController extends Controller
             'category_id' => ['required', 'exists:vehicle_categories,category_id'],
             'brand' => ['required', 'string', 'max:255'],
             'model' => ['required', 'string', 'max:255'],
-            'year_model' => ['required', 'integer', 'min:1900', 'max:' . now()->addYear()->year],
+            'year_model' => ['required', new NumberOnly, 'integer', 'min:1900', 'max:' . now()->addYear()->year],
             'capacity' => ['required', 'string', 'max:255'],
             'fuel_type' => ['nullable', 'string', 'max:255'],
-            'vehicle_color' => ['required', 'string', 'max:255'],
+            'vehicle_color' => ['required', 'string', 'max:255', new TextOnly],
             'current_location' => ['required', 'string', 'max:255'],
             'photo' => ['nullable', 'image', 'max:4096'],
             'remarks' => ['nullable', 'string'],
