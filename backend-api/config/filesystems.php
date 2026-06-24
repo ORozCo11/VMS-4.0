@@ -76,6 +76,23 @@ return [
             'visibility'              => 'public',
             'throw'                   => true,
             'report'                  => false,
+
+            /*
+             | SSL verification for the HTTPS calls to Supabase.
+             |
+             | Many local PHP installs (especially on Windows) ship without a
+             | cURL CA bundle, which makes every upload fail with
+             | "cURL error 60: unable to get local issuer certificate" and
+             | silently fall back to local storage. Pointing the AWS client at
+             | a CA bundle committed to the repo makes uploads work on every
+             | machine without editing php.ini.
+             |
+             | Set SUPABASE_CA_BUNDLE in .env to override (e.g. on a server
+             | that already has a system CA bundle, set it to `true`).
+             */
+            'http' => [
+                'verify' => env('SUPABASE_CA_BUNDLE', base_path('certs/cacert.pem')),
+            ],
         ],
 
     ],
