@@ -1,6 +1,8 @@
 import { BrowserRouter as Router, Routes, Route, Navigate, Link } from 'react-router-dom';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import Login from './views/Login';
+import Privacy from './views/Privacy';
+import Terms from './views/Terms';
 import Workspace from './views/Workspace';
 import './App.css';
 
@@ -22,6 +24,8 @@ function App() {
     <Router>
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/privacy" element={<Privacy />} />
+        <Route path="/terms" element={<Terms />} />
         <Route path="/unauthorized" element={<Unauthorized />} />
         <Route
           path="/admin/*"

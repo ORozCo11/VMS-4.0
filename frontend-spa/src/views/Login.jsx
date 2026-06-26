@@ -1,5 +1,5 @@
 import { useContext, useState } from 'react';
-import { Navigate, useNavigate } from 'react-router-dom';
+import { Link, Navigate, useNavigate } from 'react-router-dom';
 import api from '../api/axios';
 import vmsLogo from '../assets/vms-logo.png';
 import { AuthContext } from '../context/AuthContextObject';
@@ -159,9 +159,9 @@ function Login() {
         </form>
 
         <p className="auth-legal">
-          <a href="#" onClick={(e) => e.preventDefault()}>Privacy</a>
+          <Link to="/privacy">Privacy</Link>
           {' · '}
-          <a href="#" onClick={(e) => e.preventDefault()}>Terms</a>
+          <Link to="/terms">Terms</Link>
         </p>
       </section>
     </main>
