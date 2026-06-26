@@ -238,6 +238,12 @@ function Workspace() {
   const [filterStatus, setFilterStatus] = useState('');
   const [filterPriority, setFilterPriority] = useState('');
 
+  // Ticket Archives date/status filters
+  const [archiveDraft, setArchiveDraft] = useState({ start: '', end: '', status: '', quick: '' });
+  const [archiveStart, setArchiveStart] = useState('');
+  const [archiveEnd, setArchiveEnd] = useState('');
+  const [archiveStatusFilter, setArchiveStatusFilter] = useState('');
+
   // Condition Monitoring Filters
   const [condFilterStartDate, setCondFilterStartDate] = useState('');
   const [condFilterEndDate, setCondFilterEndDate] = useState('');
@@ -393,6 +399,10 @@ function Workspace() {
      setCondFilterStartDate('');
      setCondFilterEndDate('');
      setCondDraft({ category: '', status: '', start: '', end: '' });
+     setArchiveDraft({ start: '', end: '', status: '', quick: '' });
+     setArchiveStart('');
+     setArchiveEnd('');
+     setArchiveStatusFilter('');
      setLoading(true);
      loadModule(activeModule)
        .catch((error) => showError(error, setNotice))
@@ -602,6 +612,18 @@ function Workspace() {
       }
     }
 
+    if (activeModule === 'ticketArchives') {
+      if (archiveStart) {
+        result = result.filter((row) => row.archived_at && row.archived_at.substring(0, 10) >= archiveStart);
+      }
+      if (archiveEnd) {
+        result = result.filter((row) => row.archived_at && row.archived_at.substring(0, 10) <= archiveEnd);
+      }
+      if (archiveStatusFilter) {
+        result = result.filter((row) => row.final_status === archiveStatusFilter);
+      }
+    }
+
     if (searchQuery) {
       const query = searchQuery.toLowerCase().trim();
       result = result.filter((row) => {
@@ -663,7 +685,7 @@ function Workspace() {
     }
 
     return result;
-  }, [rawRows, searchQuery, filterCategory, filterCapacity, filterStatus, filterPriority, activeModule, condFilterStartDate, condFilterEndDate]);
+  }, [rawRows, searchQuery, filterCategory, filterCapacity, filterStatus, filterPriority, activeModule, condFilterStartDate, condFilterEndDate, archiveStart, archiveEnd, archiveStatusFilter]);
 
   // For the Vehicle Location module, every vehicle shown on the map should also
   // appear in the records list. We merge the saved location records (history)
@@ -1381,6 +1403,69 @@ function Workspace() {
 
     // Phase 5: Admin archive view
     if (activeModule === 'ticketArchives') {
+      const allArchiveRows = records.ticketArchives ?? [];
+
+      // Year → ticket count map, built from unfiltered data
+      const yearCounts = allArchiveRows.reduce((acc, r) => {
+        const yr = r.archived_at?.substring(0, 4);
+        if (yr) acc[yr] = (acc[yr] ?? 0) + 1;
+        return acc;
+      }, {});
+      const archiveYears = Object.keys(yearCounts).sort().reverse();
+
+      // Final status values present in the data
+      const archiveFinalStatuses = [...new Set(allArchiveRows.map((r) => r.final_status).filter(Boolean))];
+
+      // Which year is the current draft's From date pointing at (for year selector sync)
+      const selectedYear = archiveDraft.start ? archiveDraft.start.substring(0, 4) : '';
+
+      const applyQuickFilter = (key) => {
+        const today = new Date();
+        const pad = (n) => String(n).padStart(2, '0');
+        const fmt = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+        let start = '';
+        let end = '';
+        if (key === 'this_year') {
+          start = `${today.getFullYear()}-01-01`;
+          end = fmt(today);
+        } else if (key === 'last_year') {
+          const yr = today.getFullYear() - 1;
+          start = `${yr}-01-01`;
+          end = `${yr}-12-31`;
+        } else if (key === 'over_1yr') {
+          const d = new Date(today); d.setFullYear(d.getFullYear() - 1);
+          end = fmt(d);
+        } else if (key === 'over_3yr') {
+          const d = new Date(today); d.setFullYear(d.getFullYear() - 3);
+          end = fmt(d);
+        }
+        const next = { start, end, status: archiveDraft.status, quick: key };
+        setArchiveDraft(next);
+        setArchiveStart(next.start);
+        setArchiveEnd(next.end);
+      };
+
+      const applyYearFilter = (yr) => {
+        if (!yr) {
+          setArchiveDraft({ start: '', end: '', status: archiveDraft.status, quick: '' });
+          setArchiveStart('');
+          setArchiveEnd('');
+        } else {
+          const next = { start: `${yr}-01-01`, end: `${yr}-12-31`, status: archiveDraft.status, quick: '' };
+          setArchiveDraft(next);
+          setArchiveStart(next.start);
+          setArchiveEnd(next.end);
+        }
+      };
+
+      const isDraftDifferent =
+        archiveDraft.start !== archiveStart ||
+        archiveDraft.end !== archiveEnd ||
+        archiveDraft.status !== archiveStatusFilter;
+
+      const hasActiveFilter = archiveStart || archiveEnd || archiveStatusFilter ||
+        archiveDraft.start || archiveDraft.end || archiveDraft.status || archiveDraft.quick;
+
       const archiveColumnsWithAction = [
         ...ticketArchiveColumns,
         {
@@ -1402,16 +1487,145 @@ function Workspace() {
             >
               Reopen
             </button>
-          )
-        }
+          ),
+        },
       ];
 
       return (
         <ModulePanel description="Immutable audit trail of all completed and closed maintenance tickets (Phase 5 — History Logging & Archive Auditing).">
           <div className="module-action-bar">
-            <h3>Archived Tickets ({visibleRows.length})</h3>
-            <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search archives..." />
+            <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+              <h3>
+                Archived Tickets ({visibleRows.length}
+                {visibleRows.length !== allArchiveRows.length ? ` of ${allArchiveRows.length} total` : ''})
+              </h3>
+              <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search archives..." />
+            </div>
           </div>
+
+          {/* ── Archive Date Filter Bar ─────────────────────────────── */}
+          <div className="filter-bar-container" style={{ flexWrap: 'wrap', gap: '8px 12px', alignItems: 'center' }}>
+            <div className="filter-label"><span>DATE FILTER:</span></div>
+
+            {/* Quick relative filters — instant apply */}
+            {[
+              { key: 'this_year', label: 'This Year' },
+              { key: 'last_year', label: 'Last Year' },
+              { key: 'over_1yr', label: 'Older than 1 Yr' },
+              { key: 'over_3yr', label: 'Older than 3 Yrs' },
+            ].map(({ key, label }) => (
+              <button
+                key={key}
+                type="button"
+                className={archiveDraft.quick === key ? 'filter-apply-btn' : 'ghost-button'}
+                style={{ height: 32, padding: '0 10px', fontSize: '0.78rem' }}
+                onClick={() => applyQuickFilter(archiveDraft.quick === key ? '' : key)}
+              >
+                {label}
+              </button>
+            ))}
+
+            <div style={{ width: 1, height: 22, background: 'var(--border, #334155)', flexShrink: 0 }} />
+
+            {/* Year dropdown — only years that actually have archived tickets */}
+            <select
+              className="filter-select"
+              value={selectedYear}
+              onChange={(e) => applyYearFilter(e.target.value)}
+            >
+              <option value="">All Years</option>
+              {archiveYears.map((yr) => (
+                <option key={yr} value={yr}>
+                  {yr} — {yearCounts[yr]} {yearCounts[yr] === 1 ? 'ticket' : 'tickets'}
+                </option>
+              ))}
+            </select>
+
+            {/* Custom date range */}
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+              <span style={{ fontSize: '0.78rem', fontWeight: 600, opacity: 0.65 }}>From:</span>
+              <input
+                type="date"
+                className="filter-select"
+                style={{ minWidth: 'auto' }}
+                value={archiveDraft.start}
+                onChange={(e) => setArchiveDraft((d) => ({ ...d, start: e.target.value, quick: '' }))}
+              />
+            </div>
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+              <span style={{ fontSize: '0.78rem', fontWeight: 600, opacity: 0.65 }}>To:</span>
+              <input
+                type="date"
+                className="filter-select"
+                style={{ minWidth: 'auto' }}
+                value={archiveDraft.end}
+                onChange={(e) => setArchiveDraft((d) => ({ ...d, end: e.target.value, quick: '' }))}
+              />
+            </div>
+
+            {/* Final status filter */}
+            {archiveFinalStatuses.length > 0 && (
+              <select
+                className="filter-select"
+                value={archiveDraft.status}
+                onChange={(e) => setArchiveDraft((d) => ({ ...d, status: e.target.value }))}
+              >
+                <option value="">All Statuses</option>
+                {archiveFinalStatuses.map((s) => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+            )}
+
+            {/* Apply — only shown when draft differs from applied */}
+            <button
+              type="button"
+              className="filter-apply-btn"
+              disabled={!isDraftDifferent}
+              onClick={() => {
+                setArchiveStart(archiveDraft.start);
+                setArchiveEnd(archiveDraft.end);
+                setArchiveStatusFilter(archiveDraft.status);
+              }}
+            >
+              Apply
+            </button>
+
+            {/* Clear all */}
+            {hasActiveFilter && (
+              <button
+                type="button"
+                className="filter-clear-btn"
+                onClick={() => {
+                  setArchiveDraft({ start: '', end: '', status: '', quick: '' });
+                  setArchiveStart('');
+                  setArchiveEnd('');
+                  setArchiveStatusFilter('');
+                }}
+              >
+                Clear
+              </button>
+            )}
+
+            {/* Active range summary pill */}
+            {(archiveStart || archiveEnd) && (
+              <span style={{ fontSize: '0.75rem', opacity: 0.55, fontStyle: 'italic' }}>
+                {archiveStart && archiveEnd
+                  ? `${archiveStart} → ${archiveEnd}`
+                  : archiveStart
+                  ? `From ${archiveStart}`
+                  : `Up to ${archiveEnd}`}
+              </span>
+            )}
+          </div>
+
+          {/* No-result hint when filters are active but nothing matched */}
+          {visibleRows.length === 0 && allArchiveRows.length > 0 && (archiveStart || archiveEnd || archiveStatusFilter) && (
+            <p className="notice" style={{ margin: '8px 0', opacity: 0.7, fontSize: '0.85rem' }}>
+              No archived tickets match the selected filters. Only dates with actual archived tickets will return results — try adjusting the date range or clearing the filter.
+            </p>
+          )}
+
           <DataTable columns={archiveColumnsWithAction} rows={visibleRows} />
         </ModulePanel>
       );
