@@ -3,6 +3,7 @@ import { Navigate, useNavigate } from 'react-router-dom';
 import api from '../api/axios';
 import vmsLogo from '../assets/vms-logo.png';
 import { AuthContext } from '../context/AuthContextObject';
+import LineWaves from '../components/LineWaves';
 
 const roleRoutes = {
   Admin: '/admin',
@@ -79,6 +80,20 @@ function Login() {
 
   return (
     <main className="auth-page">
+      <LineWaves
+        speed={0.5}
+        innerLineCount={3}
+        outerLineCount={4}
+        warpIntensity={0.7}
+        rotation={1}
+        colorCycleSpeed={0.5}
+        brightness={0.1}
+        color1="#ff6600"
+        color2="#e9903a"
+        color3="#f3c08d"
+        mouseInfluence={1.4}
+        enableMouseInteraction={true}
+      />
       <section className="auth-card" aria-labelledby="login-title">
         <div className="auth-logo-header">
           <img className="auth-logo-image" src={vmsLogo} alt="Vehicle Management" />
@@ -142,6 +157,12 @@ function Login() {
             ) : 'Sign in'}
           </button>
         </form>
+
+        <p className="auth-legal">
+          <a href="#" onClick={(e) => e.preventDefault()}>Privacy</a>
+          {' · '}
+          <a href="#" onClick={(e) => e.preventDefault()}>Terms</a>
+        </p>
       </section>
     </main>
   );

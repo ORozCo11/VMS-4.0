@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import api from '../api/axios';
 import LocationDensityMap from '../components/LocationDensityMap';
 import Icon from '../components/Icon';
+import TextType from '../components/TextType';
 import vmsLogo from '../assets/vms-logo.png';
 import { AuthContext } from '../context/AuthContextObject';
 import { getActiveHubs, groupLocationRowsByHub } from '../data/paknaanLocationDensity';
@@ -1584,7 +1585,16 @@ function Dashboard({ data, hubs = null, user }) {
       <div className="dashboard-banner">
         <div className="dashboard-banner-welcome">
           <span className="dashboard-greeting-role">{greetingRole}</span>
-          <h2>{greeting}</h2>
+          <TextType
+            key={greeting}
+            as="h2"
+            text={[greeting]}
+            typingSpeed={150}
+            pauseDuration={1500}
+            loop={false}
+            showCursor={true}
+            cursorCharacter="|"
+          />
           <p>{dateStr || 'Today'}</p>
         </div>
         <div className="dashboard-banner-widgets">

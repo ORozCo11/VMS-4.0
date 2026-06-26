@@ -1,11 +1,14 @@
 /* AUTH */
 .auth-page {
+  position: relative;
   min-height: 100vh;
   display: grid;
   place-items: center;
   background: linear-gradient(135deg, #1e3a5f 0%, #0f172a 100%);
   padding: 40px 20px;
+  overflow: hidden;
 }
+.auth-page .auth-card { position: relative; z-index: 1; }
 .auth-card {
   width: min(100%, 440px);
   background: #ffffff;
@@ -35,6 +38,80 @@
 }
 .auth-card h1 { font-size: 1.7rem; font-weight: 800; color: #0f172a; margin: 6px 0 4px; }
 .auth-subtitle { font-size: 0.875rem; color: #64748b; margin-top: 6px; }
+.auth-legal {
+  margin-top: 20px;
+  text-align: center;
+  font-size: 0.75rem;
+  color: #94a3b8;
+}
+.auth-legal a { color: #94a3b8; text-decoration: underline; }
+.auth-legal a:hover { color: #64748b; }
+
+/* LINE WAVES BACKGROUND */
+.auth-page .line-waves-container {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+}
+.auth-page .line-waves-container canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+/* AURORA BACKGROUND */
+.aurora-root {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  z-index: 0;
+}
+.aurora-blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: var(--aurora-blend, 0.5);
+  will-change: transform;
+}
+.aurora-blob-0 {
+  width: 70%;
+  height: 70%;
+  top: -20%;
+  left: -10%;
+  animation: aurora-drift-0 calc(12s / var(--aurora-amplitude, 1)) ease-in-out infinite alternate;
+}
+.aurora-blob-1 {
+  width: 60%;
+  height: 60%;
+  top: 20%;
+  right: -15%;
+  animation: aurora-drift-1 calc(15s / var(--aurora-amplitude, 1)) ease-in-out infinite alternate;
+}
+.aurora-blob-2 {
+  width: 55%;
+  height: 55%;
+  bottom: -20%;
+  left: 20%;
+  animation: aurora-drift-2 calc(18s / var(--aurora-amplitude, 1)) ease-in-out infinite alternate;
+}
+.aurora-overlay {
+  position: absolute;
+  inset: 0;
+  backdrop-filter: blur(40px);
+  -webkit-backdrop-filter: blur(40px);
+}
+@keyframes aurora-drift-0 {
+  from { transform: translate(0, 0) scale(1); }
+  to   { transform: translate(8%, 12%) scale(1.12); }
+}
+@keyframes aurora-drift-1 {
+  from { transform: translate(0, 0) scale(1.05); }
+  to   { transform: translate(-10%, 8%) scale(0.92); }
+}
+@keyframes aurora-drift-2 {
+  from { transform: translate(0, 0) scale(0.95); }
+  to   { transform: translate(6%, -10%) scale(1.1); }
+}
+
 .demo-account-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -2447,6 +2524,8 @@ table button,
 }
 
 .auth-subtitle,
+.auth-legal,
+.auth-legal a,
 .report-heading p,
 .module-description,
 .muted,
@@ -2532,11 +2611,12 @@ table button,
 
 .dashboard-greeting-role {
   color: var(--primary-strong);
-  display: inline-flex;
+  display: block;
   font-size: 0.72rem;
   font-weight: 900;
   letter-spacing: 0;
   text-transform: uppercase;
+  margin-bottom: 4px;
 }
 
 .dashboard-banner-weather {
