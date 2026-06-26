@@ -1,8 +1,23 @@
 import { Link } from 'react-router-dom';
+import LineWaves from '../components/LineWaves';
 
 export default function Privacy() {
   return (
     <main className="auth-page" style={{ alignItems: 'flex-start', padding: '2rem 1rem' }}>
+      <LineWaves
+        speed={0.5}
+        innerLineCount={3}
+        outerLineCount={4}
+        warpIntensity={0.7}
+        rotation={1}
+        colorCycleSpeed={0.5}
+        brightness={0.1}
+        color1="#ff6600"
+        color2="#e9903a"
+        color3="#f3c08d"
+        mouseInfluence={1.4}
+        enableMouseInteraction={true}
+      />
       <section className="auth-card" style={{ maxWidth: 680, width: '100%', textAlign: 'left', gap: '1rem' }}>
 
         <p className="eyebrow">Barangay VMS</p>
