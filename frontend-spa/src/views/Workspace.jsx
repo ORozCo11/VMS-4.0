@@ -1439,7 +1439,7 @@ function Workspace() {
           const d = new Date(today); d.setFullYear(d.getFullYear() - 3);
           end = fmt(d);
         }
-        const next = { start, end, status: archiveDraft.status, quick: key };
+        const next = { start, end, status: archiveDraft.status, quick: key || '' };
         setArchiveDraft(next);
         setArchiveStart(next.start);
         setArchiveEnd(next.end);
@@ -1507,23 +1507,18 @@ function Workspace() {
           <div className="filter-bar-container" style={{ flexWrap: 'wrap', gap: '8px 12px', alignItems: 'center' }}>
             <div className="filter-label"><span>DATE FILTER:</span></div>
 
-            {/* Quick relative filters — instant apply */}
-            {[
-              { key: 'this_year', label: 'This Year' },
-              { key: 'last_year', label: 'Last Year' },
-              { key: 'over_1yr', label: 'Older than 1 Yr' },
-              { key: 'over_3yr', label: 'Older than 3 Yrs' },
-            ].map(({ key, label }) => (
-              <button
-                key={key}
-                type="button"
-                className={archiveDraft.quick === key ? 'filter-apply-btn' : 'ghost-button'}
-                style={{ height: 32, padding: '0 10px', fontSize: '0.78rem' }}
-                onClick={() => applyQuickFilter(archiveDraft.quick === key ? '' : key)}
-              >
-                {label}
-              </button>
-            ))}
+            {/* Quick relative filters — dropdown */}
+            <select
+              className="filter-select"
+              value={archiveDraft.quick}
+              onChange={(e) => applyQuickFilter(e.target.value)}
+            >
+              <option value="">Quick Filter</option>
+              <option value="this_year">This Year</option>
+              <option value="last_year">Last Year</option>
+              <option value="over_1yr">Older than 1 Year</option>
+              <option value="over_3yr">Older than 3 Years</option>
+            </select>
 
             <div style={{ width: 1, height: 22, background: 'var(--border, #334155)', flexShrink: 0 }} />
 
