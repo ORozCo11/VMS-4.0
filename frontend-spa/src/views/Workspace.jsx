@@ -529,8 +529,8 @@ function Workspace() {
     }
   };
 
-  const handleLogout = async () => {
-    await logout();
+  const handleLogout = () => {
+    logout();
     navigate('/login', { replace: true });
   };
 
@@ -1314,25 +1314,19 @@ function Workspace() {
 
     if (activeModule === 'reports') {
       return (
-        <>
-          <ModulePanel description="Generate filtered administrative summaries for printing or export.">
-            <div className="module-action-bar">
-              <h3>Reports</h3>
-              <button className="primary-button" type="button" onClick={() => setEditTarget({})}>Generate Report</button>
-            </div>
-            <ReportPreview report={report} />
-          </ModulePanel>
-          <FormModal open={!!editTarget} title="Generate Report" onClose={() => setEditTarget(null)}>
-            <SmartForm
-              fields={reportFields(lookups)}
-              key="report-generator"
-              onCancel={() => setEditTarget(null)}
-              onSubmit={async (payload) => { await submitModuleForm(payload); setEditTarget(null); }}
-              submitLabel="Generate Report"
-              title=""
-            />
-          </FormModal>
-        </>
+        <ModulePanel description="Generate filtered administrative summaries for printing or export.">
+          <div className="module-action-bar">
+            <h3>Reports</h3>
+          </div>
+          <SmartForm
+            fields={reportFields(lookups)}
+            key="report-generator"
+            onSubmit={submitModuleForm}
+            submitLabel="Generate Report"
+            title=""
+          />
+          {report && <ReportPreview report={report} />}
+        </ModulePanel>
       );
     }
 
@@ -2202,9 +2196,9 @@ function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, onSubmit, subm
               value={values[field.name] ?? ''}
             >
               <option value="">Select</option>
-              {field.options.map((option) => (
-                <option key={option.value ?? option} value={option.value ?? option}>
-                  {option.label ?? option}
+              {field.options.map((option, i) => (
+                <option key={option?.value != null ? option.value : `opt-${i}`} value={option?.value ?? option ?? ''}>
+                  {option?.label ?? option}
                 </option>
               ))}
             </select>
@@ -2948,16 +2942,18 @@ function formatDate(value) {
 }
 
 function rowKey(row, index) {
-  return row.vehicle_id
-    ?? row.category_id
-    ?? row.location_record_id
-    ?? row.condition_check_id
-    ?? row.issue_report_id
-    ?? row.maintenance_id
-    ?? row.schedule_id
-    ?? row.history_id
-    ?? row.log_id
-    ?? index;
+  // Use the most-specific ID first so tickets sharing a vehicle never collide.
+  if (row.ticket_id != null)          return `t-${row.ticket_id}`;
+  if (row.log_id != null)             return `l-${row.log_id}`;
+  if (row.history_id != null)         return `h-${row.history_id}`;
+  if (row.schedule_id != null)        return `sc-${row.schedule_id}`;
+  if (row.maintenance_id != null)     return `m-${row.maintenance_id}`;
+  if (row.issue_report_id != null)    return `ir-${row.issue_report_id}`;
+  if (row.condition_check_id != null) return `cc-${row.condition_check_id}`;
+  if (row.location_record_id != null) return `loc-${row.location_record_id}`;
+  if (row.category_id != null)        return `cat-${row.category_id}`;
+  if (row.vehicle_id != null)         return `v-${row.vehicle_id}`;
+  return index;
 }
 
 function moduleLabel(modules, activeModule) {

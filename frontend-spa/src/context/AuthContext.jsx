@@ -7,15 +7,13 @@ export const AuthProvider = ({ children }) => {
   const [token, setToken] = useState(localStorage.getItem('token') || null);
   const [loading, setLoading] = useState(true);
 
-  const logout = async () => {
-    try {
-      await api.post('/logout'); 
-    } catch {
-      // Proceed even if backend token state is already invalid
-    }
+  const logout = () => {
+    // Clear local state immediately so the UI reacts right away,
+    // then invalidate the server-side token in the background.
     localStorage.removeItem('token');
     setToken(null);
     setUser(null);
+    api.post('/logout').catch(() => {});
   };
 
   useEffect(() => {
