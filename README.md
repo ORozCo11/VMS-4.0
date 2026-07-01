@@ -25,8 +25,20 @@ composer install
 cp .env.example .env
 php artisan key:generate
 php artisan migrate --seed
-php artisan serve
+php artisan serve --host=127.0.0.1 --port=8001
 ```
+
+> **Note:** The SQLite database (`database/database.sqlite`) is intentionally **not** committed to Git. Accounts are recreated on every machine by the seeder — do **not** create users by hand. If you cloned the repo and your logins differ, run `php artisan migrate:fresh --seed` to rebuild the database with the standard accounts.
+>
+> The frontend expects the API on **port 8001**, so start the backend with `--port=8001` (plain `php artisan serve` defaults to 8000 and the login page will show *"Unable to sign in. Please check your connection."*).
+
+### Seeded login accounts
+
+| Role | Email | Password |
+|------|-------|----------|
+| Admin | `admin@barangay.gov` | `admin123` |
+| Custodian | `custodian@barangay.gov` | `custodian123` |
+| Maintenance | `maintenance@barangay.gov` | `maintenance123` |
 
 ### Frontend (React + Vite)
 
