@@ -10,6 +10,7 @@ class VehicleCategory extends Model
 
     protected $fillable = [
         'category_name',
+        'domain',
         'description',
     ];
 

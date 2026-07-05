@@ -2,10 +2,6 @@
 // Coordinates are Leaflet LatLng tuples: [latitude, longitude].
 export const PAKNAAN_CENTER = { lat: 10.3462, lng: 123.9603 };
 
-// Key for localStorage to persist dynamically created hubs
-export const HUBS_STORAGE_KEY = 'paknaan_vehicle_hubs';
-export const HIDDEN_HUBS_STORAGE_KEY = 'paknaan_hidden_vehicle_hub_ids';
-
 export const PAKNAAN_BOUNDS = [
   [10.3398, 123.9469],
   [10.3524, 123.9755],
@@ -203,87 +199,9 @@ export const PAKNAAN_POLYGON = [
   [10.3408477, 123.9744446],
 ];
 
-// Source: VOOMS SYSTEM/vomms_fixed/server.ts fixedReturnLocations.
-// The source stores names and coordinates; no separate address field exists.
-export const PAKNAAN_HUBS = [
-  {
-    id: 'twinbee-hub',
-    name: 'Twinbee Hub',
-    address: 'Twinbee Hub',
-    lat: 10.345909307605107,
-    lng: 123.95748834311513,
-    label: 'TB',
-    matchNames: [
-      'twinbee hub',
-      'twinbee',
-      'palanan central hub',
-      'palanan central',
-      'palanan',
-    ],
-  },
-  {
-    id: 'paknaan-brgy-hall',
-    name: 'Paknaan Brgy Hall',
-    address: 'Paknaan Brgy Hall',
-    lat: 10.34631777531932,
-    lng: 123.96022810316107,
-    label: 'BH',
-    matchNames: [
-      'paknaan brgy hall',
-      'paknaan barangay hall',
-      'barangay hall hub',
-      'brgy hall hub',
-      'brgy hall',
-      'barangay hall',
-    ],
-  },
-  {
-    id: 'paknaan-gymnasium',
-    name: 'Paknaan Gymnasium',
-    address: 'Paknaan Gymnasium',
-    lat: 10.346474742138703,
-    lng: 123.95854066966143,
-    label: 'GY',
-    matchNames: [
-      'paknaan gymnasium',
-      'paknaan gymnasium hub',
-      'gymnasium hub',
-      'gymnasium',
-      'san isidro depot',
-      'san isidro',
-      'depot',
-    ],
-  },
-];
-
-function readStoredArray(storageKey) {
-  if (typeof localStorage === 'undefined') {
-    return [];
-  }
-
-  try {
-    const parsed = JSON.parse(localStorage.getItem(storageKey) || '[]');
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-export function readCustomHubs() {
-  return readStoredArray(HUBS_STORAGE_KEY);
-}
-
-export function readHiddenHubIds() {
-  return readStoredArray(HIDDEN_HUBS_STORAGE_KEY);
-}
-
-export function getActiveHubs(customHubs = null, hiddenHubIds = null) {
-  const hiddenIds = new Set(hiddenHubIds ?? readHiddenHubIds());
-  return [
-    ...PAKNAAN_HUBS.filter((hub) => !hiddenIds.has(hub.id)),
-    ...(customHubs ?? readCustomHubs()),
-  ];
-}
+// The hub list itself (default + custom hubs) is now owned by the Laravel
+// backend — see App\Models\VehicleHub / GET /hubs. Components fetch it from
+// the API and pass it into the helpers below rather than reading it here.
 
 // Label shown on the map/dashboard for any vehicle whose location does not
 // match a known hub (kept identical to the map's FALLBACK_HUB name).
@@ -295,14 +213,13 @@ function normalizeLocationName(value = '') {
 
 // Resolves a raw vehicle current_location string to the canonical hub name
 // used on the map. Returns FALLBACK_HUB_NAME when nothing matches.
-// Includes any custom hubs the user pinned (passed in or read from storage).
-export function resolveHubName(location, activeHubs = null) {
+export function resolveHubName(location, activeHubs = []) {
   const normalized = normalizeLocationName(location);
   if (!normalized) {
     return FALLBACK_HUB_NAME;
   }
 
-  const hubs = activeHubs ?? getActiveHubs();
+  const hubs = activeHubs ?? [];
 
   // Exact alias match first.
   const exact = hubs.find((hub) => (

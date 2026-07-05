@@ -1,0 +1,87 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Models\VehicleHub;
+use Illuminate\Http\Request;
+use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
+
+class HubController extends Controller
+{
+    /**
+     * GET /hubs — every workspace role needs the hub list to plot/select vehicle locations.
+     */
+    public function index()
+    {
+        return response()->json(
+            VehicleHub::orderByDesc('is_default')->orderBy('name')->get()
+        );
+    }
+
+    /**
+     * POST /hubs — Admin pins a new custom hub on the fleet map.
+     */
+    public function store(Request $request)
+    {
+        $this->requireRole($request, ['Admin']);
+
+        $data = $request->validate([
+            'name' => ['required', 'string', 'max:255', Rule::unique('vehicle_hubs', 'name')],
+            'lat' => ['required', 'numeric', 'between:-90,90'],
+            'lng' => ['required', 'numeric', 'between:-180,180'],
+            'label' => ['nullable', 'string', 'max:8'],
+        ]);
+
+        $hub = VehicleHub::create([
+            'hub_key' => Str::slug($data['name']).'-'.Str::random(6),
+            'name' => $data['name'],
+            'label' => $data['label'] ?? Str::upper(Str::substr($data['name'], 0, 2)),
+            'lat' => $data['lat'],
+            'lng' => $data['lng'],
+            'match_names' => [Str::lower($data['name'])],
+            'is_default' => false,
+            'created_by' => $request->user()->id,
+        ]);
+
+        return response()->json($hub, 201);
+    }
+
+    /**
+     * PUT /hubs/{hub} — Admin renames/relocates a hub, or hides/shows a default hub.
+     */
+    public function update(Request $request, VehicleHub $hub)
+    {
+        $this->requireRole($request, ['Admin']);
+
+        $data = $request->validate([
+            'name' => ['sometimes', 'string', 'max:255', Rule::unique('vehicle_hubs', 'name')->ignore($hub->hub_id, 'hub_id')],
+            'lat' => ['sometimes', 'numeric', 'between:-90,90'],
+            'lng' => ['sometimes', 'numeric', 'between:-180,180'],
+            'is_hidden' => ['sometimes', 'boolean'],
+        ]);
+
+        $hub->update($data);
+
+        return $hub->fresh();
+    }
+
+    /**
+     * DELETE /hubs/{hub} — Admin removes a custom hub. Default hubs can only be hidden, not deleted.
+     */
+    public function destroy(Request $request, VehicleHub $hub)
+    {
+        $this->requireRole($request, ['Admin']);
+
+        abort_if($hub->is_default, 422, 'Default hubs cannot be deleted. Hide it instead.');
+
+        $hub->delete();
+
+        return response()->json(['message' => 'Hub removed.']);
+    }
+
+    private function requireRole(Request $request, array $roles): void
+    {
+        abort_unless(in_array($request->user()->role, $roles, true), 403, 'Your account role cannot perform this action.');
+    }
+}

@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\User;
 use App\Models\VehicleCategory;
+use App\Models\VehicleHub;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
 use PHPUnit\Framework\Attributes\Test;
@@ -39,6 +40,17 @@ class VehicleValidationTest extends TestCase
         ]);
     }
 
+    private function hub(): VehicleHub
+    {
+        return VehicleHub::create([
+            'hub_key' => 'test-depot',
+            'name' => 'Main Depot',
+            'label' => 'MD',
+            'lat' => 10.3462,
+            'lng' => 123.9603,
+        ]);
+    }
+
     /**
      * A complete, well-formed payload that should always pass validation.
      * Individual tests override single fields to test one rule at a time.
@@ -53,8 +65,9 @@ class VehicleValidationTest extends TestCase
             'model' => 'Hilux',
             'year_model' => 2022,
             'capacity' => '1000kg',
+            'fuel_type' => 'Diesel',
             'vehicle_color' => 'White',
-            'current_location' => 'Main Depot',
+            'current_location' => $this->hub()->name,
         ], $overrides);
     }
 
@@ -111,5 +124,67 @@ class VehicleValidationTest extends TestCase
         $response->assertStatus(422);
         $response->assertJsonValidationErrors('year_model');
         $this->assertDatabaseCount('vehicles', 0);
+    }
+
+    #[Test]
+    public function it_requires_fuel_type_for_a_land_vehicle(): void
+    {
+        $this->actingAsAdmin();
+
+        $payload = $this->validPayload();
+        unset($payload['fuel_type']);
+
+        $response = $this->postJson('/api/vehicles', $payload);
+
+        $response->assertStatus(422);
+        $response->assertJsonValidationErrors('fuel_type');
+    }
+
+    #[Test]
+    public function it_requires_hull_material_and_engine_type_for_a_water_vehicle(): void
+    {
+        $this->actingAsAdmin();
+
+        $waterCategory = VehicleCategory::create([
+            'category_name' => 'Rescue Boat',
+            'domain' => 'Water',
+            'description' => 'For testing',
+        ]);
+
+        $payload = $this->validPayload(['category_id' => $waterCategory->category_id]);
+        unset($payload['fuel_type']);
+
+        $response = $this->postJson('/api/vehicles', $payload);
+
+        $response->assertStatus(422);
+        $response->assertJsonValidationErrors(['hull_material', 'engine_type']);
+    }
+
+    #[Test]
+    public function it_creates_a_water_vehicle_with_hull_and_engine_details(): void
+    {
+        $this->actingAsAdmin();
+
+        $waterCategory = VehicleCategory::create([
+            'category_name' => 'Rescue Boat',
+            'domain' => 'Water',
+            'description' => 'For testing',
+        ]);
+
+        $payload = $this->validPayload([
+            'category_id' => $waterCategory->category_id,
+            'hull_material' => 'Fiberglass',
+            'engine_type' => 'Outboard 40HP',
+        ]);
+        unset($payload['fuel_type']);
+
+        $response = $this->postJson('/api/vehicles', $payload);
+
+        $response->assertCreated();
+        $this->assertDatabaseHas('vehicles', [
+            'plate_number' => 'ABC-1234',
+            'hull_material' => 'Fiberglass',
+            'engine_type' => 'Outboard 40HP',
+        ]);
     }
 }

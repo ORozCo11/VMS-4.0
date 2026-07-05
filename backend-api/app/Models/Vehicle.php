@@ -17,6 +17,8 @@ class Vehicle extends Model
         'year_model',
         'capacity',
         'fuel_type',
+        'hull_material',
+        'engine_type',
         'vehicle_color',
         'current_location',
         'photo_url',

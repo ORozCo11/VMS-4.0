@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Poppins:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap');
 
 /* ============================================
    BARANGAY VMS - Base Styles & Reset
@@ -20,7 +20,7 @@ html, body, #root {
 }
 
 body {
-  font-family: 'Inter', "Trebuchet MS", Helvetica, sans-serif;
+  font-family: 'Poppins', 'Inter', "Trebuchet MS", Helvetica, sans-serif;
   font-size: 1rem;
   line-height: 1.6;
   color: #ede7dc;
@@ -40,7 +40,7 @@ a {
 }
 
 h1, h2, h3, h4, h5, h6 {
-  font-family: 'Inter', "Trebuchet MS", Helvetica, sans-serif;
+  font-family: 'Poppins', 'Inter', "Trebuchet MS", Helvetica, sans-serif;
   font-weight: 700;
   line-height: 1.2;
   letter-spacing: 0;
@@ -58,6 +58,16 @@ img {
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #2b2d33; border-radius: 99px; }
-::-webkit-scrollbar-thumb:hover { background: #ff7a1a; }
+::-webkit-scrollbar-thumb:hover { background: #2563eb; }
 
-::selection { background: rgba(255, 122, 26, 0.3); color: #fff8ef; }
+::selection { background: rgba(37, 99, 235, 0.3); color: #fff8ef; }
+
+/* Sidebar scrollbar reads as pure black against the navy chrome by default; make it gray */
+.sidebar::-webkit-scrollbar-thumb,
+.module-nav::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+}
+.sidebar::-webkit-scrollbar-thumb:hover,
+.module-nav::-webkit-scrollbar-thumb:hover {
+  background: #cbd5e1;
+}

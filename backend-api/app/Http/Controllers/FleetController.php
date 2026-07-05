@@ -8,6 +8,7 @@ use App\Models\Vehicle;
 use App\Models\VehicleCategory;
 use App\Models\VehicleConditionCheck;
 use App\Models\VehicleHistory;
+use App\Models\VehicleHub;
 use App\Models\VehicleIssueReport;
 use App\Models\VehicleLocation;
 use App\Models\VehicleMaintenanceRecord;
@@ -184,6 +185,7 @@ class FleetController extends Controller
 
         $data = $request->validate([
             'category_name' => ['required', 'string', 'max:255', 'unique:vehicle_categories,category_name'],
+            'domain' => ['required', 'in:Land,Water'],
             'description' => ['nullable', 'string'],
         ]);
 
@@ -204,6 +206,7 @@ class FleetController extends Controller
                 'max:255',
                 Rule::unique('vehicle_categories', 'category_name')->ignore($category->category_id, 'category_id'),
             ],
+            'domain' => ['required', 'in:Land,Water'],
             'description' => ['nullable', 'string'],
         ]);
 
@@ -327,7 +330,7 @@ class FleetController extends Controller
 
         $data = $request->validate([
             'vehicle_id' => ['required', 'exists:vehicles,vehicle_id'],
-            'current_location' => ['required', 'string', 'max:255'],
+            'current_location' => ['required', 'string', 'max:255', Rule::in(VehicleHub::pluck('name'))],
             'address_area' => ['nullable', 'string', 'max:255'],
             'remarks' => ['nullable', 'string'],
         ]);
@@ -681,6 +684,14 @@ class FleetController extends Controller
             $data['verified_at'] = null;
         }
 
+        if (($data['progress_status'] ?? null) === 'Completed') {
+            abort_unless(
+                $request->user()->role === 'Admin' && $record->verification_result === 'Passed',
+                422,
+                'A maintenance record can only be completed by an Admin after Custodian verification has passed. Use the verify/confirm workflow instead.'
+            );
+        }
+
         $record->update($data);
 
         if ($record->issue_report_id) {
@@ -698,6 +709,12 @@ class FleetController extends Controller
     public function verifyMaintenance(Request $request, VehicleMaintenanceRecord $record)
     {
         $this->requireRole($request, ['Custodian']);
+
+        abort_unless(
+            $record->progress_status === 'For Verification',
+            422,
+            'This maintenance record is not awaiting verification.'
+        );
 
         $data = $request->validate([
             'verification_result' => ['required', Rule::in(['Passed', 'Failed'])],
@@ -737,6 +754,12 @@ class FleetController extends Controller
     public function confirmMaintenance(Request $request, VehicleMaintenanceRecord $record)
     {
         $this->requireRole($request, ['Admin']);
+
+        abort_unless(
+            $record->progress_status === 'For Verification' && $record->verification_result === 'Passed',
+            422,
+            'This maintenance record has not passed Custodian verification yet.'
+        );
 
         $data = $request->validate([
             'confirmed' => ['required', 'boolean'],
@@ -962,6 +985,8 @@ class FleetController extends Controller
 
     private function validateVehicle(Request $request, ?Vehicle $vehicle = null): array
     {
+        $domain = VehicleCategory::find($request->input('category_id'))?->domain ?? 'Land';
+
         return $request->validate([
             'vehicle_name' => ['required', 'string', 'max:255'],
             'plate_number' => [
@@ -975,9 +1000,11 @@ class FleetController extends Controller
             'model' => ['required', 'string', 'max:255'],
             'year_model' => ['required', new NumberOnly, 'integer', 'min:1900', 'max:' . now()->addYear()->year],
             'capacity' => ['required', 'string', 'max:255'],
-            'fuel_type' => ['nullable', 'string', 'max:255'],
+            'fuel_type' => [$domain === 'Land' ? 'required' : 'nullable', 'string', 'max:255'],
+            'hull_material' => [$domain === 'Water' ? 'required' : 'nullable', 'string', 'max:255'],
+            'engine_type' => [$domain === 'Water' ? 'required' : 'nullable', 'string', 'max:255'],
             'vehicle_color' => ['required', 'string', 'max:255', new TextOnly],
-            'current_location' => ['required', 'string', 'max:255'],
+            'current_location' => ['required', 'string', 'max:255', Rule::in(VehicleHub::pluck('name'))],
             'photo' => ['nullable', 'image', 'max:4096'],
             'remarks' => ['nullable', 'string'],
         ]);

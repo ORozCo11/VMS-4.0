@@ -4,6 +4,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\FleetController;
+use App\Http\Controllers\HubController;
 use App\Http\Controllers\TicketController;
 use App\Http\Controllers\NotificationController;
 
@@ -47,6 +48,11 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::get('/locations', [FleetController::class, 'locations']);
     Route::post('/locations', [FleetController::class, 'storeLocation']);
+
+    Route::get('/hubs', [HubController::class, 'index']);
+    Route::post('/hubs', [HubController::class, 'store']);
+    Route::put('/hubs/{hub}', [HubController::class, 'update']);
+    Route::delete('/hubs/{hub}', [HubController::class, 'destroy']);
 
     Route::get('/conditions', [FleetController::class, 'conditions']);
     Route::post('/conditions', [FleetController::class, 'storeCondition']);

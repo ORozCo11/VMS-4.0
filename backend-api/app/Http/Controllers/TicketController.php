@@ -747,6 +747,12 @@ class TicketController extends Controller
     {
         $this->requireRole($request, ['Admin']);
 
+        abort_unless(
+            ! in_array($ticket->status, ['Done', 'Cancelled'], true),
+            422,
+            'This ticket is already closed and cannot be cancelled.'
+        );
+
         $data = $request->validate([
             'confirmation_notes' => ['nullable', 'string'],
         ]);

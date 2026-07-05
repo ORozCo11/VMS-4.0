@@ -1,13 +1,13 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState, createContext } from 'react';
 import { createPortal } from 'react-dom';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import api from '../api/axios';
 import LocationDensityMap from '../components/LocationDensityMap';
 import Icon from '../components/Icon';
 import TextType from '../components/TextType';
 import vmsLogo from '../assets/vms-logo.png';
 import { AuthContext } from '../context/AuthContextObject';
-import { getActiveHubs, groupLocationRowsByHub } from '../data/paknaanLocationDensity';
+import { groupLocationRowsByHub } from '../data/paknaanLocationDensity';
 
 const FormNoticeContext = createContext(null);
 
@@ -59,16 +59,6 @@ const modulesByRole = {
     ['maintenance', 'Maintenance Records'],
   ],
 };
-
-const reportTypes = [
-  'Vehicle Inventory Report',
-  'Vehicle Type Report',
-  'Vehicle Location Report',
-  'Vehicle Issue Report',
-  'Vehicle Maintenance Report',
-  'Vehicle Maintenance Schedule Report',
-  'Vehicle History Report',
-];
 
 const moduleEndpoints = {
   vehicles: '/vehicles',
@@ -219,6 +209,9 @@ function Workspace() {
   const { user, logout } = useContext(AuthContext);
   const modules = useMemo(() => modulesByRole[user.role] ?? [], [user.role]);
   const [activeModule, setActiveModule] = useState(modules[0]?.[0] ?? 'dashboard');
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(
+    () => localStorage.getItem('vms_sidebar_collapsed') === '1'
+  );
   const [lookups, setLookups] = useState(emptyLookups);
   const [ticketLookups, setTicketLookups] = useState(emptyTicketLookups);
   const [records, setRecords] = useState({});
@@ -228,6 +221,8 @@ function Workspace() {
   const [notice, setNotice] = useState(null);
   const [loading, setLoading] = useState(false);
   const [ticketDetailTarget, setTicketDetailTarget] = useState(null);
+  const [userInfoTarget, setUserInfoTarget] = useState(null);
+  const [vehicleDetailTarget, setVehicleDetailTarget] = useState(null);
   const [confirmDialog, setConfirmDialog] = useState(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [notifications, setNotifications] = useState([]);
@@ -250,11 +245,11 @@ function Workspace() {
   // Draft for the condition filter bar — applied only on "Filter" click.
   const [condDraft, setCondDraft] = useState({ category: '', status: '', start: '', end: '' });
   const [prefilledTicketData, setPrefilledTicketData] = useState(null);
-  const [allHubs, setAllHubs] = useState(() => getActiveHubs());
+  const [allHubs, setAllHubs] = useState([]);
   const [locationsTab, setLocationsTab] = useState('map');
   const [selectedMapVehicleId, setSelectedMapVehicleId] = useState(null);
   const [theme, setTheme] = useState(() => {
-    try { return localStorage.getItem('theme') || 'dark'; } catch { return 'dark'; }
+    try { return localStorage.getItem('theme') || 'light'; } catch { return 'light'; }
   });
   const notificationsRef = useRef(null);
   const hasVehicles = (lookups.vehicles ?? []).length > 0;
@@ -298,6 +293,20 @@ function Workspace() {
   const loadLookups = useCallback(async () => {
     const response = await api.get('/lookups');
     setLookups(response.data);
+  }, []);
+
+  const loadHubs = useCallback(async () => {
+    const response = await api.get('/hubs');
+    setAllHubs(
+      response.data
+        .filter((hub) => !hub.is_hidden)
+        .map((hub) => ({
+          ...hub,
+          matchNames: Array.isArray(hub.match_names) && hub.match_names.length
+            ? hub.match_names
+            : [hub.name.toLowerCase()],
+        }))
+    );
   }, []);
 
   const loadTicketLookups = useCallback(async () => {
@@ -363,7 +372,8 @@ function Workspace() {
   useEffect(() => {
     loadLookups().catch((error) => showError(error, setNotice));
     loadTicketLookups().catch(() => {});
-  }, [loadLookups, loadTicketLookups]);
+    loadHubs().catch(() => {});
+  }, [loadLookups, loadTicketLookups, loadHubs]);
 
   useEffect(() => {
     loadNotifications().catch(() => {});
@@ -413,6 +423,7 @@ function Workspace() {
     await Promise.all([
       loadLookups(),
       loadTicketLookups(),
+      loadHubs(),
       loadModule(activeModule),
       loadModule('dashboard'),
       loadNotifications(),
@@ -734,15 +745,22 @@ function Workspace() {
 
   const unreadCount = notifications.filter((n) => !n.read_at).length;
 
+  const toggleSidebar = () => {
+    setIsSidebarCollapsed((prev) => {
+      const next = !prev;
+      localStorage.setItem('vms_sidebar_collapsed', next ? '1' : '0');
+      return next;
+    });
+  };
+
   return (
     <FormNoticeContext.Provider value={notice}>
-      <main className="workspace">
-        <aside className="sidebar">
+      <main className={`workspace${isSidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
+        <aside className={`sidebar${isSidebarCollapsed ? ' collapsed' : ''}`}>
           <div className="sidebar-brand">
             <img className="sidebar-logo" src={vmsLogo} alt="Vehicle Management" />
             <div>
               <p className="eyebrow">Barangay VMS</p>
-              <h1>{portalTitle(user.role)}</h1>
             </div>
           </div>
 
@@ -752,6 +770,7 @@ function Workspace() {
                 className={key === activeModule ? 'active' : ''}
                 key={key}
                 onClick={() => setActiveModule(key)}
+                title={isSidebarCollapsed ? label : undefined}
                 type="button"
               >
                 {moduleIcons[key]}
@@ -766,8 +785,19 @@ function Workspace() {
         <section className="content-area">
           <header className="topbar">
             <div className="topbar-left">
-              <span className="breadcrumb-path">Workspace / {user.role}</span>
-              <h2>{moduleLabel(modules, activeModule)}</h2>
+              <button
+                aria-label={isSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                className="icon-btn sidebar-toggle-btn"
+                onClick={toggleSidebar}
+                title={isSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                type="button"
+              >
+                <Icon name="menu" size={18} />
+              </button>
+              <div>
+                <span className="breadcrumb-path">Workspace / {user.role}</span>
+                <h2>{moduleLabel(modules, activeModule)}</h2>
+              </div>
             </div>
 
             <div className="topbar-right">
@@ -867,6 +897,7 @@ function Workspace() {
         <div className="content-body">
           {loading ? <ModuleLoader /> : renderModule()}
         </div>
+        <WorkspaceFooter />
       </section>
     </main>
     <ConfirmDialog
@@ -875,6 +906,8 @@ function Workspace() {
       onCancel={() => setConfirmDialog(null)}
       onConfirm={handleConfirmDialog}
     />
+    {userInfoTarget && <UserInfoModal user={userInfoTarget} onClose={() => setUserInfoTarget(null)} />}
+    {vehicleDetailTarget && <VehicleDetailPanel vehicle={vehicleDetailTarget} onClose={() => setVehicleDetailTarget(null)} />}
     </FormNoticeContext.Provider>
   );
 
@@ -886,7 +919,7 @@ function Workspace() {
     if (activeModule === 'vehicles') {
       return (
         <>
-          <ModulePanel description={user.role === 'Custodian' ? 'View-only fleet information.' : 'Register, edit, and archive vehicle records.'}>
+          <ModulePanel description={(user.role === 'Custodian' ? 'View-only fleet information.' : 'Register, edit, and archive vehicle records.') + ' Status = availability (can it be dispatched right now?). Condition = physical state (does it need repair or inspection?). Click a row to see full vehicle details.'}>
             <div className="module-action-bar">
               <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
                 <h3>All Vehicles ({visibleRows.length})</h3>
@@ -911,19 +944,29 @@ function Workspace() {
               priorityOptions={lookups.condition_results}
               priorityLabel="Condition"
             />
-            <DataTable columns={vehicleColumns(user.role, setEditTarget, deleteRecord)} rows={visibleRows} />
+            <DataTable columns={vehicleColumns(user.role, setEditTarget, deleteRecord)} rows={visibleRows} onRowClick={setVehicleDetailTarget} />
           </ModulePanel>
-          <FormModal open={!!editTarget} title={editTarget?.vehicle_id ? 'Edit Vehicle' : 'Add Vehicle'} onClose={() => setEditTarget(null)} confirmClose wide>
-            <SmartForm
-              fields={vehicleFields(lookups, allHubs)}
-              initialValues={editTarget?.vehicle_id ? editTarget : EMPTY_OBJ}
-              key={editTarget?.vehicle_id ?? 'vehicle-create'}
-              onCancel={() => setEditTarget(null)}
+          {editTarget?.vehicle_id ? (
+            <FormModal open title="Edit Vehicle" onClose={() => setEditTarget(null)} confirmClose wide>
+              <SmartForm
+                fields={vehicleFields(lookups, allHubs, editTarget.category?.domain ?? 'Land')}
+                initialValues={editTarget}
+                key={editTarget.vehicle_id}
+                onCancel={() => setEditTarget(null)}
+                onSubmit={submitModuleForm}
+                submitLabel="Update Vehicle"
+                title=""
+              />
+            </FormModal>
+          ) : (
+            <VehicleWizardModal
+              open={!!editTarget}
+              lookups={lookups}
+              allHubs={allHubs}
+              onClose={() => setEditTarget(null)}
               onSubmit={submitModuleForm}
-              submitLabel={editTarget?.vehicle_id ? 'Update Vehicle' : 'Add Vehicle'}
-              title=""
             />
-          </FormModal>
+          )}
         </>
       );
     }
@@ -995,6 +1038,7 @@ function Workspace() {
                     vehicles={lookups.vehicles ?? []}
                     onClearSelectedVehicle={() => setSelectedMapVehicleId(null)}
                     onHubsChange={setAllHubs}
+                    canManageHubs={user.role === 'Admin'}
                   />
                 </div>
               </div>
@@ -1036,7 +1080,7 @@ function Workspace() {
     if (activeModule === 'conditions') {
       return (
         <>
-          <ModulePanel description="Record physical and mechanical condition checks separately from asset creation.">
+          <ModulePanel description="Periodic inspection log — a Custodian's routine check-in on a vehicle's physical condition (e.g. a monthly walkaround), separate from Maintenance Records (which logs actual repair work already performed). Each entry here can update the vehicle's Condition field on the fleet list.">
             <div className="module-action-bar">
               <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
                 <h3>Condition Records ({visibleRows.length})</h3>
@@ -1143,7 +1187,11 @@ function Workspace() {
               )}
             </div>
 
-            <DataTable columns={conditionColumns(user.role, setEditTarget, deleteRecord)} rows={visibleRows} />
+            <DataTable
+              columns={conditionColumns(user.role, setEditTarget, deleteRecord)}
+              rows={visibleRows}
+              onRowClick={(row) => row.vehicle && setVehicleDetailTarget(row.vehicle)}
+            />
           </ModulePanel>
           <FormModal open={!!editTarget} title={editTarget?.condition_check_id ? 'Edit Condition Check' : 'Add Condition Check'} onClose={() => setEditTarget(null)} confirmClose>
             <SmartForm
@@ -1199,7 +1247,7 @@ function Workspace() {
               priorityOptions={lookups.severity_levels}
               priorityLabel="Severity"
             />
-            <DataTable columns={issueColumns(user.role, setEditTarget, handleCreateTicketFromIssue)} rows={visibleRows} />
+            <DataTable columns={issueColumns(user.role, setEditTarget, handleCreateTicketFromIssue, setUserInfoTarget)} rows={visibleRows} />
           </ModulePanel>
           <FormModal open={!!editTarget} title={editTarget?.issue_report_id ? 'Update Issue Status' : 'Report Vehicle Issue'} onClose={() => setEditTarget(null)} confirmClose>
             <SmartForm
@@ -1241,7 +1289,12 @@ function Workspace() {
               statusOptions={lookups.maintenance_statuses}
               statusLabel="Progress"
             />
-            <DataTable columns={maintenanceColumns(user.role, setEditTarget, updateRecord)} rows={visibleRows} compact />
+            <DataTable
+              columns={maintenanceColumns(user.role, setEditTarget, updateRecord)}
+              rows={visibleRows}
+              compact
+              onRowClick={(row) => row.vehicle && setVehicleDetailTarget(row.vehicle)}
+            />
           </ModulePanel>
           <FormModal open={!!editTarget} title={editTarget?.maintenance_id ? 'Update Maintenance Record' : 'Add Maintenance Record'} onClose={() => setEditTarget(null)} confirmClose>
             <SmartForm
@@ -1266,7 +1319,11 @@ function Workspace() {
               <h3>Pending Verifications ({visibleRows.length})</h3>
               <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search verifications..." />
             </div>
-            <DataTable columns={maintenanceStatusColumns(setEditTarget)} rows={visibleRows} />
+            <DataTable
+              columns={maintenanceStatusColumns(setEditTarget)}
+              rows={visibleRows}
+              onRowClick={(row) => row.vehicle && setVehicleDetailTarget(row.vehicle)}
+            />
           </ModulePanel>
           <FormModal open={!!editTarget} title={`Verify Maintenance #${editTarget?.maintenance_id}`} onClose={() => setEditTarget(null)} confirmClose>
             <SmartForm
@@ -1293,7 +1350,11 @@ function Workspace() {
               </div>
               <button className="primary-button" type="button" onClick={() => setEditTarget({})}>+ Add Schedule</button>
             </div>
-            <DataTable columns={scheduleColumns(setEditTarget, deleteRecord)} rows={visibleRows} />
+            <DataTable
+              columns={scheduleColumns(setEditTarget, deleteRecord)}
+              rows={visibleRows}
+              onRowClick={(row) => row.vehicle && setVehicleDetailTarget(row.vehicle)}
+            />
           </ModulePanel>
           <FormModal open={!!editTarget} title={editTarget?.schedule_id ? 'Update Schedule' : 'Add Maintenance Schedule'} onClose={() => setEditTarget(null)} confirmClose>
             <SmartForm
@@ -1317,7 +1378,11 @@ function Workspace() {
             <h3>Completed Maintenance ({visibleRows.length})</h3>
             <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search records..." />
           </div>
-          <DataTable columns={maintenanceHistoryColumns} rows={visibleRows} />
+          <DataTable
+            columns={maintenanceHistoryColumns}
+            rows={visibleRows}
+            onRowClick={(row) => row.vehicle && setVehicleDetailTarget(row.vehicle)}
+          />
         </ModulePanel>
       );
     }
@@ -1329,24 +1394,22 @@ function Workspace() {
             <h3>Activity History ({visibleRows.length})</h3>
             <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search history..." />
           </div>
-          <DataTable columns={historyColumns} rows={visibleRows} />
+          <DataTable
+            columns={historyColumns}
+            rows={visibleRows}
+            onRowClick={(row) => row.vehicle && setVehicleDetailTarget(row.vehicle)}
+          />
         </ModulePanel>
       );
     }
 
     if (activeModule === 'reports') {
       return (
-        <ModulePanel description="Generate filtered administrative summaries for printing or export.">
+        <ModulePanel description="Pick a report below, then narrow it down with the filters that apply to it.">
           <div className="module-action-bar">
             <h3>Reports</h3>
           </div>
-          <SmartForm
-            fields={reportFields(lookups)}
-            key="report-generator"
-            onSubmit={submitModuleForm}
-            submitLabel="Generate Report"
-            title=""
-          />
+          <ReportsModule lookups={lookups} onGenerate={submitModuleForm} />
           {report && <ReportPreview report={report} />}
         </ModulePanel>
       );
@@ -1359,7 +1422,7 @@ function Workspace() {
             <h3>System Activity Logs ({visibleRows.length})</h3>
             <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search logs..." />
           </div>
-          <DataTable columns={logColumns} rows={visibleRows} />
+          <PaginatedTable columns={logColumns(lookups.vehicles, setVehicleDetailTarget)} rows={visibleRows} />
         </ModulePanel>
       );
     }
@@ -1472,9 +1535,11 @@ function Workspace() {
           label: 'Actions',
           render: (row) => (
             <button
-              className="primary-button"
-              style={{ height: '32px', padding: '0 14px', fontSize: '0.8rem', background: 'linear-gradient(90deg, #3b82f6, #2563eb)', color: '#fff' }}
+              className="primary-button icon-btn"
+              style={{ height: '32px', width: '32px', padding: 0, background: 'linear-gradient(90deg, #3b82f6, #2563eb)', color: '#fff' }}
               type="button"
+              title="Reopen Ticket"
+              aria-label="Reopen Ticket"
               onClick={() => {
                 setConfirmDialog({
                   title: 'Reopen Archived Ticket',
@@ -1485,7 +1550,7 @@ function Workspace() {
                 });
               }}
             >
-              Reopen
+              <Icon name="undo" size={15} />
             </button>
           ),
         },
@@ -2076,6 +2141,26 @@ function ColumnChart({ rows = [] }) {
   );
 }
 
+// Quadratic curve through each point, using the midpoint between consecutive
+// points as the curve's endpoint — a lightweight way to smooth a line chart
+// without pulling in a charting library.
+function smoothLinePath(points) {
+  if (points.length < 2) {
+    return points.length === 1 ? `M ${points[0].x.toFixed(1)} ${points[0].y.toFixed(1)}` : '';
+  }
+  let d = `M ${points[0].x.toFixed(1)} ${points[0].y.toFixed(1)}`;
+  for (let i = 0; i < points.length - 1; i++) {
+    const cur = points[i];
+    const next = points[i + 1];
+    const midX = (cur.x + next.x) / 2;
+    const midY = (cur.y + next.y) / 2;
+    d += ` Q ${cur.x.toFixed(1)} ${cur.y.toFixed(1)} ${midX.toFixed(1)} ${midY.toFixed(1)}`;
+  }
+  const last = points[points.length - 1];
+  d += ` T ${last.x.toFixed(1)} ${last.y.toFixed(1)}`;
+  return d;
+}
+
 function AreaChart({ rows = [], height = 180 }) {
   if (!rows.length) {
     return <p className="empty-state">No activity data yet.</p>;
@@ -2103,7 +2188,9 @@ function AreaChart({ rows = [], height = 180 }) {
     else s = 10;
     return Math.max(1, s * pow);
   })();
-  const niceMax = Math.ceil(rawMax / niceStep) * niceStep;
+  // Give the chart a sensible minimum headroom so a day or two of low
+  // activity doesn't pin the whole line to the very top/bottom edges.
+  const niceMax = Math.max(4, Math.ceil(rawMax / niceStep) * niceStep);
   // Top-to-bottom integer ticks (e.g. 3, 2, 1, 0) — no rounding duplicates.
   const yTicks = [];
   for (let v = niceMax; v >= 0; v -= niceStep) yTicks.push(v);
@@ -2115,7 +2202,9 @@ function AreaChart({ rows = [], height = 180 }) {
     return { x, y, ...row };
   });
 
-  const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
+  // Smooth quadratic curve through each point (instead of straight segments) so the
+  // line reads as a proper trend rather than a flat, robotic polyline.
+  const linePath = smoothLinePath(points);
   const areaPath = `${linePath} L ${points[points.length - 1].x.toFixed(1)} ${(padTop + innerH).toFixed(1)} L ${points[0].x.toFixed(1)} ${(padTop + innerH).toFixed(1)} Z`;
 
   // Show at most ~8 x-axis labels to avoid crowding.
@@ -2126,8 +2215,8 @@ function AreaChart({ rows = [], height = 180 }) {
       <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" role="img" aria-label="Activity by day">
         <defs>
           <linearGradient id="areaFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#ff7a1a" stopOpacity="0.45" />
-            <stop offset="100%" stopColor="#ff7a1a" stopOpacity="0" />
+            <stop offset="0%" stopColor="#2563eb" stopOpacity="0.45" />
+            <stop offset="100%" stopColor="#2563eb" stopOpacity="0" />
           </linearGradient>
         </defs>
 
@@ -2150,7 +2239,7 @@ function AreaChart({ rows = [], height = 180 }) {
 
         {points.map((p, i) => (
           <g key={i}>
-            <circle className="area-dot" cx={p.x} cy={p.y} r="3.2">
+            <circle className="area-dot" cx={p.x} cy={p.y} r="3.6">
               <title>{`${p.label}: ${p.value}`}</title>
             </circle>
             {i % labelStep === 0 && (
@@ -2234,6 +2323,47 @@ function FormModal({ open, title, onClose, children, confirmClose = false, wide 
             </div>
           </div>
         )}
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+function UserInfoModal({ user, onClose }) {
+  const initials = user.name
+    ? user.name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase()
+    : 'U';
+
+  return createPortal(
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-box" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <h3>Reporter Information</h3>
+          <button className="modal-close-btn" onClick={onClose} type="button" aria-label="Close"><Icon name="close" size={18} /></button>
+        </div>
+        <div className="modal-body">
+          <div className="user-info-card">
+            <div className="profile-avatar user-info-avatar">{initials}</div>
+            <div>
+              <p className="user-info-name">{user.name}</p>
+              {user.role && <span className="user-info-role">{user.role}</span>}
+            </div>
+          </div>
+          <dl className="user-info-details">
+            {user.email && (
+              <div>
+                <dt>Email</dt>
+                <dd>{user.email}</dd>
+              </div>
+            )}
+            {user.id != null && (
+              <div>
+                <dt>User ID</dt>
+                <dd>#{user.id}</dd>
+              </div>
+            )}
+          </dl>
+        </div>
       </div>
     </div>,
     document.body
@@ -2452,7 +2582,7 @@ function PartsTags({ value }) {
   );
 }
 
-function DataTable({ columns, rows, compact = false }) {
+function DataTable({ columns, rows, compact = false, onRowClick }) {
   if (!rows?.length) {
     return <p className="empty-state">No records found.</p>;
   }
@@ -2478,7 +2608,11 @@ function DataTable({ columns, rows, compact = false }) {
         </thead>
         <tbody>
           {rows.map((row, index) => (
-            <tr key={rowKey(row, index)}>
+            <tr
+              key={rowKey(row, index)}
+              className={onRowClick ? 'is-clickable' : undefined}
+              onClick={onRowClick ? (e) => { if (!e.target.closest('button, a')) onRowClick(row); } : undefined}
+            >
               {columns.map((column) => (
                 <td key={column.label} className={column.className}>{column.render ? column.render(row) : row[column.key]}</td>
               ))}
@@ -2573,6 +2707,7 @@ const emptyTicketLookups = {
 
 const categoryFields = [
   { label: 'Vehicle Type Name', name: 'category_name', required: true, type: 'text' },
+  { label: 'Domain', name: 'domain', options: ['Land', 'Water'], required: true, type: 'select' },
   { label: 'Description', name: 'description', type: 'textarea' },
 ];
 
@@ -2587,7 +2722,102 @@ const passwordFields = [
   { label: 'Confirm New Password', name: 'new_password_confirmation', required: true, type: 'password' },
 ];
 
-function vehicleFields(lookups, allHubs = []) {
+function vehicleDomainFields(domain) {
+  return domain === 'Water'
+    ? [
+        { label: 'Hull Material', name: 'hull_material', required: true, type: 'text' },
+        { label: 'Engine Type', name: 'engine_type', required: true, type: 'text' },
+      ]
+    : [{ label: 'Fuel Type', name: 'fuel_type', required: true, type: 'text' }];
+}
+
+const VEHICLE_WIZARD_STEP_LABELS = ['Basic Info', 'Specs', 'Photo & Location'];
+
+function VehicleWizardModal({ open, onClose, lookups, allHubs, onSubmit }) {
+  const [step, setStep] = useState(1);
+  const [wizardData, setWizardData] = useState(EMPTY_OBJ);
+
+  useEffect(() => {
+    if (open) {
+      setStep(1);
+      setWizardData(EMPTY_OBJ);
+    }
+  }, [open]);
+
+  if (!open) return null;
+
+  const domain = lookups.categories.find(
+    (c) => String(c.category_id) === String(wizardData.category_id)
+  )?.domain ?? 'Land';
+
+  const hubOptions = allHubs.map((hub) => ({ value: hub.name, label: hub.name }));
+
+  const stepFields = {
+    1: [
+      { label: 'Vehicle Name', name: 'vehicle_name', required: true, type: 'text' },
+      { label: 'Plate Number', name: 'plate_number', required: true, type: 'text' },
+      { label: 'Vehicle Type', name: 'category_id', options: options(lookups.categories, 'category_id', 'category_name'), required: true, type: 'select' },
+    ],
+    2: [
+      { label: 'Brand', name: 'brand', required: true, type: 'text' },
+      { label: 'Model', name: 'model', required: true, type: 'text' },
+      { label: 'Year Model', name: 'year_model', required: true, type: 'number' },
+      { label: 'Capacity', name: 'capacity', required: true, type: 'text' },
+      { label: 'Vehicle Color', name: 'vehicle_color', required: true, type: 'text' },
+      ...vehicleDomainFields(domain),
+    ],
+    3: [
+      { label: 'Vehicle Photo', name: 'photo', accept: 'image/*', type: 'file' },
+      { label: 'Current Location', name: 'current_location', options: hubOptions, required: true, type: 'select' },
+      { label: 'Remarks', name: 'remarks', type: 'textarea' },
+    ],
+  };
+
+  const isLastStep = step === 3;
+
+  const handleStepSubmit = async (values) => {
+    const merged = { ...wizardData, ...values };
+    if (isLastStep) {
+      await onSubmit(merged);
+    } else {
+      setWizardData(merged);
+      setStep((s) => s + 1);
+    }
+  };
+
+  return (
+    <FormModal open title={`Add Vehicle — Step ${step} of 3`} onClose={onClose} confirmClose wide>
+      <div className="wizard-steps" role="list" aria-label="Add vehicle steps">
+        {VEHICLE_WIZARD_STEP_LABELS.map((label, i) => {
+          const n = i + 1;
+          const state = step === n ? 'active' : step > n ? 'done' : 'upcoming';
+          return (
+            <div key={label} className={`wizard-step-pill is-${state}`} role="listitem">
+              <span className="wizard-step-index">{state === 'done' ? <Icon name="checkCircle" size={12} /> : n}</span>
+              {label}
+            </div>
+          );
+        })}
+      </div>
+      {step > 1 && (
+        <button type="button" className="wizard-back-link" onClick={() => setStep((s) => s - 1)}>
+          <Icon name="undo" size={13} /> Back
+        </button>
+      )}
+      <SmartForm
+        fields={stepFields[step]}
+        initialValues={wizardData}
+        key={step}
+        onCancel={onClose}
+        onSubmit={handleStepSubmit}
+        submitLabel={isLastStep ? 'Add Vehicle' : 'Next'}
+        title=""
+      />
+    </FormModal>
+  );
+}
+
+function vehicleFields(lookups, allHubs = [], domain = 'Land') {
   const hubOptions = allHubs.map((hub) => ({ value: hub.name, label: hub.name }));
 
   return [
@@ -2600,7 +2830,7 @@ function vehicleFields(lookups, allHubs = []) {
     { label: 'Year Model', name: 'year_model', required: true, type: 'number' },
     { label: 'Capacity', name: 'capacity', required: true, type: 'text' },
     { label: 'Vehicle Color', name: 'vehicle_color', required: true, type: 'text' },
-    { label: 'Fuel Type', name: 'fuel_type', type: 'text' },
+    ...vehicleDomainFields(domain),
     { label: 'Current Location', name: 'current_location', options: hubOptions, required: true, type: 'select' },
     { label: 'Remarks', name: 'remarks', type: 'textarea' },
   ];
@@ -2694,17 +2924,113 @@ function scheduleFields(lookups) {
   ];
 }
 
-function reportFields(lookups) {
-  return [
-    { label: 'Report Type', name: 'report_type', options: reportTypes, required: true, type: 'select' },
-    { label: 'Date From', name: 'from', type: 'date' },
-    { label: 'Date To', name: 'to', type: 'date' },
-    { label: 'Vehicle Type', name: 'category_id', options: options(lookups.categories, 'category_id', 'category_name'), type: 'select' },
-    { label: 'Location', name: 'location', type: 'text' },
-    { label: 'Maintenance Type', name: 'maintenance_type', options: lookups.maintenance_types, type: 'select' },
-    { label: 'Issue Type', name: 'issue_type', options: lookups.issue_types, type: 'select' },
-    { label: 'Severity Level', name: 'severity_level', options: lookups.severity_levels, type: 'select' },
-  ];
+const REPORT_CATALOG = [
+  {
+    category: 'Fleet Reports',
+    icon: 'vehicle',
+    reports: [
+      { type: 'Vehicle Inventory Report', description: 'Full list of every registered vehicle.', fields: [] },
+      { type: 'Vehicle Type Report', description: 'Vehicles filtered by vehicle type.', fields: ['category_id'] },
+      { type: 'Vehicle Location Report', description: 'Vehicles filtered by current location.', fields: ['location'] },
+    ],
+  },
+  {
+    category: 'Issue Reports',
+    icon: 'alert',
+    reports: [
+      { type: 'Vehicle Issue Report', description: 'Reported issues filtered by type, severity, and date.', fields: ['issue_type', 'severity_level', 'dates'] },
+    ],
+  },
+  {
+    category: 'Maintenance Reports',
+    icon: 'wrench',
+    reports: [
+      { type: 'Vehicle Maintenance Report', description: 'Repair records filtered by maintenance type and date.', fields: ['maintenance_type', 'dates'] },
+      { type: 'Vehicle Maintenance Schedule Report', description: 'Scheduled maintenance within a date range.', fields: ['dates'] },
+    ],
+  },
+  {
+    category: 'History Reports',
+    icon: 'clipboard',
+    reports: [
+      { type: 'Vehicle History Report', description: 'Full activity timeline across every vehicle.', fields: [] },
+    ],
+  },
+];
+
+function reportFieldDefs(lookups, reportDef) {
+  if (!reportDef) return [];
+  const defs = [];
+  if (reportDef.fields.includes('dates')) {
+    defs.push({ label: 'Date From', name: 'from', type: 'date' });
+    defs.push({ label: 'Date To', name: 'to', type: 'date' });
+  }
+  if (reportDef.fields.includes('category_id')) {
+    defs.push({ label: 'Vehicle Type', name: 'category_id', options: options(lookups.categories, 'category_id', 'category_name'), type: 'select' });
+  }
+  if (reportDef.fields.includes('location')) {
+    defs.push({ label: 'Location', name: 'location', type: 'text' });
+  }
+  if (reportDef.fields.includes('maintenance_type')) {
+    defs.push({ label: 'Maintenance Type', name: 'maintenance_type', options: lookups.maintenance_types, type: 'select' });
+  }
+  if (reportDef.fields.includes('issue_type')) {
+    defs.push({ label: 'Issue Type', name: 'issue_type', options: lookups.issue_types, type: 'select' });
+  }
+  if (reportDef.fields.includes('severity_level')) {
+    defs.push({ label: 'Severity Level', name: 'severity_level', options: lookups.severity_levels, type: 'select' });
+  }
+  return defs;
+}
+
+function ReportsModule({ lookups, onGenerate }) {
+  const [openCategory, setOpenCategory] = useState(REPORT_CATALOG[0].category);
+  const [selected, setSelected] = useState(null);
+
+  return (
+    <div className="report-catalog">
+      {REPORT_CATALOG.map((group) => (
+        <section key={group.category} className="report-category">
+          <button
+            type="button"
+            className="report-category-header"
+            onClick={() => setOpenCategory((c) => (c === group.category ? null : group.category))}
+          >
+            <span><Icon name={group.icon} size={15} /> {group.category}</span>
+            <Icon name={openCategory === group.category ? 'undo' : 'menu'} size={13} />
+          </button>
+          {openCategory === group.category && (
+            <div className="report-category-body">
+              {group.reports.map((r) => (
+                <button
+                  key={r.type}
+                  type="button"
+                  className={`report-type-item${selected?.type === r.type ? ' active' : ''}`}
+                  onClick={() => setSelected(r)}
+                >
+                  <strong>{r.type}</strong>
+                  <span>{r.description}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
+      ))}
+
+      {selected && (
+        <div className="report-generator-panel">
+          <h4><Icon name="search" size={14} /> {selected.type}</h4>
+          <SmartForm
+            fields={reportFieldDefs(lookups, selected)}
+            key={selected.type}
+            onSubmit={(values) => onGenerate({ report_type: selected.type, ...values })}
+            submitLabel="Generate Report"
+            title=""
+          />
+        </div>
+      )}
+    </div>
+  );
 }
 
 function vehicleColumns(role, setEditTarget, deleteRecord) {
@@ -2733,8 +3059,8 @@ function vehicleColumns(role, setEditTarget, deleteRecord) {
       label: 'Action',
       render: (row) => (
         <div className="row-actions">
-          <button className="btn-edit-action" onClick={() => setEditTarget(row)} type="button">Edit</button>
-          <button className="btn-delete-action" onClick={() => deleteRecord(`/vehicles/${row.vehicle_id}`, 'Vehicle archived.')} type="button">Archive</button>
+          <button className="btn-edit-action icon-btn" onClick={() => setEditTarget(row)} type="button" title="Edit" aria-label="Edit"><Icon name="edit" size={15} /></button>
+          <button className="btn-delete-action icon-btn" onClick={() => deleteRecord(`/vehicles/${row.vehicle_id}`, 'Vehicle archived.')} type="button" title="Archive" aria-label="Archive"><Icon name="archive" size={15} /></button>
         </div>
       ),
     });
@@ -2747,14 +3073,15 @@ function categoryColumns(setEditTarget, deleteRecord) {
   return [
     { label: 'ID', render: (row) => row.category_id },
     { label: 'Vehicle Type', render: (row) => row.category_name },
+    { label: 'Domain', render: (row) => <StatusBadge value={row.domain ?? 'Land'} /> },
     { label: 'Vehicles', render: (row) => row.vehicles_count ?? 0 },
     { label: 'Description', render: (row) => row.description ?? '-' },
     {
       label: 'Action',
       render: (row) => (
         <div className="row-actions">
-          <button className="btn-edit-action" onClick={() => setEditTarget(row)} type="button">Edit</button>
-          <button className="btn-delete-action" onClick={() => deleteRecord(`/categories/${row.category_id}`, 'Category deleted.')} type="button">Delete</button>
+          <button className="btn-edit-action icon-btn" onClick={() => setEditTarget(row)} type="button" title="Edit" aria-label="Edit"><Icon name="edit" size={15} /></button>
+          <button className="btn-delete-action icon-btn" onClick={() => deleteRecord(`/categories/${row.category_id}`, 'Category deleted.')} type="button" title="Delete" aria-label="Delete"><Icon name="trash" size={15} /></button>
         </div>
       ),
     },
@@ -2780,16 +3107,16 @@ function locationColumns(currentUser, onViewOnMap) {
     label: 'View',
     render: (row) => (
       <button
-        className="btn-view-action"
+        className="btn-view-action icon-btn"
         onClick={() => onViewOnMap(row)}
         title="View vehicle on map"
+        aria-label="View vehicle on map"
         type="button"
       >
         <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" />
           <circle cx="12" cy="12" r="3" />
         </svg>
-        View
       </button>
     ),
   },
@@ -2802,7 +3129,7 @@ function conditionColumns(role, setEditTarget, deleteRecord) {
     { label: 'Vehicle', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
     { label: 'Result', render: (row) => <StatusBadge value={row.condition_result} /> },
     { label: 'Checked By', render: (row) => row.checked_by?.name ?? '-' },
-    { label: 'Observations', className: 'cell-text', render: (row) => row.observations ?? '-' },
+    { label: 'Observations', className: 'cell-text', render: (row) => <ExpandableText text={row.observations} /> },
     { label: 'Date', render: (row) => formatDate(row.created_at) },
   ];
 
@@ -2811,8 +3138,8 @@ function conditionColumns(role, setEditTarget, deleteRecord) {
       label: 'Action',
       render: (row) => (
         <div className="row-actions">
-          <button className="btn-edit-action" onClick={() => setEditTarget(row)} type="button">Edit</button>
-          <button className="btn-delete-action" onClick={() => deleteRecord(`/conditions/${row.condition_check_id}`, 'Condition check deleted.')} type="button">Delete</button>
+          <button className="btn-edit-action icon-btn" onClick={() => setEditTarget(row)} type="button" title="Edit" aria-label="Edit"><Icon name="edit" size={15} /></button>
+          <button className="btn-delete-action icon-btn" onClick={() => deleteRecord(`/conditions/${row.condition_check_id}`, 'Condition check deleted.')} type="button" title="Delete" aria-label="Delete"><Icon name="trash" size={15} /></button>
         </div>
       ),
     });
@@ -2821,7 +3148,7 @@ function conditionColumns(role, setEditTarget, deleteRecord) {
   return columns;
 }
 
-function issueColumns(role, setEditTarget, onCreateTicketFromIssue) {
+function issueColumns(role, setEditTarget, onCreateTicketFromIssue, setUserInfoTarget) {
   const columns = [
     {
       label: 'Issue',
@@ -2833,24 +3160,30 @@ function issueColumns(role, setEditTarget, onCreateTicketFromIssue) {
             <span className="issue-type">{row.issue_type}</span>
           </div>
           {row.issue_description && (
-            <p className="issue-desc" title={row.issue_description}>{row.issue_description}</p>
+            <ExpandableText text={row.issue_description} className="issue-desc" />
           )}
         </div>
       ),
     },
-    { label: 'Vehicle', width: '16%', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
-    { label: 'Severity', width: '10%', render: (row) => <StatusBadge value={row.severity_level} /> },
-    { label: 'Status', width: '10%', render: (row) => <StatusBadge value={row.status} /> },
+    { label: 'Vehicle', width: '18%', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
+    { label: 'Severity', width: '11%', render: (row) => <TicketStatusBadge value={row.severity_level} /> },
+    { label: 'Status', width: '11%', render: (row) => <StatusBadge value={row.status} /> },
     {
       label: 'Reported By',
-      width: '12%',
-      render: (row) => <span className="issue-reporter">{row.reported_by?.name ?? '-'}</span>,
-    },
-    {
-      label: 'Photo',
-      width: '7%',
-      className: 'cell-center',
-      render: (row) => <PhotoCell alt={`Issue #${row.issue_report_id}`} url={row.photo_url} />,
+      width: '15%',
+      render: (row) => (
+        row.reported_by
+          ? (
+            <button
+              type="button"
+              className="issue-reporter issue-reporter-link"
+              onClick={() => setUserInfoTarget(row.reported_by)}
+            >
+              {row.reported_by.name}
+            </button>
+          )
+          : <span className="issue-reporter">-</span>
+      ),
     },
   ];
 
@@ -2860,9 +3193,9 @@ function issueColumns(role, setEditTarget, onCreateTicketFromIssue) {
       width: '17%',
       render: (row) => (
         <div className="row-actions">
-          <button className="btn-edit-action" onClick={() => setEditTarget(row)} type="button">Update</button>
+          <button className="btn-edit-action icon-btn" onClick={() => setEditTarget(row)} type="button" title="Update" aria-label="Update"><Icon name="edit" size={15} /></button>
           {role === 'Admin' && ['Pending', 'Under Review'].includes(row.status) && (
-            <button className="btn-confirm-action" onClick={() => onCreateTicketFromIssue(row)} type="button">Create Ticket</button>
+            <button className="btn-confirm-action icon-btn" onClick={() => onCreateTicketFromIssue(row)} type="button" title="Create Ticket" aria-label="Create Ticket"><Icon name="ticket" size={15} /></button>
           )}
         </div>
       ),
@@ -2877,7 +3210,7 @@ function maintenanceColumns(role, setEditTarget, updateRecord) {
     { label: 'ID', width: '4%', render: (row) => row.maintenance_id },
     { label: 'Vehicle', width: '17%', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
     { label: 'Type', width: '11%', render: (row) => row.maintenance_type },
-    { label: 'Problem / Reason', width: '17%', className: 'cell-text', render: (row) => row.problem_reason },
+    { label: 'Problem / Reason', width: '17%', className: 'cell-text', render: (row) => <ExpandableText text={row.problem_reason} /> },
     { label: 'Personnel', width: '11%', render: (row) => row.maintenance_personnel?.name ?? '-' },
     { label: 'Progress', width: '9%', render: (row) => <StatusBadge value={row.progress_status} /> },
     { label: 'Verification', width: '9%', render: (row) => row.verification_result ? <StatusBadge value={row.verification_result} /> : '-' },
@@ -2888,11 +3221,11 @@ function maintenanceColumns(role, setEditTarget, updateRecord) {
       width: '6%',
       render: (row) => (
         <div className="row-actions">
-          <button className="btn-edit-action" onClick={() => setEditTarget(row)} type="button">Edit</button>
+          <button className="btn-edit-action icon-btn" onClick={() => setEditTarget(row)} type="button" title="Edit" aria-label="Edit"><Icon name="edit" size={15} /></button>
           {role === 'Admin' && row.verification_result === 'Passed' && row.progress_status !== 'Completed' ? (
             <>
-              <button className="btn-confirm-action" onClick={() => updateRecord(`/maintenance-records/${row.maintenance_id}/confirm`, { confirmed: true }, 'Maintenance confirmed.')} type="button">Confirm</button>
-              <button className="btn-reopen-action" onClick={() => updateRecord(`/maintenance-records/${row.maintenance_id}/confirm`, { confirmed: false }, 'Maintenance reopened.')} type="button">Reopen</button>
+              <button className="btn-confirm-action icon-btn" onClick={() => updateRecord(`/maintenance-records/${row.maintenance_id}/confirm`, { confirmed: true }, 'Maintenance confirmed.')} type="button" title="Confirm" aria-label="Confirm"><Icon name="checkCircle" size={15} /></button>
+              <button className="btn-reopen-action icon-btn" onClick={() => updateRecord(`/maintenance-records/${row.maintenance_id}/confirm`, { confirmed: false }, 'Maintenance reopened.')} type="button" title="Reopen" aria-label="Reopen"><Icon name="undo" size={15} /></button>
             </>
           ) : null}
         </div>
@@ -2908,11 +3241,11 @@ function maintenanceStatusColumns(setEditTarget) {
     { label: 'ID', render: (row) => row.maintenance_id },
     { label: 'Vehicle', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
     { label: 'Type', render: (row) => row.maintenance_type },
-    { label: 'Problem / Reason', className: 'cell-text', render: (row) => row.problem_reason },
-    { label: 'Action Taken', className: 'cell-text', render: (row) => row.action_taken ?? '-' },
+    { label: 'Problem / Reason', className: 'cell-text', render: (row) => <ExpandableText text={row.problem_reason} /> },
+    { label: 'Action Taken', className: 'cell-text', render: (row) => <ExpandableText text={row.action_taken} /> },
     { label: 'Personnel', render: (row) => row.maintenance_personnel?.name ?? '-' },
     { label: 'Progress', render: (row) => <StatusBadge value={row.progress_status} /> },
-    { label: 'Action', render: (row) => <button className="btn-edit-action" onClick={() => setEditTarget(row)} type="button">Verify</button> },
+    { label: 'Action', render: (row) => <button className="btn-edit-action icon-btn" onClick={() => setEditTarget(row)} type="button" title="Verify" aria-label="Verify"><Icon name="checkCircle" size={15} /></button> },
   ];
 }
 
@@ -2929,8 +3262,8 @@ function scheduleColumns(setEditTarget, deleteRecord) {
       label: 'Action',
       render: (row) => (
         <div className="row-actions">
-          <button className="btn-edit-action" onClick={() => setEditTarget(row)} type="button">Edit</button>
-          <button className="btn-delete-action" onClick={() => deleteRecord(`/maintenance-schedules/${row.schedule_id}`, 'Schedule deleted.')} type="button">Delete</button>
+          <button className="btn-edit-action icon-btn" onClick={() => setEditTarget(row)} type="button" title="Edit" aria-label="Edit"><Icon name="edit" size={15} /></button>
+          <button className="btn-delete-action icon-btn" onClick={() => deleteRecord(`/maintenance-schedules/${row.schedule_id}`, 'Schedule deleted.')} type="button" title="Delete" aria-label="Delete"><Icon name="trash" size={15} /></button>
         </div>
       ),
     },
@@ -2941,8 +3274,8 @@ const maintenanceHistoryColumns = [
   { label: 'ID', render: (row) => row.maintenance_id },
   { label: 'Vehicle', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
   { label: 'Type', render: (row) => row.maintenance_type },
-  { label: 'Problem / Reason', className: 'cell-text', render: (row) => row.problem_reason },
-  { label: 'Action Taken', className: 'cell-text', render: (row) => row.action_taken ?? '-' },
+  { label: 'Problem / Reason', className: 'cell-text', render: (row) => <ExpandableText text={row.problem_reason} /> },
+  { label: 'Action Taken', className: 'cell-text', render: (row) => <ExpandableText text={row.action_taken} /> },
   { label: 'Parts Used', render: (row) => <PartsTags value={row.parts_used} /> },
   { label: 'Personnel', render: (row) => row.maintenance_personnel?.name ?? '-' },
   { label: 'Completed', render: (row) => formatDate(row.date_completed ?? row.updated_at) },
@@ -2952,22 +3285,73 @@ const historyColumns = [
   { label: 'ID', render: (row) => row.history_id },
   { label: 'Vehicle', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
   { label: 'Activity', render: (row) => row.activity_type },
-  { label: 'Description', className: 'cell-text', render: (row) => row.description },
+  { label: 'Description', className: 'cell-text', render: (row) => <ExpandableText text={row.description} /> },
   { label: 'Related Record', render: (row) => row.related_record_id ?? '-' },
   { label: 'Updated By', render: (row) => row.updated_by?.name ?? '-' },
   { label: 'Date and Time', render: (row) => formatDate(row.created_at) },
 ];
 
-const logColumns = [
-  { label: 'ID', render: (row) => row.log_id },
-  { label: 'User', render: (row) => row.user?.name ?? '-' },
-  { label: 'Role', render: (row) => row.role ?? '-' },
-  { label: 'Action', render: (row) => row.action },
-  { label: 'Module', render: (row) => row.module },
-  { label: 'Record ID', render: (row) => row.affected_record_id ?? '-' },
-  { label: 'Details', className: 'cell-text', render: (row) => row.details ?? '-' },
-  { label: 'Date and Time', render: (row) => formatDate(row.created_at) },
-];
+function logColumns(vehicles, onViewVehicle) {
+  return [
+    { label: 'ID', render: (row) => row.log_id },
+    { label: 'User', render: (row) => row.user?.name ?? '-' },
+    { label: 'Role', render: (row) => row.role ?? '-' },
+    { label: 'Action', render: (row) => row.action },
+    { label: 'Module', render: (row) => row.module },
+    {
+      label: 'Record ID',
+      render: (row) => {
+        if (row.module !== 'Vehicle Management' || row.affected_record_id == null) {
+          return row.affected_record_id ?? '-';
+        }
+        const vehicle = vehicles.find((v) => String(v.vehicle_id) === String(row.affected_record_id));
+        return vehicle
+          ? <button type="button" className="issue-reporter-link" onClick={() => onViewVehicle(vehicle)}>{row.affected_record_id}</button>
+          : row.affected_record_id;
+      },
+    },
+    { label: 'Details', className: 'cell-text', render: (row) => <ExpandableText text={row.details} /> },
+    { label: 'Date and Time', render: (row) => formatDate(row.created_at) },
+  ];
+}
+
+function PaginatedTable({ columns, rows, onRowClick }) {
+  const [pageSize, setPageSize] = useState(25);
+  const [page, setPage] = useState(1);
+
+  useEffect(() => {
+    setPage(1);
+  }, [rows.length, pageSize]);
+
+  if (!rows?.length) {
+    return <DataTable columns={columns} rows={rows} onRowClick={onRowClick} />;
+  }
+
+  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+  const clampedPage = Math.min(page, totalPages);
+  const start = (clampedPage - 1) * pageSize;
+  const pageRows = rows.slice(start, start + pageSize);
+
+  return (
+    <>
+      <DataTable columns={columns} rows={pageRows} onRowClick={onRowClick} />
+      <div className="table-pagination">
+        <span className="muted">Showing {start + 1}-{Math.min(start + pageSize, rows.length)} of {rows.length}</span>
+        <div className="table-pagination-controls">
+          <label>
+            Rows per page
+            <select value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>
+              {[10, 25, 50, 100].map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </label>
+          <button type="button" className="ghost-button" disabled={clampedPage <= 1} onClick={() => setPage((p) => p - 1)}>Prev</button>
+          <span>Page {clampedPage} of {totalPages}</span>
+          <button type="button" className="ghost-button" disabled={clampedPage >= totalPages} onClick={() => setPage((p) => p + 1)}>Next</button>
+        </div>
+      </div>
+    </>
+  );
+}
 
 function reportColumns(rows) {
   if (!rows?.length) {
@@ -2985,6 +3369,56 @@ function reportColumns(rows) {
 
 function StatusBadge({ value }) {
   return <span className={`status-badge ${String(value).toLowerCase().replaceAll(' ', '-')}`}>{value ?? '-'}</span>;
+}
+
+function WorkspaceFooter() {
+  return (
+    <footer className="workspace-footer">
+      <div className="workspace-footer-brand">
+        <img src={vmsLogo} alt="Barangay VMS" />
+        <div>
+          <strong>Barangay VMS</strong>
+          <span>A Smarter Way to Manage Your Barangay's Fleet.</span>
+        </div>
+      </div>
+      <div className="workspace-footer-links">
+        <Link to="/privacy">Privacy Policy</Link>
+        <Link to="/terms">Terms of Service</Link>
+      </div>
+      <p className="workspace-footer-copyright">
+        © {new Date().getFullYear()} Barangay Vehicle Management System. All rights reserved.
+      </p>
+    </footer>
+  );
+}
+
+// Clamps long free-text table cells to a fixed number of lines so they can't
+// stretch the row/table; click to reveal the rest, click again to collapse.
+function ExpandableText({ text, lines = 2, className = '' }) {
+  const [expanded, setExpanded] = useState(false);
+
+  if (!text) return '-';
+
+  const toggle = () => setExpanded((prev) => !prev);
+
+  return (
+    <span
+      className={`expandable-text ${expanded ? 'is-expanded' : ''} ${className}`.trim()}
+      style={{ WebkitLineClamp: expanded ? 'unset' : lines }}
+      onClick={toggle}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          toggle();
+        }
+      }}
+      role="button"
+      tabIndex={0}
+      title={expanded ? 'Click to collapse' : 'Click to view full text'}
+    >
+      {text}
+    </span>
+  );
 }
 
 // The backend stores absolute image URLs built from APP_URL, which often points
@@ -3169,13 +3603,6 @@ function moduleLabel(modules, activeModule) {
   return modules.find(([key]) => key === activeModule)?.[1] ?? 'Workspace';
 }
 
-function portalTitle(role) {
-  if (role === 'Maintenance Personnel') {
-    return 'Maintenance Console';
-  }
-
-  return `${role} Portal`;
-}
 
 function issueDescription(role) {
   if (role === 'Custodian') {
@@ -3283,8 +3710,15 @@ function TicketStatusBadge({ value, size = 'normal' }) {
 function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm, onCancel, onUncancel, onDelete, onRequestConfirmation, onClose }) {
   const [mechanicForm, setMechanicForm] = useState(false);
   const [confirmForm, setConfirmForm] = useState(false);
+  const [activeTab, setActiveTab] = useState('overview');
 
   if (!ticket) return null;
+
+  const tabs = [
+    { key: 'overview', label: 'Overview', icon: 'clipboard' },
+    ticket.assigned_mechanic_id && { key: 'workOrder', label: 'Work Order', icon: 'wrench' },
+    (ticket.verification_verdict || ticket.confirmation_verdict) && { key: 'closure', label: 'Verification & Closure', icon: 'flag' },
+  ].filter(Boolean);
 
   const phase = ticketPhaseLabel(ticket.status);
   const requestDelete = () => {
@@ -3335,40 +3769,61 @@ function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm,
           })}
         </div>
 
+        {tabs.length > 1 && (
+          <div className="ticket-detail-tabs" role="tablist" aria-label="Ticket detail sections">
+            {tabs.map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                role="tab"
+                aria-selected={activeTab === tab.key}
+                className={activeTab === tab.key ? 'active' : ''}
+                onClick={() => setActiveTab(tab.key)}
+              >
+                <Icon name={tab.icon} size={14} /> {tab.label}
+              </button>
+            ))}
+          </div>
+        )}
+
         <div className="ticket-detail-body">
-          <section className="ticket-section">
-            <h4><Icon name="vehicle" size={16} /> Vehicle</h4>
-            <div className="ticket-detail-vehicle-layout">
-              {ticket.vehicle?.photo_url && (
-                <div className="ticket-detail-vehicle-photo">
-                  <img src={ticket.vehicle.photo_url} alt={ticket.vehicle.vehicle_name} />
+          {activeTab === 'overview' && (
+            <>
+              <section className="ticket-section">
+                <h4><Icon name="vehicle" size={16} /> Vehicle</h4>
+                <div className="ticket-detail-vehicle-layout">
+                  {ticket.vehicle?.photo_url && (
+                    <div className="ticket-detail-vehicle-photo">
+                      <img src={ticket.vehicle.photo_url} alt={ticket.vehicle.vehicle_name} />
+                    </div>
+                  )}
+                  <div className="ticket-detail-vehicle-info">
+                    <p><strong>{ticket.vehicle?.vehicle_name}</strong> ({ticket.vehicle?.plate_number})</p>
+                    <p className="muted">Status: {ticket.vehicle?.status} · Condition: {ticket.vehicle?.condition}</p>
+                  </div>
                 </div>
+              </section>
+
+              <section className="ticket-section">
+                <h4><Icon name="clipboard" size={16} /> Description</h4>
+                <p>{ticket.ticket_description}</p>
+              </section>
+
+              {ticket.assigned_custodian_id && (
+                <section className="ticket-section">
+                  <h4><Icon name="search" size={16} /> Phase 1–2 · Custodian Inspection</h4>
+                  <p>Assigned to: <strong>{ticket.assigned_custodian?.name ?? '—'}</strong></p>
+                  {ticket.inspection_result && <>
+                    <p>Result: <TicketStatusBadge value={ticket.inspection_result} /></p>
+                    <p className="muted">{ticket.inspection_notes}</p>
+                    <p className="muted">Inspected by {ticket.inspected_by?.name} on {formatDate(ticket.inspected_at)}</p>
+                  </>}
+                </section>
               )}
-              <div className="ticket-detail-vehicle-info">
-                <p><strong>{ticket.vehicle?.vehicle_name}</strong> ({ticket.vehicle?.plate_number})</p>
-                <p className="muted">Status: {ticket.vehicle?.status} · Condition: {ticket.vehicle?.condition}</p>
-              </div>
-            </div>
-          </section>
-
-          <section className="ticket-section">
-            <h4><Icon name="clipboard" size={16} /> Description</h4>
-            <p>{ticket.ticket_description}</p>
-          </section>
-
-          {ticket.assigned_custodian_id && (
-            <section className="ticket-section">
-              <h4><Icon name="search" size={16} /> Phase 1–2 · Custodian Inspection</h4>
-              <p>Assigned to: <strong>{ticket.assigned_custodian?.name ?? '—'}</strong></p>
-              {ticket.inspection_result && <>
-                <p>Result: <TicketStatusBadge value={ticket.inspection_result} /></p>
-                <p className="muted">{ticket.inspection_notes}</p>
-                <p className="muted">Inspected by {ticket.inspected_by?.name} on {formatDate(ticket.inspected_at)}</p>
-              </>}
-            </section>
+            </>
           )}
 
-          {ticket.assigned_mechanic_id && (
+          {activeTab === 'workOrder' && ticket.assigned_mechanic_id && (
             <section className="ticket-section">
               <h4><Icon name="wrench" size={16} /> Phase 3 · Work Order</h4>
               <p>Mechanic: <strong>{ticket.assigned_mechanic?.name ?? '—'}</strong></p>
@@ -3394,27 +3849,31 @@ function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm,
             </section>
           )}
 
-          {ticket.verification_verdict && (
-            <section className="ticket-section">
-              <h4><Icon name="checkCircle" size={16} /> Phase 4T1 · Custodian Verification</h4>
-              <p>Verdict: <TicketStatusBadge value={ticket.verification_verdict} /></p>
-              <p className="muted">{ticket.verification_notes}</p>
-              <p className="muted">By {ticket.verified_by?.name} on {formatDate(ticket.verified_at)}</p>
-            </section>
-          )}
-
-          {ticket.confirmation_verdict && (
-            <section className="ticket-section">
-              <h4><Icon name="flag" size={16} /> Phase 4T2 · Admin Confirmation</h4>
-              <p>Verdict: <TicketStatusBadge value={ticket.confirmation_verdict} /></p>
-              {ticket.maintenance_cost !== null && ticket.maintenance_cost !== undefined && (
-                <p style={{ marginTop: '4px', marginBottom: '4px' }}>
-                  <strong>Expenses:</strong> ₱{Number(ticket.maintenance_cost).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                </p>
+          {activeTab === 'closure' && (
+            <>
+              {ticket.verification_verdict && (
+                <section className="ticket-section">
+                  <h4><Icon name="checkCircle" size={16} /> Phase 4T1 · Custodian Verification</h4>
+                  <p>Verdict: <TicketStatusBadge value={ticket.verification_verdict} /></p>
+                  <p className="muted">{ticket.verification_notes}</p>
+                  <p className="muted">By {ticket.verified_by?.name} on {formatDate(ticket.verified_at)}</p>
+                </section>
               )}
-              <p className="muted">{ticket.confirmation_notes}</p>
-              <p className="muted">By {ticket.confirmed_by?.name} on {formatDate(ticket.confirmed_at)}</p>
-            </section>
+
+              {ticket.confirmation_verdict && (
+                <section className="ticket-section">
+                  <h4><Icon name="flag" size={16} /> Phase 4T2 · Admin Confirmation</h4>
+                  <p>Verdict: <TicketStatusBadge value={ticket.confirmation_verdict} /></p>
+                  {ticket.maintenance_cost !== null && ticket.maintenance_cost !== undefined && (
+                    <p style={{ marginTop: '4px', marginBottom: '4px' }}>
+                      <strong>Expenses:</strong> ₱{Number(ticket.maintenance_cost).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </p>
+                  )}
+                  <p className="muted">{ticket.confirmation_notes}</p>
+                  <p className="muted">By {ticket.confirmed_by?.name} on {formatDate(ticket.confirmed_at)}</p>
+                </section>
+              )}
+            </>
           )}
         </div>
 
@@ -3555,6 +4014,14 @@ function TicketModule({
   onRequestConfirmation
 }) {
   const [showCreate, setShowCreate] = useState(false);
+  const [ticketViewMode, setTicketViewMode] = useState(
+    () => localStorage.getItem('vms_ticket_view') || 'card'
+  );
+
+  const changeTicketViewMode = (mode) => {
+    setTicketViewMode(mode);
+    localStorage.setItem('vms_ticket_view', mode);
+  };
 
   useEffect(() => {
     if (prefilledTicketData) {
@@ -3595,9 +4062,31 @@ function TicketModule({
             <h3>All Tickets ({tickets.length})</h3>
             <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search tickets..." />
           </div>
-          <button className="primary-button" type="button" onClick={() => { setShowCreate((v) => !v); setEditTarget(null); }}>
-            {showCreate ? 'Cancel' : '+ Create Ticket'}
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div className="view-mode-toggle" role="group" aria-label="Ticket view mode">
+              <button
+                type="button"
+                className={ticketViewMode === 'card' ? 'active' : ''}
+                onClick={() => changeTicketViewMode('card')}
+                title="Card view"
+                aria-label="Card view"
+              >
+                <Icon name="grid" size={15} />
+              </button>
+              <button
+                type="button"
+                className={ticketViewMode === 'table' ? 'active' : ''}
+                onClick={() => changeTicketViewMode('table')}
+                title="Table view"
+                aria-label="Table view"
+              >
+                <Icon name="list" size={15} />
+              </button>
+            </div>
+            <button className="primary-button" type="button" onClick={() => { setShowCreate((v) => !v); setEditTarget(null); }}>
+              {showCreate ? 'Cancel' : '+ Create Ticket'}
+            </button>
+          </div>
         </div>
 
         <FilterBar
@@ -3620,13 +4109,15 @@ function TicketModule({
 
         {tickets.length === 0
           ? <p className="empty-state">No tickets yet. Create one to begin the workflow.</p>
-          : (
-            <div className="ticket-card-grid">
-              {tickets.map((t) => (
-                <TicketCard key={t.ticket_id} ticket={t} onClick={() => setTicketDetailTarget(t)} />
-              ))}
-            </div>
-          )
+          : ticketViewMode === 'table'
+            ? <DataTable columns={ticketTableColumns()} rows={tickets} onRowClick={setTicketDetailTarget} />
+            : (
+              <div className="ticket-card-grid">
+                {tickets.map((t) => (
+                  <TicketCard key={t.ticket_id} ticket={t} onClick={() => setTicketDetailTarget(t)} />
+                ))}
+              </div>
+            )
         }
       </section>
 
@@ -3668,6 +4159,73 @@ function TicketModule({
           onClose={() => setTicketDetailTarget(null)}
         />
       )}
+    </div>
+  );
+}
+
+// =========================================================================
+// VEHICLE DETAIL PANEL — shown when a vehicle row is clicked
+// =========================================================================
+
+function VehicleDetailPanel({ vehicle, onClose }) {
+  if (!vehicle) return null;
+
+  const specs = [
+    { label: 'Vehicle Type', value: vehicle.category?.category_name ?? 'Unassigned' },
+    { label: 'Brand / Model', value: `${vehicle.brand ?? '-'} ${vehicle.model ?? ''}`.trim() || '-' },
+    { label: 'Year Model', value: vehicle.year_model ?? '-' },
+    { label: 'Capacity', value: vehicle.capacity ?? '-' },
+    { label: 'Color', value: vehicle.vehicle_color ?? '-' },
+    { label: 'Fuel Type', value: vehicle.fuel_type ?? '-' },
+    { label: 'Current Location', value: vehicle.current_location ?? '-' },
+  ];
+
+  return (
+    <div className="ticket-detail-overlay" onClick={onClose}>
+      <div className="ticket-detail-panel" onClick={(e) => e.stopPropagation()}>
+        <div className="ticket-detail-header">
+          <div>
+            <span className="ticket-detail-id">{vehicle.plate_number}</span>
+            <h3 className="ticket-detail-title">{vehicle.vehicle_name}</h3>
+            <div className="ticket-detail-meta">
+              <StatusBadge value={vehicle.status} />
+              <StatusBadge value={vehicle.condition} />
+            </div>
+          </div>
+          <button className="icon-btn" onClick={onClose} type="button" title="Close" aria-label="Close"><Icon name="close" size={18} /></button>
+        </div>
+
+        <div className="ticket-detail-body">
+          <section className="ticket-section">
+            <h4><Icon name="vehicle" size={16} /> Vehicle</h4>
+            <div className="ticket-detail-vehicle-layout">
+              {vehicle.photo_url && (
+                <div className="ticket-detail-vehicle-photo">
+                  <PhotoCell alt={vehicle.vehicle_name} url={vehicle.photo_url} />
+                </div>
+              )}
+              <dl className="vehicle-detail-specs">
+                {specs.map((spec) => (
+                  <div key={spec.label}>
+                    <dt>{spec.label}</dt>
+                    <dd>{spec.value}</dd>
+                  </div>
+                ))}
+              </dl>
+            </div>
+            <p className="vehicle-detail-status-hint muted">
+              <strong>Status</strong> reflects availability (can it be dispatched right now?). <strong>Condition</strong> reflects physical state (does it need repair or inspection?). The two are tracked independently.
+            </p>
+          </section>
+
+          {vehicle.remarks && (
+            <section className="ticket-section">
+              <h4><Icon name="clipboard" size={16} /> Remarks</h4>
+              <p>{vehicle.remarks}</p>
+            </section>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -3744,13 +4302,13 @@ function CustodianInspectionModule({
           : (
             <DataTable
               columns={[
-                { label: 'Ticket #', render: (r) => `#${r.ticket_id}` },
+                { label: 'Ticket #', render: (r) => r.ticket_id },
                 { label: 'Vehicle', render: (r) => <VehicleCell vehicle={r.vehicle} /> },
                 { label: 'Title', render: (r) => r.ticket_title },
                 { label: 'Priority', render: (r) => <TicketStatusBadge value={r.priority} /> },
-                { label: 'Description', render: (r) => r.ticket_description },
+                { label: 'Description', className: 'cell-text', render: (r) => <ExpandableText text={r.ticket_description} /> },
                 { label: 'Assigned', render: (r) => formatDate(r.assigned_at) },
-                { label: 'Action', render: (r) => <button className="btn-edit-action" type="button" onClick={() => setEditTarget(r)}>Inspect</button> },
+                { label: 'Action', render: (r) => <button className="btn-edit-action icon-btn" type="button" onClick={() => setEditTarget(r)} title="Inspect" aria-label="Inspect"><Icon name="search" size={15} /></button> },
               ]}
               rows={tickets}
             />
@@ -3818,7 +4376,7 @@ function CustodianVerificationModule({
           : (
             <DataTable
               columns={[
-                { label: 'Ticket #', render: (r) => `#${r.ticket_id}` },
+                { label: 'Ticket #', render: (r) => r.ticket_id },
                 { label: 'Vehicle', render: (r) => <VehicleCell vehicle={r.vehicle} /> },
                 { label: 'Title', render: (r) => r.ticket_title },
                 { label: 'Mechanic', render: (r) => r.assigned_mechanic?.name ?? '—' },
@@ -3836,7 +4394,7 @@ function CustodianVerificationModule({
                   ) : '—'
                 },
                 { label: 'Parts Used', render: (r) => <PartsTags value={r.parts_used} /> },
-                { label: 'Action', render: (r) => <button className="btn-edit-action" type="button" onClick={() => setEditTarget(r)}>Verify Repair</button> },
+                { label: 'Action', render: (r) => <button className="btn-edit-action icon-btn" type="button" onClick={() => setEditTarget(r)} title="Verify Repair" aria-label="Verify Repair"><Icon name="checkCircle" size={15} /></button> },
               ]}
               rows={tickets}
             />
@@ -3959,7 +4517,7 @@ function MechanicWorkOrderModule({
           : (
             <DataTable
               columns={[
-                { label: 'Ticket #', render: (r) => `#${r.ticket_id}` },
+                { label: 'Ticket #', render: (r) => r.ticket_id },
                 { label: 'Vehicle', render: (r) => <VehicleCell vehicle={r.vehicle} /> },
                 {
                   label: 'Work Order',
@@ -3979,9 +4537,9 @@ function MechanicWorkOrderModule({
                   )
                 },
                 { label: 'Type', render: (r) => r.maintenance_type ?? '—' },
-                { label: 'Instructions', render: (r) => r.work_order_notes ?? r.ticket_description },
+                { label: 'Instructions', className: 'cell-text', render: (r) => <ExpandableText text={r.work_order_notes ?? r.ticket_description} /> },
                 { label: 'Dispatched', render: (r) => formatDate(r.mechanic_assigned_at) },
-                { label: 'Action', render: (r) => <button className="btn-edit-action" type="button" onClick={() => setEditTarget(r)}>Log Repairs</button> },
+                { label: 'Action', render: (r) => <button className="btn-edit-action icon-btn" type="button" onClick={() => setEditTarget(r)} title="Log Repairs" aria-label="Log Repairs"><Icon name="wrench" size={15} /></button> },
               ]}
               rows={tickets}
             />
@@ -4024,12 +4582,27 @@ function MechanicWorkOrderModule({
 }
 
 // =========================================================================
+// TICKET TABLE VIEW COLUMNS (alternative to the ticket card grid)
+// =========================================================================
+
+function ticketTableColumns() {
+  return [
+    { label: 'Ticket #', render: (r) => r.ticket_id },
+    { label: 'Title', render: (r) => r.ticket_title },
+    { label: 'Vehicle', render: (r) => <VehicleCell vehicle={r.vehicle} /> },
+    { label: 'Status', render: (r) => <TicketStatusBadge value={r.status} /> },
+    { label: 'Priority', render: (r) => <TicketStatusBadge value={r.priority} /> },
+    { label: 'Created', render: (r) => formatDate(r.created_at) },
+  ];
+}
+
+// =========================================================================
 // PHASE 5: TICKET ARCHIVE COLUMNS
 // =========================================================================
 
 const ticketArchiveColumns = [
   { label: 'Archive #', render: (r) => r.archive_id },
-  { label: 'Ticket #', render: (r) => `#${r.ticket_id}` },
+  { label: 'Ticket #', render: (r) => r.ticket_id },
   { label: 'Title', render: (r) => r.ticket_title },
   { label: 'Vehicle', render: (r) => <VehicleCell vehicle={r.vehicle ?? { vehicle_name: r.vehicle_name, plate_number: r.plate_number }} /> },
   { label: 'Expenses', render: (r) => r.maintenance_cost ? `₱${Number(r.maintenance_cost).toLocaleString('en-US', { minimumFractionDigits: 2 })}` : '₱0.00' },

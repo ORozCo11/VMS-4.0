@@ -3,18 +3,32 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { MapContainer, Marker, Polygon, Popup, TileLayer, Tooltip, useMap, ZoomControl } from 'react-leaflet';
 import { toPng } from 'html-to-image';
+import api from '../api/axios';
 import {
-  HIDDEN_HUBS_STORAGE_KEY,
-  HUBS_STORAGE_KEY,
   PAKNAAN_BOUNDS,
   PAKNAAN_CENTER,
   PAKNAAN_POLYGON,
-  getActiveHubs,
-  readCustomHubs,
-  readHiddenHubIds,
 } from '../data/paknaanLocationDensity';
 
-const CARTO_DARK_TILE_URL = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+// Normalizes a hub record from the Laravel `/hubs` API into the shape the map/UI expects.
+function normalizeHub(record) {
+  return {
+    id: String(record.hub_id),
+    hub_id: record.hub_id,
+    name: record.name,
+    address: record.name,
+    lat: Number(record.lat),
+    lng: Number(record.lng),
+    label: record.label || record.name.slice(0, 2).toUpperCase(),
+    matchNames: Array.isArray(record.match_names) && record.match_names.length
+      ? record.match_names
+      : [record.name.toLowerCase()],
+    isCustom: !record.is_default,
+    isHidden: !!record.is_hidden,
+  };
+}
+
+const CARTO_LIGHT_TILE_URL = 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
 const CARTO_ATTRIBUTION = '&copy; OpenStreetMap contributors &copy; CARTO';
 
 function escapeSvgText(value) {
@@ -255,9 +269,9 @@ function LocationDensityMap({
   selectedVehicleId = null,
   onClearSelectedVehicle = null,
   onHubsChange = null,
+  canManageHubs = false,
 }) {
-  const [customHubs, setCustomHubs] = useState(() => readCustomHubs());
-  const [hiddenHubIds, setHiddenHubIds] = useState(() => readHiddenHubIds());
+  const [hubRecords, setHubRecords] = useState([]);
   const [addMode, setAddMode] = useState(false);
   const [pendingLatLng, setPendingLatLng] = useState(null);
   const [deleteCandidate, setDeleteCandidate] = useState(null);
@@ -284,15 +298,22 @@ function LocationDensityMap({
     };
   }, [isMaximized]);
 
-  const updateHubState = useCallback((nextCustomHubs, nextHiddenHubIds) => {
-    localStorage.setItem(HUBS_STORAGE_KEY, JSON.stringify(nextCustomHubs));
-    localStorage.setItem(HIDDEN_HUBS_STORAGE_KEY, JSON.stringify(nextHiddenHubIds));
-    setCustomHubs(nextCustomHubs);
-    setHiddenHubIds(nextHiddenHubIds);
-    if (onHubsChange) {
-      onHubsChange(getActiveHubs(nextCustomHubs, nextHiddenHubIds));
+  const fetchHubs = useCallback(async () => {
+    try {
+      const response = await api.get('/hubs');
+      const normalized = response.data.map(normalizeHub);
+      setHubRecords(normalized);
+      if (onHubsChange) {
+        onHubsChange(normalized.filter((hub) => !hub.isHidden));
+      }
+    } catch (error) {
+      console.error('Failed to load hubs:', error);
     }
   }, [onHubsChange]);
+
+  useEffect(() => {
+    fetchHubs().catch(() => {});
+  }, [fetchHubs]);
 
   // When the naming modal opens, focus the input.
   useEffect(() => {
@@ -312,28 +333,28 @@ function LocationDensityMap({
     setHubNameDraft('');
   }, []);
 
-  const confirmNaming = useCallback(() => {
+  const confirmNaming = useCallback(async () => {
     const name = hubNameDraft.trim();
-    if (!name || !pendingLatLng) {
+    if (!name || !pendingLatLng || !canManageHubs) {
       return;
     }
 
-    const newHub = {
-      id: `custom-hub-${Date.now()}`,
-      name,
-      address: name,
-      lat: pendingLatLng.lat,
-      lng: pendingLatLng.lng,
-      label: name.substring(0, 2).toUpperCase(),
-      matchNames: [name.toLowerCase()],
-      isCustom: true,
-    };
-
-    updateHubState([...customHubs, newHub], hiddenHubIds);
-    setMapNotice({ type: 'success', text: `${name} hub added.` });
-    setPendingLatLng(null);
-    setHubNameDraft('');
-  }, [customHubs, hiddenHubIds, hubNameDraft, pendingLatLng, updateHubState]);
+    try {
+      await api.post('/hubs', {
+        name,
+        lat: pendingLatLng.lat,
+        lng: pendingLatLng.lng,
+        label: name.substring(0, 2).toUpperCase(),
+      });
+      await fetchHubs();
+      setMapNotice({ type: 'success', text: `${name} hub added.` });
+    } catch (error) {
+      setMapNotice({ type: 'error', text: error.response?.data?.message || 'Failed to add hub.' });
+    } finally {
+      setPendingLatLng(null);
+      setHubNameDraft('');
+    }
+  }, [canManageHubs, fetchHubs, hubNameDraft, pendingLatLng]);
 
   const captureMap = useCallback(async () => {
     setCapturing(true);
@@ -357,25 +378,34 @@ function LocationDensityMap({
     setDeleteCandidate(null);
   }, []);
 
-  const confirmDeleteHub = useCallback(() => {
-    if (!deleteCandidate) return;
+  const confirmDeleteHub = useCallback(async () => {
+    if (!deleteCandidate || !canManageHubs) return;
 
-    const nextCustomHubs = deleteCandidate.isCustom
-      ? customHubs.filter((hub) => hub.id !== deleteCandidate.id)
-      : customHubs;
-    const nextHiddenHubIds = deleteCandidate.isCustom
-      ? hiddenHubIds
-      : Array.from(new Set([...hiddenHubIds, deleteCandidate.id]));
+    try {
+      if (deleteCandidate.isCustom) {
+        await api.delete(`/hubs/${deleteCandidate.hub_id}`);
+      } else {
+        await api.put(`/hubs/${deleteCandidate.hub_id}`, { is_hidden: true });
+      }
+      await fetchHubs();
+      setMapNotice({ type: 'success', text: `${deleteCandidate.name} removed from the map.` });
+    } catch (error) {
+      setMapNotice({ type: 'error', text: error.response?.data?.message || 'Failed to remove hub.' });
+    } finally {
+      setDeleteCandidate(null);
+    }
+  }, [canManageHubs, deleteCandidate, fetchHubs]);
 
-    updateHubState(nextCustomHubs, nextHiddenHubIds);
-    setMapNotice({ type: 'success', text: `${deleteCandidate.name} removed from the map.` });
-    setDeleteCandidate(null);
-  }, [customHubs, deleteCandidate, hiddenHubIds, updateHubState]);
-
-  const restoreDefaultHubs = useCallback(() => {
-    updateHubState(customHubs, []);
-    setMapNotice({ type: 'success', text: 'Default hubs restored.' });
-  }, [customHubs, updateHubState]);
+  const restoreDefaultHubs = useCallback(async () => {
+    const hiddenDefaults = hubRecords.filter((hub) => hub.isHidden);
+    try {
+      await Promise.all(hiddenDefaults.map((hub) => api.put(`/hubs/${hub.hub_id}`, { is_hidden: false })));
+      await fetchHubs();
+      setMapNotice({ type: 'success', text: 'Default hubs restored.' });
+    } catch {
+      setMapNotice({ type: 'error', text: 'Failed to restore hubs.' });
+    }
+  }, [fetchHubs, hubRecords]);
 
   const cancelFocusMode = useCallback(() => {
     setResetViewRequest((value) => value + 1);
@@ -385,14 +415,9 @@ function LocationDensityMap({
     }
   }, [onClearSelectedVehicle]);
 
-  const allHubs = useMemo(
-    () => getActiveHubs(customHubs, hiddenHubIds).filter((hub) => isValidCoordinate(hub.lat) && isValidCoordinate(hub.lng)),
-    [customHubs, hiddenHubIds],
-  );
-
   const hubs = useMemo(
-    () => allHubs,
-    [allHubs],
+    () => hubRecords.filter((hub) => !hub.isHidden && isValidCoordinate(hub.lat) && isValidCoordinate(hub.lng)),
+    [hubRecords],
   );
 
   const hubIcons = useMemo(
@@ -428,7 +453,9 @@ function LocationDensityMap({
             <line x1="12" y1="8" x2="12" y2="12" />
             <line x1="12" y1="16" x2="12.01" y2="16" />
           </svg>
-          {addMode ? 'Click anywhere on the map to drop the new hub.' : 'Click "Add Hub", then click the map to pin a new location.'}
+          {canManageHubs
+            ? (addMode ? 'Click anywhere on the map to drop the new hub.' : 'Click "Add Hub", then click the map to pin a new location.')
+            : 'Hubs shown here are shared by every workspace user.'}
         </span>
         <div style={{ display: 'flex', gap: '8px' }}>
           {selectedVehicleId != null && (
@@ -446,7 +473,7 @@ function LocationDensityMap({
               Cancel Focus
             </button>
           )}
-          {hiddenHubIds.length > 0 && (
+          {canManageHubs && hubRecords.some((hub) => hub.isHidden) && (
             <button
               type="button"
               className="location-density-btn is-secondary"
@@ -459,29 +486,31 @@ function LocationDensityMap({
               Restore Hubs
             </button>
           )}
-          <button
-            type="button"
-            className={`location-density-btn ${addMode ? 'is-active' : 'is-primary'}`}
-            onClick={() => setAddMode((prev) => !prev)}
-          >
-            {addMode ? (
-              <>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <line x1="18" y1="6" x2="6" y2="18" />
-                  <line x1="6" y1="6" x2="18" y2="18" />
-                </svg>
-                Cancel
-              </>
-            ) : (
-              <>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z" />
-                  <circle cx="12" cy="9" r="2.5" fill="currentColor" stroke="none" />
-                </svg>
-                Add Hub
-              </>
-            )}
-          </button>
+          {canManageHubs && (
+            <button
+              type="button"
+              className={`location-density-btn ${addMode ? 'is-active' : 'is-primary'}`}
+              onClick={() => setAddMode((prev) => !prev)}
+            >
+              {addMode ? (
+                <>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                  Cancel
+                </>
+              ) : (
+                <>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z" />
+                    <circle cx="12" cy="9" r="2.5" fill="currentColor" stroke="none" />
+                  </svg>
+                  Add Hub
+                </>
+              )}
+            </button>
+          )}
           <button
             type="button"
             className="location-density-btn is-secondary"
@@ -570,7 +599,7 @@ function LocationDensityMap({
         zoomControl={false}
       >
         <MapClickHandler addMode={addMode} onPickLocation={handlePickLocation} />
-        <TileLayer attribution={CARTO_ATTRIBUTION} maxZoom={19} url={CARTO_DARK_TILE_URL} />
+        <TileLayer attribution={CARTO_ATTRIBUTION} maxZoom={19} url={CARTO_LIGHT_TILE_URL} />
         <Polygon
           pathOptions={{
             color: '#FF7A1A',
@@ -602,17 +631,19 @@ function LocationDensityMap({
                 <span>{hub.address}</span>
                 <span>Latitude: {hub.lat.toFixed(6)}</span>
                 <span>Longitude: {hub.lng.toFixed(6)}</span>
-                <div className="location-density-popup-actions">
-                  <button type="button" className="location-density-delete-hub" onClick={() => requestDeleteHub(hub)}>
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="3 6 5 6 21 6" />
-                      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-                      <path d="M10 11v6M14 11v6" />
-                      <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
-                    </svg>
-                    Delete Hub
-                  </button>
-                </div>
+                {canManageHubs && (
+                  <div className="location-density-popup-actions">
+                    <button type="button" className="location-density-delete-hub" onClick={() => requestDeleteHub(hub)}>
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="3 6 5 6 21 6" />
+                        <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                        <path d="M10 11v6M14 11v6" />
+                        <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+                      </svg>
+                      Delete Hub
+                    </button>
+                  </div>
+                )}
               </div>
             </Popup>
           </Marker>
@@ -767,7 +798,7 @@ function LocationDensityMap({
             </p>
             {!deleteCandidate.isCustom && (
               <p className="hub-modal-coords">
-                Built-in hubs are hidden locally and can be restored later.
+Built-in hubs are hidden for every user and can be restored later.
               </p>
             )}
 
