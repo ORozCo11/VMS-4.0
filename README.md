@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 <p align="center">
   <img src="frontend-spa/src/assets/vms-logo.png" alt="Barangay VMS Logo" width="160" />
 </p>
@@ -56,3 +57,7 @@ npm run dev
 - Issue reporting and verification workflow
 - Activity logs and dashboard metrics
 - Vehicle location density map
+=======
+# VMS-main
+Vehicle Management System Codebase. - Capstone Project.
+>>>>>>> 55f0490af969a2651a52a85d0fc39e5fcb8c4385
