@@ -718,6 +718,17 @@ table colgroup ~ tbody td {
 }
 td.cell-center, th.cell-center { text-align: center; }
 
+/* Badge/action-only cells: center their content instead of hugging the left
+   edge of a wider percentage-based column, which otherwise leaves a big
+   empty gap on one side (e.g. a small Status pill or Action icon buttons
+   sitting in a column sized for the widest row across the whole table). */
+tbody td:has(> .status-badge) {
+  text-align: center;
+}
+.row-actions {
+  justify-content: center;
+}
+
 /* Long free-text columns: cap width and wrap so the table stays readable
    and doesn't stretch into a wide horizontal scroll. */
 td.cell-text {
@@ -1060,7 +1071,7 @@ table a:hover {
 .row-actions {
   display: flex;
   gap: 8px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 .row-actions button, table button, .table-shell button {
   height: 36px;
@@ -1071,6 +1082,7 @@ table a:hover {
   word-break: normal;
   overflow-wrap: normal;
   flex-shrink: 0;
+  gap: 6px;
 }
 
 /* Compact icon-only row actions — replaces wide text buttons in table cells. */
@@ -1448,13 +1460,6 @@ table button.icon-btn svg,
 .ticket-alert-banner.formaint { background: linear-gradient(90deg,#fffbeb,#fef3c7); border: 1px solid #fcd34d; color: #92400e; }
 .ticket-alert-banner.forconfirm { background: linear-gradient(90deg,#faf5ff,#ede9fe); border: 1px solid #c4b5fd; color: #5b21b6; }
 
-/* --- Ticket List Header --- */
-.ticket-list-header {
-  display: flex; align-items: center; justify-content: space-between;
-  margin-bottom: 20px; padding-bottom: 14px; border-bottom: 1px solid #dbeafe;
-}
-.ticket-list-header h3 { font-size: 1rem; font-weight: 700; color: #0f172a; }
-
 /* --- Ticket Cards Grid --- */
 .ticket-card-grid {
   display: grid;
@@ -1483,20 +1488,30 @@ table button.icon-btn svg,
 .ticket-detail-overlay {
   position: fixed; inset: 0; background: rgba(15,23,42,0.6);
   backdrop-filter: blur(4px); z-index: 100;
-  display: flex; align-items: flex-start; justify-content: flex-end;
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
   animation: fadeSlide 0.2s ease;
 }
 .ticket-detail-panel {
-  width: min(600px, 100vw); height: 100vh; overflow-y: auto;
-  background: #ffffff; border-left: 1px solid #d9e6f8;
-  box-shadow: -20px 0 60px rgba(15,23,42,0.15);
+  width: min(600px, 100%); max-height: 90vh; overflow-y: auto;
+  background: #ffffff; border: 1px solid #d9e6f8;
+  border-radius: 18px;
+  box-shadow: 0 30px 70px rgba(15,23,42,0.25);
   display: flex; flex-direction: column;
+}
+/* Rendered as its own page (TicketProfilePage) instead of a floating modal —
+   drop the fixed width/height/shadow so it reads as normal page content. */
+.ticket-detail-panel.is-page {
+  width: 100%;
+  max-height: none;
+  box-shadow: none;
 }
 .ticket-detail-header {
   display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
   padding: 28px 28px 20px; border-bottom: 1px solid #e2e8f0;
   background: linear-gradient(180deg,#f8fbff,#fff);
   position: sticky; top: 0; z-index: 10;
+  border-radius: 18px 18px 0 0;
 }
 .ticket-detail-id { font-size: 0.72rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em; color: #1d4ed8; display: block; margin-bottom: 4px; }
 .ticket-detail-title { font-size: 1.2rem; font-weight: 800; color: #0f172a; margin-bottom: 10px; }
@@ -1845,6 +1860,35 @@ table button.icon-btn svg,
 .vehicle-detail-specs dt { font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
 .vehicle-detail-specs dd { font-size: 0.85rem; font-weight: 600; margin-top: 2px; }
 .vehicle-detail-status-hint { margin-top: 10px; }
+
+/* --- Vehicle Profile Page header --- */
+.vehicle-profile-header {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin-bottom: 20px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid #e2e8f0;
+  flex-wrap: wrap;
+}
+.vehicle-profile-photo {
+  width: 88px;
+  height: 66px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid #cbd5e1;
+  flex-shrink: 0;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.05);
+}
+.vehicle-profile-photo .photo-cell,
+.vehicle-profile-photo .photo-thumb {
+  width: 100%;
+  height: 100%;
+}
+.vehicle-profile-identity {
+  flex: 1;
+  min-width: 200px;
+}
 
 /* --- Dashboard Banner & Weather Widget --- */
 .dashboard-banner {
@@ -2775,7 +2819,6 @@ table button,
 }
 
 .panel-header,
-.ticket-list-header,
 .modal-header,
 .notifications-header,
 .map-header {
@@ -2784,7 +2827,6 @@ table button,
 
 .panel-header h3,
 .module-action-bar h3,
-.ticket-list-header h3,
 .modal-header h3,
 .notifications-header h4,
 .map-header h4,
@@ -3221,7 +3263,7 @@ table button,
   white-space: nowrap;
 }
 .table-shell.is-compact .row-actions {
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 4px;
 }
 
@@ -3661,8 +3703,7 @@ button.btn-view-action svg {
 
 .confirm-dialog {
   width: min(440px, 100%);
-  background:
-    linear-gradient(180deg, rgba(27, 21, 23, 0.98), rgba(15, 15, 18, 0.98));
+  background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: 10px;
   box-shadow: var(--shadow-deep);
@@ -4119,8 +4160,8 @@ button.btn-view-action svg {
 
 .hub-modal {
   width: min(420px, 100%);
-  background: #14171f;
-  border: 1px solid #2a2f3a;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
   border-radius: 14px;
   box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
   padding: 22px;
@@ -4154,7 +4195,7 @@ button.btn-view-action svg {
   margin: 0;
   font-size: 1.02rem;
   font-weight: 700;
-  color: #f7f8fb;
+  color: var(--primary-strong);
 }
 
 .hub-modal-danger .hub-modal-icon {
@@ -4163,20 +4204,20 @@ button.btn-view-action svg {
 }
 
 .hub-modal-message {
-  color: #d8dee9;
+  color: var(--text);
   font-size: 0.9rem;
   line-height: 1.5;
   margin: 12px 0 0;
 }
 
 .hub-modal-message strong {
-  color: #f7f8fb;
+  color: var(--text-strong);
 }
 
 .hub-modal-coords {
   margin: 8px 0 16px;
   font-size: 0.74rem;
-  color: #7f8799;
+  color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
 
@@ -4186,24 +4227,24 @@ button.btn-view-action svg {
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: #94a3b8;
+  color: var(--text-muted);
   margin-bottom: 6px;
 }
 
 .hub-modal-input {
   width: 100%;
   padding: 11px 13px;
-  background: #0c0e14;
-  border: 1px solid #2a2f3a;
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 9px;
-  color: #f7f8fb;
+  color: var(--text);
   font-size: 0.92rem;
   outline: none;
   transition: border-color 0.16s ease, box-shadow 0.16s ease;
 }
 
 .hub-modal-input::placeholder {
-  color: #5b6373;
+  color: var(--text-faint);
 }
 
 .hub-modal-input:focus {
@@ -4230,11 +4271,11 @@ button.btn-view-action svg {
 
 .hub-modal-cancel {
   background: transparent;
-  border-color: #2a2f3a;
-  color: #cbd5e1;
+  border-color: var(--border);
+  color: var(--text);
 }
 .hub-modal-cancel:hover {
-  background: #1e222c;
+  background: var(--surface-hover);
 }
 
 .hub-modal-save {
@@ -4683,7 +4724,6 @@ button.btn-view-action svg {
 
   .dashboard-banner,
   .module-action-bar,
-  .ticket-list-header,
   .report-heading {
     align-items: stretch;
     flex-direction: column;
@@ -5134,7 +5174,6 @@ html[data-theme="light"] .panel {
 }
 
 html[data-theme="light"] .panel-header,
-html[data-theme="light"] .ticket-list-header,
 html[data-theme="light"] .modal-header,
 html[data-theme="light"] .notifications-header,
 html[data-theme="light"] .map-header {
@@ -5143,7 +5182,6 @@ html[data-theme="light"] .map-header {
 
 html[data-theme="light"] .panel-header h3,
 html[data-theme="light"] .module-action-bar h3,
-html[data-theme="light"] .ticket-list-header h3,
 html[data-theme="light"] .modal-header h3,
 html[data-theme="light"] .notifications-header h4,
 html[data-theme="light"] .map-header h4,
@@ -5154,6 +5192,20 @@ html[data-theme="light"] .ticket-section h4,
 html[data-theme="light"] .ticket-inline-form h4,
 html[data-theme="light"] .smart-form h3 {
   color: #071a35;
+}
+
+/* Every Add/Edit form (FormModal) uses .modal-header, which has a
+   hardcoded near-black background (#101114) meant for dark mode. Unlike
+   .notifications-header/.ticket-detail-header (already relighted above),
+   .modal-header had no light-theme override, so every form dialog kept a
+   black title bar. Title text is bumped to the theme's blue accent to
+   read as an intentional header, not a leftover fix. */
+html[data-theme="light"] .modal-header {
+  background: #ffffff;
+}
+
+html[data-theme="light"] .modal-header h3 {
+  color: #2575d8;
 }
 
 html[data-theme="light"] .info-callout {
@@ -5176,9 +5228,9 @@ html[data-theme="light"] .module-description {
 
 html[data-theme="light"] .module-action-bar {
   align-items: center;
-  background: #ffffff;
+  background: #eaf4ff;
   border: 1px solid #cddcf0;
-  border-left: 3px solid #19b879;
+  border-left: 3px solid #2575d8;
   border-radius: 4px;
   gap: 12px;
   margin-bottom: 10px;
@@ -5286,7 +5338,7 @@ html[data-theme="light"] .filter-clear-all-btn {
 
 html[data-theme="light"] .table-shell {
   background: #ffffff;
-  border: 1.5px solid #93c5fd;
+  border: 2.5px solid #93c5fd;
   border-radius: 4px;
   box-shadow: 0 4px 12px rgba(31, 75, 122, 0.08);
   margin-bottom: 18px;
@@ -5353,6 +5405,78 @@ html[data-theme="light"] .table-shell button.icon-btn {
   color: #2575d8 !important;
   height: 28px;
   width: 28px;
+}
+
+/* Action-specific colors for row-action buttons (Edit, Delete, Confirm,
+   Reopen, View — rendered with icon + text label). Solid by default (not
+   just on hover) so each action reads as its own color at a glance;
+   selectors deliberately don't require .icon-btn so this also covers the
+   labeled buttons that replaced the old icon-only ones — without this
+   block, table button color would flatten every action to the same
+   light-blue default above. */
+html[data-theme="light"] table button.btn-edit-action,
+html[data-theme="light"] .table-shell button.btn-edit-action {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #ffffff !important;
+}
+html[data-theme="light"] table button.btn-edit-action:hover,
+html[data-theme="light"] .table-shell button.btn-edit-action:hover {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+  color: #ffffff !important;
+}
+
+html[data-theme="light"] table button.btn-delete-action,
+html[data-theme="light"] .table-shell button.btn-delete-action {
+  background: #dc2626;
+  border-color: #dc2626;
+  color: #ffffff !important;
+}
+html[data-theme="light"] table button.btn-delete-action:hover,
+html[data-theme="light"] .table-shell button.btn-delete-action:hover {
+  background: #b91c1c;
+  border-color: #b91c1c;
+  color: #ffffff !important;
+}
+
+html[data-theme="light"] table button.btn-confirm-action,
+html[data-theme="light"] .table-shell button.btn-confirm-action {
+  background: #16a34a;
+  border-color: #16a34a;
+  color: #ffffff !important;
+}
+html[data-theme="light"] table button.btn-confirm-action:hover,
+html[data-theme="light"] .table-shell button.btn-confirm-action:hover {
+  background: #15803d;
+  border-color: #15803d;
+  color: #ffffff !important;
+}
+
+html[data-theme="light"] table button.btn-reopen-action,
+html[data-theme="light"] .table-shell button.btn-reopen-action {
+  background: #d97706;
+  border-color: #d97706;
+  color: #ffffff !important;
+}
+html[data-theme="light"] table button.btn-reopen-action:hover,
+html[data-theme="light"] .table-shell button.btn-reopen-action:hover {
+  background: #b45309;
+  border-color: #b45309;
+  color: #ffffff !important;
+}
+
+html[data-theme="light"] table button.btn-view-action,
+html[data-theme="light"] .table-shell button.btn-view-action {
+  background: #0284c7;
+  border-color: #0284c7;
+  color: #ffffff !important;
+}
+html[data-theme="light"] table button.btn-view-action:hover,
+html[data-theme="light"] .table-shell button.btn-view-action:hover {
+  background: #0369a1;
+  border-color: #0284c7;
+  color: #ffffff !important;
 }
 
 html[data-theme="light"] .status-badge {
