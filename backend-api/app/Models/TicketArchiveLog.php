@@ -22,6 +22,7 @@ class TicketArchiveLog extends Model
         'vehicle_name',
         'plate_number',
         'final_status',
+        'maintenance_cost',
         'full_ticket_snapshot',
         'archived_by',
         'archived_at',
