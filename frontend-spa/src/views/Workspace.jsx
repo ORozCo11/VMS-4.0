@@ -553,6 +553,24 @@ function Workspace() {
     });
   };
 
+  const restoreRecord = async (path, success) => {
+    setConfirmDialog({
+      title: 'Confirm Action',
+      message: 'Restore this vehicle to active service?',
+      confirmLabel: 'Restore',
+      variant: 'primary',
+      onConfirm: async () => {
+        try {
+          await api.post(path);
+          setNotice({ type: 'success', text: success });
+          await refreshCurrent();
+        } catch (error) {
+          showError(error, setNotice);
+        }
+      },
+    });
+  };
+
   const handleConfirmDialog = async () => {
     if (!confirmDialog?.onConfirm || confirmBusy) {
       return;
@@ -632,6 +650,10 @@ function Workspace() {
         if (!vehicleObj) return false;
         return vehicleObj.capacity === filterCapacity;
       });
+    }
+
+    if (activeModule === 'vehicles' && !filterStatus) {
+      result = result.filter((row) => row.status !== 'Inactive');
     }
 
     if (filterStatus) {
@@ -756,6 +778,21 @@ function Workspace() {
 
     return result;
   }, [rawRows, searchQuery, filterCategory, filterCapacity, filterStatus, filterPriority, activeModule, condFilterStartDate, condFilterEndDate, archiveStart, archiveEnd, archiveStatusFilter]);
+
+  // Status breakdown for the Vehicle Management stat cards — counted from the
+  // full unfiltered fetch so the cards stay accurate regardless of the active
+  // search/filter selection.
+  const vehicleStats = useMemo(() => {
+    const rows = records.vehicles ?? [];
+    const countByStatus = (status) => rows.filter((row) => row.status === status).length;
+    return {
+      total: rows.length,
+      Available: countByStatus('Available'),
+      'In Use': countByStatus('In Use'),
+      'Under Maintenance': countByStatus('Under Maintenance'),
+      Inactive: countByStatus('Inactive'),
+    };
+  }, [records.vehicles]);
 
   // For the Vehicle Location module, every vehicle shown on the map should also
   // appear in the records list. We merge the saved location records (history)
@@ -1074,6 +1111,42 @@ function Workspace() {
               <button className="primary-button" type="button" onClick={() => navigate(`${roleRoutes[user.role]}/vehicles/new`)}>+ Add Vehicle</button>
             )}
           </div>
+          <section className="metric-grid" aria-label="Vehicle status summary" style={{ marginBottom: '16px' }}>
+            <article className="metric-card metric-card-iconic">
+              <span className="metric-card-icon" style={{ background: '#dbeafe', color: '#2563eb' }}>
+                <Icon name="grid" size={18} />
+              </span>
+              <div className="metric-card-body">
+                <span>Total Vehicles</span>
+                <strong>{vehicleStats.total}</strong>
+              </div>
+            </article>
+            {VEHICLE_STAT_CARDS.map(({ key, label, icon, bg, color }) => {
+              const isActive = filterStatus === key;
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  className="metric-card metric-card-iconic"
+                  style={{
+                    cursor: 'pointer',
+                    borderColor: isActive ? color : undefined,
+                    boxShadow: isActive ? `0 0 0 2px ${color}59` : undefined,
+                  }}
+                  onClick={() => setFilterStatus(isActive ? '' : key)}
+                  title={key === 'Inactive' ? 'Archived vehicles' : `Filter: ${key}`}
+                >
+                  <span className="metric-card-icon" style={{ background: bg, color }}>
+                    <Icon name={icon} size={18} />
+                  </span>
+                  <div className="metric-card-body">
+                    <span>{label}</span>
+                    <strong>{vehicleStats[key]}</strong>
+                  </div>
+                </button>
+              );
+            })}
+          </section>
           <FilterBar
             categories={lookups.categories}
             vehicles={lookups.vehicles}
@@ -1089,7 +1162,7 @@ function Workspace() {
             priorityOptions={lookups.condition_results}
             priorityLabel="Condition"
           />
-          <DataTable columns={vehicleColumns(user.role, (row) => openVehicleProfile(row, 'edit'), deleteRecord)} rows={visibleRows} onRowClick={openVehicleProfile} />
+          <DataTable columns={vehicleColumns(user.role, (row) => openVehicleProfile(row, 'edit'), deleteRecord, restoreRecord, filterStatus)} rows={visibleRows} onRowClick={openVehicleProfile} />
         </ModulePanel>
       );
     }
@@ -3126,7 +3199,14 @@ function ReportsModule({ lookups, onGenerate }) {
   );
 }
 
-function vehicleColumns(role, onEdit, deleteRecord) {
+const VEHICLE_STAT_CARDS = [
+  { key: 'Available', label: 'Available', icon: 'checkCircle', bg: '#dcfce7', color: '#16a34a' },
+  { key: 'In Use', label: 'In Use', icon: 'vehicle', bg: '#e0f2fe', color: '#0284c7' },
+  { key: 'Under Maintenance', label: 'Under Maintenance', icon: 'wrench', bg: '#fef3c7', color: '#d97706' },
+  { key: 'Inactive', label: 'Archived', icon: 'archive', bg: '#fee2e2', color: '#dc2626' },
+];
+
+function vehicleColumns(role, onEdit, deleteRecord, restoreRecord, filterStatus) {
   const columns = [
     { label: 'ID', render: (row) => row.vehicle_id },
     {
@@ -3147,13 +3227,24 @@ function vehicleColumns(role, onEdit, deleteRecord) {
     { label: 'Condition', render: (row) => <StatusBadge value={row.condition} /> },
   ];
 
+  if (filterStatus === 'Inactive') {
+    columns.push(
+      { label: 'Archived At', render: (row) => <DateBadge value={row.archived_at} /> },
+      { label: 'Archived By', render: (row) => row.archived_by?.name ?? '—' },
+    );
+  }
+
   if (role === 'Admin') {
     columns.push({
       label: 'Action',
       render: (row) => (
         <div className="row-actions">
           <button className="btn-edit-action" onClick={() => onEdit(row)} type="button" title="Edit" aria-label="Edit"><Icon name="edit" size={14} /> Edit</button>
-          <button className="btn-delete-action" onClick={() => deleteRecord(`/vehicles/${row.vehicle_id}`, 'Vehicle archived.')} type="button" title="Archive" aria-label="Archive"><Icon name="archive" size={14} /> Archive</button>
+          {row.status === 'Inactive' ? (
+            <button className="btn-edit-action" onClick={() => restoreRecord(`/vehicles/${row.vehicle_id}/restore`, 'Vehicle restored.')} type="button" title="Restore" aria-label="Restore"><Icon name="undo" size={14} /> Restore</button>
+          ) : (
+            <button className="btn-delete-action" onClick={() => deleteRecord(`/vehicles/${row.vehicle_id}`, 'Vehicle archived.')} type="button" title="Archive" aria-label="Archive"><Icon name="archive" size={14} /> Archive</button>
+          )}
         </div>
       ),
     });

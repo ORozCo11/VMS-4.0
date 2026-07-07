@@ -238,7 +238,7 @@ class FleetController extends Controller
     public function vehicles(Request $request)
     {
         $this->syncVehicleStatuses();
-        $query = Vehicle::with('category');
+        $query = Vehicle::with(['category', 'archivedBy']);
 
         if ($request->filled('q')) {
             $search = $request->string('q');
@@ -309,11 +309,32 @@ class FleetController extends Controller
     {
         $this->requireRole($request, ['Admin']);
 
-        $vehicle->update(['status' => 'Inactive']);
+        $vehicle->update([
+            'status' => 'Inactive',
+            'archived_at' => now(),
+            'archived_by' => $request->user()->id,
+        ]);
         $this->history($vehicle, 'Vehicle Archived', "{$vehicle->vehicle_name} was marked inactive.", 'vehicles', $vehicle->vehicle_id, $request);
         $this->log($request, 'Delete', 'Vehicle Management', $vehicle->vehicle_id, "Archived vehicle {$vehicle->vehicle_name}");
 
         return response()->json(['message' => 'Vehicle archived.']);
+    }
+
+    public function restoreVehicle(Request $request, Vehicle $vehicle)
+    {
+        $this->requireRole($request, ['Admin']);
+
+        abort_unless($vehicle->status === 'Inactive', 422, 'Vehicle is not archived.');
+
+        $vehicle->update([
+            'status' => 'Available',
+            'archived_at' => null,
+            'archived_by' => null,
+        ]);
+        $this->history($vehicle, 'Vehicle Restored', "{$vehicle->vehicle_name} was restored to active service.", 'vehicles', $vehicle->vehicle_id, $request);
+        $this->log($request, 'Edit', 'Vehicle Management', $vehicle->vehicle_id, "Restored vehicle {$vehicle->vehicle_name}");
+
+        return response()->json($vehicle->fresh(['category', 'archivedBy']));
     }
 
     public function locations(Request $request)
@@ -1087,7 +1108,7 @@ class FleetController extends Controller
 
     private function syncVehicleStatuses()
     {
-        $vehicles = Vehicle::all();
+        $vehicles = Vehicle::where('status', '!=', 'Inactive')->get();
         foreach ($vehicles as $vehicle) {
             $activeTicket = \App\Models\MaintenanceTicket::where('vehicle_id', $vehicle->vehicle_id)
                 ->whereNotIn('status', ['Done', 'Cancelled'])

@@ -25,11 +25,22 @@ class Vehicle extends Model
         'remarks',
         'status',
         'condition',
+        'archived_at',
+        'archived_by',
+    ];
+
+    protected $casts = [
+        'archived_at' => 'datetime',
     ];
 
     public function category()
     {
         return $this->belongsTo(VehicleCategory::class, 'category_id', 'category_id');
+    }
+
+    public function archivedBy()
+    {
+        return $this->belongsTo(User::class, 'archived_by');
     }
 
     public function issueReports()

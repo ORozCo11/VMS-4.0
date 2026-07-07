@@ -702,6 +702,14 @@
 .metric-card span { display: block; font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: #475569; margin-bottom: 10px; }
 .metric-card strong { display: block; font-size: 2rem; font-weight: 800; color: #1d4ed8; line-height: 1; }
 
+/* Iconic metric cards (e.g. Vehicle Management status summary) — icon chip + stacked label/value */
+.metric-card-iconic { display: flex; align-items: center; gap: 14px; width: 100%; padding: 16px 18px; }
+.metric-card-iconic::before { display: none; }
+.metric-card-icon { display: flex; align-items: center; justify-content: center; flex-shrink: 0; width: 40px; height: 40px; border-radius: 10px; }
+.metric-card-iconic .metric-card-body { display: flex; flex-direction: column; text-align: left; }
+.metric-card-iconic .metric-card-body span { margin-bottom: 4px; }
+.metric-card-iconic .metric-card-body strong { font-size: 1.5rem; }
+
 /* VALUE LIST */
 .value-list { grid-column: span 4; list-style: none; display: flex; flex-direction: column; gap: 8px; }
 .value-list li { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; transition: background 0.15s; }
@@ -5545,9 +5553,83 @@ html[data-theme="light"] .table-shell button.btn-view-action:hover {
 
 html[data-theme="light"] .status-badge {
   border-radius: 999px;
-  font-size: 0.68rem;
-  font-weight: 600;
-  padding: 3px 9px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 4px 10px;
+}
+
+/* Light theme reads its colors from the dark-mode .status-badge rules above
+   by cascade accident (those are unscoped, so they win in both themes) —
+   pale text-on-pale-background there is unreadable against a white table.
+   Re-assert solid, high-contrast colors here; specificity from the
+   [data-theme="light"] attribute selector guarantees these win. */
+html[data-theme="light"] .status-badge.active,
+html[data-theme="light"] .status-badge.available,
+html[data-theme="light"] .status-badge.completed,
+html[data-theme="light"] .status-badge.passed,
+html[data-theme="light"] .status-badge.resolved,
+html[data-theme="light"] .status-badge.approved,
+html[data-theme="light"] .status-badge.good,
+html[data-theme="light"] .status-badge.done,
+html[data-theme="light"] .status-badge.ticket-done,
+html[data-theme="light"] .status-badge.priority-low {
+  background: #dcfce7;
+  border-color: #86efac;
+  color: #15803d;
+}
+
+html[data-theme="light"] .status-badge.pending,
+html[data-theme="light"] .status-badge.open,
+html[data-theme="light"] .status-badge.in-progress,
+html[data-theme="light"] .status-badge.under-maintenance,
+html[data-theme="light"] .status-badge.in-maintenance,
+html[data-theme="light"] .status-badge.for-repair,
+html[data-theme="light"] .status-badge.under-repair,
+html[data-theme="light"] .status-badge.needs-inspection,
+html[data-theme="light"] .status-badge.ticket-open,
+html[data-theme="light"] .status-badge.ticket-formaint,
+html[data-theme="light"] .status-badge.ticket-repair,
+html[data-theme="light"] .status-badge.ticket-forinspect,
+html[data-theme="light"] .status-badge.ticket-forconfirm,
+html[data-theme="light"] .status-badge.priority-medium,
+html[data-theme="light"] .status-badge.priority-high,
+html[data-theme="light"] .status-badge.rework-warning {
+  background: #fef3c7;
+  border-color: #fcd34d;
+  color: #92400e;
+}
+
+html[data-theme="light"] .status-badge.inactive,
+html[data-theme="light"] .status-badge.rejected,
+html[data-theme="light"] .status-badge.failed,
+html[data-theme="light"] .status-badge.overdue,
+html[data-theme="light"] .status-badge.needs-repair,
+html[data-theme="light"] .status-badge.ticket-cancelled,
+html[data-theme="light"] .status-badge.priority-critical,
+html[data-theme="light"] .status-badge.rework-danger {
+  background: #fee2e2;
+  border-color: #fca5a5;
+  color: #b91c1c;
+}
+
+html[data-theme="light"] .status-badge.assigned,
+html[data-theme="light"] .status-badge.scheduled,
+html[data-theme="light"] .status-badge.info {
+  background: #dbeafe;
+  border-color: #93c5fd;
+  color: #1d4ed8;
+}
+
+html[data-theme="light"] .status-badge.land {
+  background: #f3e8d8;
+  border-color: #e0c9a3;
+  color: #92651a;
+}
+
+html[data-theme="light"] .status-badge.water {
+  background: #dbeafe;
+  border-color: #93c5fd;
+  color: #1d4ed8;
 }
 
 html[data-theme="light"] .part-tag {
