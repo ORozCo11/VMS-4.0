@@ -220,12 +220,34 @@
 .module-nav button.active .nav-icon { stroke: #fff; }
 .nav-icon { width: 16px; height: 16px; stroke: currentColor; stroke-width: 2; flex-shrink: 0; }
 .module-nav button span { flex: 1; }
+.module-nav button span.module-nav-badge {
+  flex: 0 0 22px;
+  box-sizing: border-box;
+  background: #ef4444;
+  color: #ffffff;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  text-align: center;
+}
+.module-nav button.active .module-nav-badge {
+  background: #ef4444;
+  color: #ffffff;
+}
 
 /* SIDEBAR — collapsed state (icons only, hidden labels) */
 .sidebar-toggle-btn { flex-shrink: 0; }
 .sidebar.collapsed .sidebar-brand { justify-content: center; padding: 8px 0 24px; }
 .sidebar.collapsed .eyebrow,
 .sidebar.collapsed .module-nav button span,
+.sidebar.collapsed .module-nav-badge,
 .sidebar.collapsed .profile-info,
 .sidebar.collapsed .profile-arrow-icon {
   display: none;
@@ -1000,6 +1022,49 @@ table a:hover {
   word-break: normal;
   overflow-wrap: normal;
   white-space: normal;
+  line-height: 1.3;
+}
+
+/* Compact table-cell date: colored month/day pill + small year/time. */
+.date-badge {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+.date-badge-pill {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  min-width: 42px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12);
+  line-height: 1.1;
+}
+.date-badge-month {
+  padding: 2px 6px;
+  background: #dc2626;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  text-align: center;
+  color: #ffffff;
+}
+.date-badge-day {
+  padding: 2px 6px;
+  font-size: 0.9rem;
+  font-weight: 800;
+  text-align: center;
+  color: #111827;
+}
+.date-badge-meta {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #2563eb;
   line-height: 1.3;
 }
 
@@ -3618,10 +3683,9 @@ button.btn-view-action svg {
 
 .auth-page {
   background:
-    radial-gradient(circle at 15% 10%, rgba(37, 99, 235, 0.16) 0%, rgba(37, 99, 235, 0) 45%),
-    radial-gradient(circle at 90% 85%, rgba(37, 99, 235, 0.14) 0%, rgba(37, 99, 235, 0) 50%),
-    linear-gradient(180deg, rgba(37, 99, 235, 0.08) 0%, rgba(8, 9, 11, 0) 44%),
-    var(--bg);
+    radial-gradient(circle at 15% 10%, rgba(96, 165, 250, 0.35) 0%, rgba(96, 165, 250, 0) 45%),
+    radial-gradient(circle at 90% 85%, rgba(59, 130, 246, 0.3) 0%, rgba(59, 130, 246, 0) 50%),
+    linear-gradient(135deg, #16305c 0%, #0b1d3a 60%, #060e1f 100%);
   padding: 32px 20px;
 }
 
@@ -3938,7 +4002,7 @@ button.btn-view-action svg {
 }
 
 .location-density-map-shell {
-  background: #050609;
+  background: #2563eb;
   border-radius: 8px;
   flex: 1;
   min-height: 520px;
@@ -3958,7 +4022,7 @@ button.btn-view-action svg {
   border-radius: 0;
   padding: 16px;
   min-height: 100vh;
-  background: #050609;
+  background: #2563eb;
   animation: fadeSlide 0.2s ease;
 }
 
@@ -4043,8 +4107,8 @@ button.btn-view-action svg {
 
 .location-density-legend {
   align-items: center;
-  background: rgba(12, 14, 20, 0.92);
-  border: 1px solid #2a2f3a;
+  background: #1d4ed8;
+  border: 1px solid #2563eb;
   border-radius: 8px;
   display: flex;
   flex-wrap: wrap;
@@ -4088,10 +4152,10 @@ button.btn-view-action svg {
 
 .legend-symbol-focus {
   align-items: center;
-  background: #0ea5e9;
+  background: #2563eb;
   border: 2px solid #e0f2fe;
   border-radius: 999px;
-  box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.24);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.24);
   color: #f0f9ff;
   display: inline-flex;
   height: 18px;
@@ -4355,10 +4419,10 @@ button.btn-view-action svg {
 .location-density-selected-vehicle {
   align-items: center;
   animation: selectedVehiclePulse 1.4s ease-in-out infinite;
-  background: #0ea5e9;
+  background: #2563eb;
   border: 2px solid #e0f2fe;
   border-radius: 999px;
-  box-shadow: 0 0 0 7px rgba(14, 165, 233, 0.24), 0 0 24px rgba(14, 165, 233, 0.85);
+  box-shadow: 0 0 0 7px rgba(37, 99, 235, 0.24), 0 0 24px rgba(37, 99, 235, 0.85);
   color: #f0f9ff;
   display: flex;
   height: 34px;
@@ -4374,11 +4438,11 @@ button.btn-view-action svg {
 @keyframes selectedVehiclePulse {
   0%,
   100% {
-    box-shadow: 0 0 0 6px rgba(14, 165, 233, 0.2), 0 0 20px rgba(14, 165, 233, 0.7);
+    box-shadow: 0 0 0 6px rgba(37, 99, 235, 0.2), 0 0 20px rgba(37, 99, 235, 0.7);
   }
 
   50% {
-    box-shadow: 0 0 0 10px rgba(14, 165, 233, 0.3), 0 0 28px rgba(14, 165, 233, 0.9);
+    box-shadow: 0 0 0 10px rgba(37, 99, 235, 0.3), 0 0 28px rgba(37, 99, 235, 0.9);
   }
 }
 

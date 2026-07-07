@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\ActivityLog;
+use App\Models\MaintenanceTicket;
 use App\Models\User;
 use App\Models\Vehicle;
 use App\Models\VehicleCategory;
@@ -128,6 +129,12 @@ class FleetController extends Controller
 
         return response()->json([
             'metrics' => $metrics,
+            'badge_counts' => [
+                'issues' => $activeIssues,
+                'tickets' => MaintenanceTicket::whereNotIn('status', ['Done', 'Cancelled'])->count(),
+                'conditions' => Vehicle::whereIn('condition', ['Needs Inspection', 'Needs Repair', 'Damaged'])->count(),
+                'schedules' => $upcomingMaintenance,
+            ],
             'vehicles_by_type' => Vehicle::query()
                 ->join('vehicle_categories', 'vehicles.category_id', '=', 'vehicle_categories.category_id')
                 ->selectRaw('vehicle_categories.category_name as label, count(*) as value')

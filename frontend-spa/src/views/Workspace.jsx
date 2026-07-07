@@ -590,7 +590,7 @@ function Workspace() {
     try {
       const request = moduleRequest('vehicles', null, payload);
       await sendPayload(request.method, request.path, payload);
-      await loadLookups();
+      await refreshCurrent();
       setNotice({ type: 'success', text: 'Vehicle added.' });
       navigate(-1);
     } catch (error) {
@@ -824,23 +824,27 @@ function Workspace() {
           </div>
 
           <nav className="module-nav" aria-label="Workspace modules">
-            {modules.map(([key, label]) => (
-              <button
-                className={key === activeModule ? 'active' : ''}
-                key={key}
-                onClick={() => {
-                  setActiveModule(key);
-                  if (isOnSpecialPage) {
-                    navigate(roleRoutes[user.role]);
-                  }
-                }}
-                title={isSidebarCollapsed ? label : undefined}
-                type="button"
-              >
-                {moduleIcons[key]}
-                <span>{label}</span>
-              </button>
-            ))}
+            {modules.map(([key, label]) => {
+              const badgeCount = dashboard?.badge_counts?.[key] ?? 0;
+              return (
+                <button
+                  className={key === activeModule ? 'active' : ''}
+                  key={key}
+                  onClick={() => {
+                    setActiveModule(key);
+                    if (isOnSpecialPage) {
+                      navigate(roleRoutes[user.role]);
+                    }
+                  }}
+                  title={isSidebarCollapsed ? label : undefined}
+                  type="button"
+                >
+                  {moduleIcons[key]}
+                  <span>{label}</span>
+                  {badgeCount > 0 && <span className="module-nav-badge">{badgeCount}</span>}
+                </button>
+              );
+            })}
           </nav>
 
           <ProfilePanel user={user} onLogout={handleLogout} setNotice={setNotice} />
@@ -3191,7 +3195,8 @@ function locationColumns(currentUser, onViewOnMap) {
         : (row.updated_by?.name ?? row.updated_by?.email ?? '-')
     ),
   },
-  { label: 'Date Updated', render: (row) => (row.updated_at ? formatDate(row.updated_at) : '-') },
+  { label: 'Date Updated', render: (row) => <DateBadge value={row.updated_at} /> },
+  { label: 'Time', render: (row) => formatTime(row.updated_at) },
   {
     label: 'View',
     render: (row) => (
@@ -3220,7 +3225,8 @@ function conditionColumns(role, onEdit, deleteRecord) {
     { label: 'Result', render: (row) => <StatusBadge value={row.condition_result} /> },
     { label: 'Checked By', render: (row) => row.checked_by?.name ?? '-' },
     { label: 'Observations', className: 'cell-text', render: (row) => <ExpandableText text={row.observations} /> },
-    { label: 'Date', render: (row) => formatDate(row.created_at) },
+    { label: 'Date', render: (row) => <DateBadge value={row.created_at} /> },
+    { label: 'Time', render: (row) => formatTime(row.created_at) },
   ];
 
   if (['Custodian', 'Admin'].includes(role)) {
@@ -3303,8 +3309,8 @@ function maintenanceColumns(role, setEditTarget, updateRecord) {
     { label: 'Personnel', width: '11%', render: (row) => row.maintenance_personnel?.name ?? '-' },
     { label: 'Progress', width: '9%', render: (row) => <StatusBadge value={row.progress_status} /> },
     { label: 'Verification', width: '9%', render: (row) => row.verification_result ? <StatusBadge value={row.verification_result} /> : '-' },
-    { label: 'Date Started', width: '8%', render: (row) => formatDate(row.date_started) },
-    { label: 'Date Completed', width: '8%', render: (row) => formatDate(row.date_completed) },
+    { label: 'Date Started', width: '8%', render: (row) => <DateBadge value={row.date_started} /> },
+    { label: 'Date Completed', width: '8%', render: (row) => <DateBadge value={row.date_completed} /> },
     {
       label: 'Action',
       render: (row) => (
@@ -3342,7 +3348,7 @@ function scheduleColumns(onEdit, deleteRecord) {
     { label: 'ID', render: (row) => row.schedule_id },
     { label: 'Vehicle', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
     { label: 'Type', render: (row) => row.maintenance_type },
-    { label: 'Date', render: (row) => formatDate(row.scheduled_date) },
+    { label: 'Date', render: (row) => <DateBadge value={row.scheduled_date} /> },
     { label: 'Time', render: (row) => row.scheduled_time ?? '-' },
     { label: 'Location', render: (row) => row.service_location ?? '-' },
     { label: 'Status', render: (row) => <StatusBadge value={row.status} /> },
@@ -3366,7 +3372,8 @@ const maintenanceHistoryColumns = [
   { label: 'Action Taken', className: 'cell-text', render: (row) => <ExpandableText text={row.action_taken} /> },
   { label: 'Parts Used', render: (row) => <PartsTags value={row.parts_used} /> },
   { label: 'Personnel', render: (row) => row.maintenance_personnel?.name ?? '-' },
-  { label: 'Completed', render: (row) => formatDate(row.date_completed ?? row.updated_at) },
+  { label: 'Completed', render: (row) => <DateBadge value={row.date_completed ?? row.updated_at} /> },
+  { label: 'Time', render: (row) => formatTime(row.date_completed ?? row.updated_at) },
 ];
 
 const historyColumns = [
@@ -3376,7 +3383,8 @@ const historyColumns = [
   { label: 'Description', className: 'cell-text', render: (row) => <ExpandableText text={row.description} /> },
   { label: 'Related Record', render: (row) => row.related_record_id ?? '-' },
   { label: 'Updated By', render: (row) => row.updated_by?.name ?? '-' },
-  { label: 'Date and Time', render: (row) => formatDate(row.created_at) },
+  { label: 'Date', render: (row) => <DateBadge value={row.created_at} /> },
+  { label: 'Time', render: (row) => formatTime(row.created_at) },
 ];
 
 function logColumns(vehicles, onViewVehicle) {
@@ -3399,7 +3407,8 @@ function logColumns(vehicles, onViewVehicle) {
       },
     },
     { label: 'Details', className: 'cell-text', render: (row) => <ExpandableText text={row.details} /> },
-    { label: 'Date and Time', render: (row) => formatDate(row.created_at) },
+    { label: 'Date', render: (row) => <DateBadge value={row.created_at} /> },
+    { label: 'Time', render: (row) => formatTime(row.created_at) },
   ];
 }
 
@@ -3674,6 +3683,48 @@ function formatDate(value) {
     dateStyle: 'medium',
     timeStyle: value.includes?.('T') ? 'short' : undefined,
   }).format(new Date(value));
+}
+
+// Compact "table cell" version of a date: a colored month/day pill plus the
+// year underneath — used in place of the long formatDate() string inside
+// table columns. Time (when the source field carries one) is its own
+// adjacent "Time" column via formatTime(), so it never repeats here.
+function DateBadge({ value }) {
+  if (!value) {
+    return '-';
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return '-';
+  }
+
+  return (
+    <span className="date-badge">
+      <span className="date-badge-pill">
+        <span className="date-badge-month">{date.toLocaleDateString('en-US', { month: 'short' })}</span>
+        <span className="date-badge-day">{date.toLocaleDateString('en-US', { day: '2-digit' })}</span>
+      </span>
+      <span className="date-badge-meta">
+        <span>{date.getFullYear()}</span>
+      </span>
+    </span>
+  );
+}
+
+// Plain time-of-day text for the "Time" column that sits next to a
+// DateBadge column — blank for date-only fields (no time component).
+function formatTime(value) {
+  if (!value || typeof value !== 'string' || !value.includes('T')) {
+    return '-';
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return '-';
+  }
+
+  return new Intl.DateTimeFormat('en-PH', { timeStyle: 'short' }).format(date);
 }
 
 function rowKey(row, index) {
@@ -4439,7 +4490,8 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, onBack, setNotice, on
               { label: 'Current Location', render: (r) => r.current_location ?? '-' },
               { label: 'Address / Area', render: (r) => r.address_area ?? '-' },
               { label: 'Updated By', render: (r) => r.updated_by?.name ?? '-' },
-              { label: 'Date Updated', render: (r) => formatDate(r.updated_at) },
+              { label: 'Date Updated', render: (r) => <DateBadge value={r.updated_at} /> },
+              { label: 'Time', render: (r) => formatTime(r.updated_at) },
             ]}
             rows={rowsFor('location', (r) => Number(r.vehicle_id) === numericId)}
           />
@@ -4454,8 +4506,8 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, onBack, setNotice, on
               { label: 'Problem / Reason', className: 'cell-text', render: (r) => <ExpandableText text={r.problem_reason} /> },
               { label: 'Personnel', render: (r) => r.maintenance_personnel?.name ?? '-' },
               { label: 'Progress', render: (r) => <StatusBadge value={r.progress_status} /> },
-              { label: 'Date Started', render: (r) => formatDate(r.date_started) },
-              { label: 'Date Completed', render: (r) => formatDate(r.date_completed) },
+              { label: 'Date Started', render: (r) => <DateBadge value={r.date_started} /> },
+              { label: 'Date Completed', render: (r) => <DateBadge value={r.date_completed} /> },
             ]}
             rows={rowsFor('maintenance', (r) => Number(r.vehicle?.vehicle_id) === numericId)}
           />
@@ -4470,7 +4522,8 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, onBack, setNotice, on
               { label: 'Title', render: (r) => r.ticket_title },
               { label: 'Status', render: (r) => <TicketStatusBadge value={r.status} /> },
               { label: 'Priority', render: (r) => <TicketStatusBadge value={r.priority} /> },
-              { label: 'Created', render: (r) => formatDate(r.created_at) },
+              { label: 'Created', render: (r) => <DateBadge value={r.created_at} /> },
+              { label: 'Time', render: (r) => formatTime(r.created_at) },
             ]}
             rows={rowsFor('tickets', (r) => Number(r.vehicle?.vehicle_id) === numericId)}
             onRowClick={onViewTicket}
@@ -4485,7 +4538,8 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, onBack, setNotice, on
               { label: 'Activity', render: (r) => r.activity_type },
               { label: 'Description', className: 'cell-text', render: (r) => <ExpandableText text={r.description} /> },
               { label: 'Updated By', render: (r) => r.updated_by?.name ?? '-' },
-              { label: 'Date and Time', render: (r) => formatDate(r.created_at) },
+              { label: 'Date', render: (r) => <DateBadge value={r.created_at} /> },
+              { label: 'Time', render: (r) => formatTime(r.created_at) },
             ]}
             rows={rowsFor('history', (r) => Number(r.vehicle?.vehicle_id) === numericId)}
           />
@@ -4573,7 +4627,8 @@ function CustodianInspectionModule({
                 { label: 'Title', render: (r) => r.ticket_title },
                 { label: 'Priority', render: (r) => <TicketStatusBadge value={r.priority} /> },
                 { label: 'Description', className: 'cell-text', render: (r) => <ExpandableText text={r.ticket_description} /> },
-                { label: 'Assigned', render: (r) => formatDate(r.assigned_at) },
+                { label: 'Assigned', render: (r) => <DateBadge value={r.assigned_at} /> },
+                { label: 'Time', render: (r) => formatTime(r.assigned_at) },
                 { label: 'Action', render: (r) => <button className="btn-edit-action" type="button" onClick={() => setEditTarget(r)} title="Inspect" aria-label="Inspect"><Icon name="search" size={14} /> Inspect</button> },
               ]}
               rows={tickets}
@@ -4810,7 +4865,8 @@ function MechanicWorkOrderModule({
                 },
                 { label: 'Type', render: (r) => r.maintenance_type ?? '—' },
                 { label: 'Instructions', className: 'cell-text', render: (r) => <ExpandableText text={r.work_order_notes ?? r.ticket_description} /> },
-                { label: 'Dispatched', render: (r) => formatDate(r.mechanic_assigned_at) },
+                { label: 'Dispatched', render: (r) => <DateBadge value={r.mechanic_assigned_at} /> },
+                { label: 'Time', render: (r) => formatTime(r.mechanic_assigned_at) },
                 { label: 'Action', render: (r) => <button className="btn-edit-action" type="button" onClick={() => onOpenLogRepairs(r)} title="Log Repairs" aria-label="Log Repairs"><Icon name="wrench" size={14} /> Log Repairs</button> },
               ]}
               rows={tickets}
@@ -4882,7 +4938,8 @@ function ticketTableColumns() {
     { label: 'Vehicle', render: (r) => <VehicleCell vehicle={r.vehicle} /> },
     { label: 'Status', render: (r) => <TicketStatusBadge value={r.status} /> },
     { label: 'Priority', render: (r) => <TicketStatusBadge value={r.priority} /> },
-    { label: 'Created', render: (r) => formatDate(r.created_at) },
+    { label: 'Created', render: (r) => <DateBadge value={r.created_at} /> },
+    { label: 'Time', render: (r) => formatTime(r.created_at) },
   ];
 }
 
@@ -4898,7 +4955,8 @@ const ticketArchiveColumns = [
   { label: 'Expenses', render: (r) => r.maintenance_cost ? `₱${Number(r.maintenance_cost).toLocaleString('en-US', { minimumFractionDigits: 2 })}` : '₱0.00' },
   { label: 'Final Status', render: (r) => <TicketStatusBadge value={r.final_status} /> },
   { label: 'Archived By', render: (r) => r.archived_by?.name ?? '—' },
-  { label: 'Archived At', render: (r) => formatDate(r.archived_at) },
+  { label: 'Archived At', render: (r) => <DateBadge value={r.archived_at} /> },
+  { label: 'Time', render: (r) => formatTime(r.archived_at) },
 ];
 
 // =========================================================================
