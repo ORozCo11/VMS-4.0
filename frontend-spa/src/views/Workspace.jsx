@@ -600,6 +600,24 @@ function Workspace() {
     });
   };
 
+  const restoreRecord = async (path, success) => {
+    setConfirmDialog({
+      title: 'Confirm Action',
+      message: 'Restore this vehicle to active service?',
+      confirmLabel: 'Restore',
+      variant: 'primary',
+      onConfirm: async () => {
+        try {
+          await api.post(path);
+          setNotice({ type: 'success', text: success });
+          await refreshCurrent();
+        } catch (error) {
+          showError(error, setNotice);
+        }
+      },
+    });
+  };
+
   const handleConfirmDialog = async () => {
     if (!confirmDialog?.onConfirm || confirmBusy) {
       return;
@@ -1230,7 +1248,7 @@ function Workspace() {
             priorityOptions={lookups.condition_results}
             priorityLabel="Condition"
           />
-          <DataTable columns={vehicleColumns(user.role, (row) => openVehicleProfile(row, 'edit'), deleteRecord)} rows={visibleRows} onRowClick={openVehicleProfile} />
+          <DataTable columns={vehicleColumns(user.role, (row) => openVehicleProfile(row, 'edit'), deleteRecord, restoreRecord, filterStatus)} rows={visibleRows} onRowClick={openVehicleProfile} />
         </ModulePanel>
       );
     }
@@ -3367,7 +3385,7 @@ const VEHICLE_STAT_CARDS = [
   { key: 'Inactive', label: 'Archived', icon: 'archive', bg: '#fee2e2', color: '#dc2626' },
 ];
 
-function vehicleColumns(role, onEdit, deleteRecord) {
+function vehicleColumns(role, onEdit, deleteRecord, restoreRecord, filterStatus) {
   const columns = [
     { label: 'ID', render: (row) => row.vehicle_id },
     {
@@ -3388,13 +3406,24 @@ function vehicleColumns(role, onEdit, deleteRecord) {
     { label: 'Condition', render: (row) => <StatusBadge value={row.condition} /> },
   ];
 
+  if (filterStatus === 'Inactive') {
+    columns.push(
+      { label: 'Archived At', render: (row) => <DateBadge value={row.archived_at} /> },
+      { label: 'Archived By', render: (row) => <UserAvatarName user={row.archived_by} fallback="—" /> },
+    );
+  }
+
   if (role === 'Admin') {
     columns.push({
       label: 'Action',
       render: (row) => (
         <div className="row-actions">
           <button className="btn-edit-action" onClick={() => onEdit(row)} type="button" title="Edit" aria-label="Edit"><Icon name="edit" size={14} /> Edit</button>
-          <button className="btn-delete-action" onClick={() => deleteRecord(`/vehicles/${row.vehicle_id}`, 'Vehicle archived.')} type="button" title="Archive" aria-label="Archive"><Icon name="archive" size={14} /> Archive</button>
+          {row.status === 'Inactive' ? (
+            <button className="btn-edit-action" onClick={() => restoreRecord(`/vehicles/${row.vehicle_id}/restore`, 'Vehicle restored.')} type="button" title="Restore" aria-label="Restore"><Icon name="undo" size={14} /> Restore</button>
+          ) : (
+            <button className="btn-delete-action" onClick={() => deleteRecord(`/vehicles/${row.vehicle_id}`, 'Vehicle archived.')} type="button" title="Archive" aria-label="Archive"><Icon name="archive" size={14} /> Archive</button>
+          )}
         </div>
       ),
     });
