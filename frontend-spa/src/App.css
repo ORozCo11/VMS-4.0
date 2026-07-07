@@ -237,6 +237,24 @@
   padding: 0;
   text-align: center;
 }
+/* Numeric count badge next to module headings (e.g. "Issue Reports [2]"),
+   matching the sidebar nav badge's red pill treatment. */
+.count-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 6px;
+  background: #ef4444;
+  color: #ffffff;
+  font-size: 0.72rem;
+  font-weight: 800;
+  line-height: 1;
+  vertical-align: middle;
+}
+
 .module-nav button.active .module-nav-badge {
   background: #ef4444;
   color: #ffffff;
@@ -484,6 +502,53 @@
 .notice.success { background: linear-gradient(90deg, #ecfdf5, #d1fae5); border: 1px solid #86efac; color: #065f46; }
 .notice.error { background: linear-gradient(90deg, #fef2f2, #fee2e2); border: 1px solid #fca5a5; color: #991b1b; }
 
+/* Floating toast for every add/edit/delete/validation result — replaces the
+   old full-width inline banner so it overlays the page instead of pushing
+   content down, and auto-dismisses instead of sticking around. */
+.toast-notice {
+  position: fixed;
+  top: 84px;
+  right: 28px;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 16px;
+  border-radius: 10px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  max-width: 380px;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.18);
+  animation: fadeSlide 0.25s ease;
+}
+.toast-notice-close {
+  margin-left: auto;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  cursor: pointer;
+  opacity: 0.7;
+  padding: 2px;
+  border-radius: 50%;
+  color: inherit;
+}
+.toast-notice-close:hover { opacity: 1; background: rgba(0, 0, 0, 0.06); }
+.toast-notice.success { background: rgba(54, 198, 109, 0.12); border: 1px solid rgba(54, 198, 109, 0.3); color: #8ee7ad; }
+.toast-notice.error { background: rgba(255, 92, 92, 0.12); border: 1px solid rgba(255, 92, 92, 0.3); color: #ffa3a3; }
+html[data-theme="light"] .toast-notice.success {
+  background: linear-gradient(90deg, #ecfdf5, #d1fae5);
+  border: 1px solid #86efac;
+  color: #065f46;
+}
+html[data-theme="light"] .toast-notice.error {
+  background: linear-gradient(90deg, #fef2f2, #fee2e2);
+  border: 1px solid #fca5a5;
+  color: #991b1b;
+}
+
 .loading {
   display: flex; align-items: center; justify-content: center;
   padding: 60px; color: #2563eb; font-size: 0.9rem; font-weight: 600;
@@ -674,7 +739,7 @@
 .info-callout {
   display: flex; align-items: flex-start; gap: 12px;
   background: linear-gradient(90deg, #eff6ff, #dbeafe); border: 1px solid #93c5fd;
-  border-radius: 10px; padding: 12px 16px; margin-bottom: 20px;
+  border-radius: 10px; padding: 12px 16px; margin-bottom: 0;
 }
 .callout-icon { width: 16px; height: 16px; stroke: #1d4ed8; flex-shrink: 0; margin-top: 2px; }
 .module-description { font-size: 0.85rem; color: #1e3a8a; font-weight: 600; line-height: 1.5; }
@@ -701,6 +766,14 @@
 .metric-card:nth-child(6)::before { background: #0ea5e9; }
 .metric-card span { display: block; font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: #475569; margin-bottom: 10px; }
 .metric-card strong { display: block; font-size: 2rem; font-weight: 800; color: #1d4ed8; line-height: 1; }
+
+/* Iconic metric cards (e.g. Vehicle Management status summary) — icon chip + stacked label/value */
+.metric-card-iconic { display: flex; align-items: center; gap: 14px; width: 100%; padding: 16px 18px; }
+.metric-card-iconic::before { display: none; }
+.metric-card-icon { display: flex; align-items: center; justify-content: center; flex-shrink: 0; width: 40px; height: 40px; border-radius: 10px; }
+.metric-card-iconic .metric-card-body { display: flex; flex-direction: column; text-align: left; }
+.metric-card-iconic .metric-card-body span { margin-bottom: 4px; }
+.metric-card-iconic .metric-card-body strong { font-size: 1.5rem; }
 
 /* VALUE LIST */
 .value-list { grid-column: span 4; list-style: none; display: flex; flex-direction: column; gap: 8px; }
@@ -1789,6 +1862,96 @@ table button.icon-btn svg,
   content: ''; position: absolute; left: 6px; top: 50%; transform: translateY(-50%);
   width: 6px; height: 6px; background: #3b82f6; border-radius: 50%;
 }
+
+/* Account avatar dropdown (topbar, replaces the old sidebar profile panel) */
+.profile-menu-container {
+  position: relative;
+}
+.profile-menu-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  border-radius: 50%;
+}
+.profile-menu-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #2563eb, #1d4ed8);
+  color: #ffffff;
+  font-size: 0.85rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.profile-menu-dropdown {
+  position: absolute; top: 48px; right: 0;
+  width: 240px;
+  background: #ffffff; border: 1px solid #e2e8f0;
+  border-radius: 12px; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.05);
+  z-index: 100; overflow: hidden;
+  animation: slideDown 0.15s ease-out;
+  padding: 8px;
+}
+.profile-menu-user {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 6px 12px;
+}
+.profile-menu-user-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.profile-menu-name {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #0f172a;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.profile-menu-role {
+  font-size: 0.72rem;
+  color: #64748b;
+}
+.profile-menu-divider {
+  height: 1px;
+  background: #f1f5f9;
+  margin: 4px 0;
+}
+.profile-menu-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 8px;
+  border: none;
+  background: none;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #1e293b;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s;
+}
+.profile-menu-item:hover {
+  background: #f1f5f9;
+}
+.profile-menu-item-danger {
+  color: #dc2626;
+}
+.profile-menu-item-danger:hover {
+  background: #fef2f2;
+}
 .notification-content { flex-grow: 1; display: flex; flex-direction: column; gap: 4px; }
 .notification-title { font-size: 0.85rem; font-weight: 700; color: #1e293b; }
 .notification-msg { font-size: 0.8rem; color: #475569; line-height: 1.4; }
@@ -2068,6 +2231,30 @@ table button.icon-btn svg,
   color: #64748b;
 }
 
+.local-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.export-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 38px;
+  height: 38px;
+  border-radius: 9px;
+  border: 1.5px solid #2563eb;
+  background: #eff6ff;
+  color: #2563eb;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.15s ease;
+}
+.export-btn:hover {
+  background: #dbeafe;
+  transform: translateY(-1px);
+}
+
 /* Filter Bar Styles */
 .filter-bar-container {
   display: flex;
@@ -2122,7 +2309,7 @@ table button.icon-btn svg,
   transform: translateY(-1px);
 }
 .filter-apply-btn:disabled {
-  opacity: 0.45;
+  opacity: 0.9;
   cursor: not-allowed;
 }
 
@@ -5237,6 +5424,14 @@ html[data-theme="light"] .panel {
   padding: 14px 16px;
 }
 
+/* Module content panels (the card wrapping a table + its search/filter bar)
+   get a stronger blue-themed border/shadow so tables read as a distinct,
+   bordered block instead of blending into the page background. */
+html[data-theme="light"] .module-grid .panel {
+  border: 2px solid #60a5fa;
+  box-shadow: 0 10px 24px rgba(37, 99, 235, 0.1);
+}
+
 html[data-theme="light"] .panel-header,
 html[data-theme="light"] .modal-header,
 html[data-theme="light"] .notifications-header,
@@ -5276,7 +5471,7 @@ html[data-theme="light"] .info-callout {
   background: #f5f8fd !important;
   border: 1px solid #cddcf0 !important;
   border-radius: 5px;
-  margin-bottom: 14px;
+  margin-bottom: 0;
   padding: 10px 14px;
 }
 
@@ -5292,13 +5487,12 @@ html[data-theme="light"] .module-description {
 
 html[data-theme="light"] .module-action-bar {
   align-items: center;
-  background: #eaf4ff;
-  border: 1px solid #cddcf0;
-  border-left: 3px solid #2575d8;
-  border-radius: 4px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
   gap: 12px;
-  margin-bottom: 10px;
-  padding: 8px 10px;
+  margin-bottom: 4px;
+  padding: 4px 0 12px;
 }
 
 html[data-theme="light"] .module-action-bar h3 {
@@ -5307,12 +5501,13 @@ html[data-theme="light"] .module-action-bar h3 {
 }
 
 html[data-theme="light"] .filter-bar-container {
-  background: #e8f0fa;
-  border: 1px solid #cbd9eb;
-  border-radius: 4px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid #e2edf9;
+  border-radius: 0;
   gap: 9px;
-  margin: 10px 0 12px;
-  padding: 10px 12px;
+  margin: 4px 0 14px;
+  padding: 0 0 14px;
 }
 
 html[data-theme="light"] .filter-label {
@@ -5350,6 +5545,7 @@ html[data-theme="light"] .local-search-container {
 html[data-theme="light"] .local-search-input {
   height: 30px;
   padding-left: 34px;
+  border: 1.5px solid #93c5fd;
 }
 
 html[data-theme="light"] .smart-form input:focus,
@@ -5363,8 +5559,7 @@ html[data-theme="light"] .popover-date-group input[type="date"]:focus {
 }
 
 html[data-theme="light"] .primary-button,
-html[data-theme="light"] .primary-link,
-html[data-theme="light"] .filter-apply-btn {
+html[data-theme="light"] .primary-link {
   background: #2f7de1 !important;
   border: 1px solid #2f7de1 !important;
   border-radius: 3px;
@@ -5377,10 +5572,28 @@ html[data-theme="light"] .filter-apply-btn {
 }
 
 html[data-theme="light"] .primary-button:hover:not(:disabled),
-html[data-theme="light"] .primary-link:hover,
-html[data-theme="light"] .filter-apply-btn:hover:not(:disabled) {
+html[data-theme="light"] .primary-link:hover {
   background: #246cc8 !important;
   border-color: #246cc8 !important;
+  box-shadow: none;
+}
+
+/* Match the "Filter" apply button to the solid blue Edit-action style
+   instead of the paler primary-button tint, so it doesn't read as washed out. */
+html[data-theme="light"] .filter-apply-btn {
+  background: #2563eb !important;
+  border: 1px solid #2563eb !important;
+  border-radius: 3px;
+  box-shadow: none;
+  color: #ffffff !important;
+  font-size: 0.76rem;
+  font-weight: 600;
+  min-height: 30px;
+  padding: 6px 14px;
+}
+html[data-theme="light"] .filter-apply-btn:hover:not(:disabled) {
+  background: #1d4ed8 !important;
+  border-color: #1d4ed8 !important;
   box-shadow: none;
 }
 
@@ -5398,6 +5611,19 @@ html[data-theme="light"] .filter-clear-all-btn {
   color: #2575d8;
   font-size: 0.74rem;
   font-weight: 600;
+}
+
+/* "Clear Filters" is a reset action — match the solid red "Archive" button
+   style so it doesn't blend in with the neutral "Filter" button next to it. */
+html[data-theme="light"] .filter-clear-btn {
+  background: #dc2626;
+  border: 1px solid #dc2626;
+  color: #ffffff;
+}
+html[data-theme="light"] .filter-clear-btn:hover {
+  background: #b91c1c;
+  border-color: #b91c1c;
+  color: #ffffff;
 }
 
 html[data-theme="light"] .table-shell {
@@ -5545,9 +5771,83 @@ html[data-theme="light"] .table-shell button.btn-view-action:hover {
 
 html[data-theme="light"] .status-badge {
   border-radius: 999px;
-  font-size: 0.68rem;
-  font-weight: 600;
-  padding: 3px 9px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 4px 10px;
+}
+
+/* Light theme reads its colors from the dark-mode .status-badge rules above
+   by cascade accident (those are unscoped, so they win in both themes) —
+   pale text-on-pale-background there is unreadable against a white table.
+   Re-assert solid, high-contrast colors here; specificity from the
+   [data-theme="light"] attribute selector guarantees these win. */
+html[data-theme="light"] .status-badge.active,
+html[data-theme="light"] .status-badge.available,
+html[data-theme="light"] .status-badge.completed,
+html[data-theme="light"] .status-badge.passed,
+html[data-theme="light"] .status-badge.resolved,
+html[data-theme="light"] .status-badge.approved,
+html[data-theme="light"] .status-badge.good,
+html[data-theme="light"] .status-badge.done,
+html[data-theme="light"] .status-badge.ticket-done,
+html[data-theme="light"] .status-badge.priority-low {
+  background: #dcfce7;
+  border-color: #86efac;
+  color: #15803d;
+}
+
+html[data-theme="light"] .status-badge.pending,
+html[data-theme="light"] .status-badge.open,
+html[data-theme="light"] .status-badge.in-progress,
+html[data-theme="light"] .status-badge.under-maintenance,
+html[data-theme="light"] .status-badge.in-maintenance,
+html[data-theme="light"] .status-badge.for-repair,
+html[data-theme="light"] .status-badge.under-repair,
+html[data-theme="light"] .status-badge.needs-inspection,
+html[data-theme="light"] .status-badge.ticket-open,
+html[data-theme="light"] .status-badge.ticket-formaint,
+html[data-theme="light"] .status-badge.ticket-repair,
+html[data-theme="light"] .status-badge.ticket-forinspect,
+html[data-theme="light"] .status-badge.ticket-forconfirm,
+html[data-theme="light"] .status-badge.priority-medium,
+html[data-theme="light"] .status-badge.priority-high,
+html[data-theme="light"] .status-badge.rework-warning {
+  background: #fef3c7;
+  border-color: #fcd34d;
+  color: #92400e;
+}
+
+html[data-theme="light"] .status-badge.inactive,
+html[data-theme="light"] .status-badge.rejected,
+html[data-theme="light"] .status-badge.failed,
+html[data-theme="light"] .status-badge.overdue,
+html[data-theme="light"] .status-badge.needs-repair,
+html[data-theme="light"] .status-badge.ticket-cancelled,
+html[data-theme="light"] .status-badge.priority-critical,
+html[data-theme="light"] .status-badge.rework-danger {
+  background: #fee2e2;
+  border-color: #fca5a5;
+  color: #b91c1c;
+}
+
+html[data-theme="light"] .status-badge.assigned,
+html[data-theme="light"] .status-badge.scheduled,
+html[data-theme="light"] .status-badge.info {
+  background: #dbeafe;
+  border-color: #93c5fd;
+  color: #1d4ed8;
+}
+
+html[data-theme="light"] .status-badge.land {
+  background: #f3e8d8;
+  border-color: #e0c9a3;
+  color: #92651a;
+}
+
+html[data-theme="light"] .status-badge.water {
+  background: #dbeafe;
+  border-color: #93c5fd;
+  color: #1d4ed8;
 }
 
 html[data-theme="light"] .part-tag {

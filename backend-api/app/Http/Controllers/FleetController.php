@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Controllers\Concerns\UploadsImages;
 use App\Models\ActivityLog;
 use App\Models\MaintenanceTicket;
 use App\Models\User;
@@ -18,11 +19,12 @@ use App\Rules\NumberOnly;
 use App\Rules\TextOnly;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 
 class FleetController extends Controller
 {
+    use UploadsImages;
+
     private array $issueTypes = [
         'Engine Problem',
         'Brake Problem',
@@ -134,6 +136,12 @@ class FleetController extends Controller
                 'tickets' => MaintenanceTicket::whereNotIn('status', ['Done', 'Cancelled'])->count(),
                 'conditions' => Vehicle::whereIn('condition', ['Needs Inspection', 'Needs Repair', 'Damaged'])->count(),
                 'schedules' => $upcomingMaintenance,
+                'ticketInspections' => MaintenanceTicket::where('assigned_custodian_id', $request->user()->id)
+                    ->where('status', 'Open')
+                    ->count(),
+                'ticketVerifications' => MaintenanceTicket::where('assigned_custodian_id', $request->user()->id)
+                    ->where('status', 'For Inspection')
+                    ->count(),
             ],
             'vehicles_by_type' => Vehicle::query()
                 ->join('vehicle_categories', 'vehicles.category_id', '=', 'vehicle_categories.category_id')
@@ -535,7 +543,30 @@ class FleetController extends Controller
 
     public function updateIssue(Request $request, VehicleIssueReport $issue)
     {
-        $this->requireRole($request, ['Admin', 'Maintenance Personnel']);
+        $this->requireRole($request, ['Admin', 'Maintenance Personnel', 'Custodian']);
+
+        if ($request->user()->role === 'Custodian') {
+            abort_unless($issue->reported_by === $request->user()->id, 403, 'You can only edit your own issue reports.');
+            abort_unless($issue->status === 'Pending', 422, 'This issue has already been reviewed and can no longer be edited.');
+
+            $data = $request->validate([
+                'issue_type' => ['sometimes', Rule::in($this->issueTypes)],
+                'issue_description' => ['sometimes', 'string'],
+                'severity_level' => ['sometimes', Rule::in(['Low', 'Medium', 'High', 'Critical'])],
+                'photo' => ['nullable', 'image', 'max:4096'],
+                'remarks' => ['nullable', 'string'],
+            ]);
+
+            if ($request->hasFile('photo')) {
+                $data['photo_url'] = $this->storeUploadedImage($request->file('photo'), 'issue-attachments');
+            }
+            unset($data['photo']);
+
+            $issue->update($data);
+            $this->log($request, 'Edit', 'Vehicle Issue Reports', $issue->issue_report_id, "Updated issue report #{$issue->issue_report_id}");
+
+            return $issue->fresh(['vehicle.category', 'reportedBy']);
+        }
 
         $data = $request->validate([
             'status' => ['sometimes', Rule::in(['Pending', 'Under Review', 'In Maintenance', 'Resolved'])],
@@ -573,6 +604,23 @@ class FleetController extends Controller
         });
 
         return $issue->fresh(['vehicle.category', 'reportedBy']);
+    }
+
+    public function destroyIssue(Request $request, VehicleIssueReport $issue)
+    {
+        $user = $request->user();
+
+        if ($user->role === 'Custodian') {
+            abort_unless($issue->reported_by === $user->id, 403, 'You can only delete your own issue reports.');
+            abort_unless($issue->status === 'Pending', 422, 'This issue has already been reviewed and can no longer be deleted.');
+        } else {
+            $this->requireRole($request, ['Admin']);
+        }
+
+        $this->log($request, 'Delete', 'Vehicle Issue Reports', $issue->issue_report_id, "Deleted issue report #{$issue->issue_report_id}");
+        $issue->delete();
+
+        return response()->json(['message' => 'Issue report deleted.']);
     }
 
     public function maintenanceRecords(Request $request)
@@ -1020,40 +1068,6 @@ class FleetController extends Controller
     private function storeVehiclePhoto($file): string
     {
         return $this->storeUploadedImage($file, 'vehicles');
-    }
-
-    private function storeUploadedImage($file, string $directory): string
-    {
-        $filename = uniqid(rtrim($directory, '-') . '_', true) . '.' . $file->getClientOriginalExtension();
-
-        try {
-            $path = Storage::disk('supabase')->putFileAs($directory, $file, $filename, 'public');
-
-            return $this->publicStorageUrl($path);
-        } catch (\Throwable $throwable) {
-            // Don't fail the request, but make the fallback visible — a silent
-            // fallback previously hid broken Supabase credentials for a long time.
-            \Illuminate\Support\Facades\Log::warning(
-                "Supabase upload failed for {$directory}/{$filename}; stored locally instead. ({$throwable->getMessage()})"
-            );
-            $path = Storage::disk('public')->putFileAs($directory, $file, $filename, 'public');
-
-            return $this->publicLocalStorageUrl($path);
-        }
-    }
-
-    private function publicStorageUrl(string $path): string
-    {
-        $baseUrl = rtrim((string) config('filesystems.disks.supabase.url'), '/');
-
-        return $baseUrl === '' ? $path : $baseUrl . '/' . ltrim($path, '/');
-    }
-
-    private function publicLocalStorageUrl(string $path): string
-    {
-        $baseUrl = rtrim((string) config('app.url'), '/');
-
-        return $baseUrl . '/storage/' . ltrim($path, '/');
     }
 
     private function history(Vehicle $vehicle, string $activityType, string $description, string $relatedTable, int|string $relatedRecordId, Request $request): void

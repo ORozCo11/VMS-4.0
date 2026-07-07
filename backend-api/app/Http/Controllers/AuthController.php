@@ -30,6 +30,12 @@ class AuthController extends Controller
             ], 401); // Returns 401 Unauthorized status code
         }
 
+        if (!$user->is_active) {
+            return response()->json([
+                'message' => 'This account has been deactivated. Contact an administrator.'
+            ], 403);
+        }
+
         // 4. Issue a secure, unique Sanctum token string and tag it with the user's system role
         $token = $user->createToken('auth_token', [$user->role])->plainTextToken;
 
