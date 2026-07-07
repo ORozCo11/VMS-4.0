@@ -3425,21 +3425,7 @@ function categoryColumns(onEdit, deleteRecord) {
 function userColumns(onEdit, onToggleActive, currentUserId) {
   return [
     { label: 'ID', render: (row) => row.id },
-    {
-      label: 'User',
-      render: (row) => (
-        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
-          {row.photo_url ? (
-            <PhotoCell alt={row.name} url={row.photo_url} />
-          ) : (
-            <span className="profile-menu-avatar" style={{ width: '28px', height: '28px', fontSize: '0.7rem' }}>
-              {row.name ? row.name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase() : 'U'}
-            </span>
-          )}
-          <span>{row.name}</span>
-        </div>
-      ),
-    },
+    { label: 'User', render: (row) => <UserAvatarName user={row} /> },
     { label: 'Email', render: (row) => row.email },
     { label: 'Phone', render: (row) => row.phone ?? '-' },
     { label: 'Role', render: (row) => <StatusBadge value={row.role} /> },
@@ -3470,11 +3456,7 @@ function locationColumns(currentUser, onViewOnMap) {
   { label: 'Address / Area', render: (row) => row.address_area ?? '-' },
   {
     label: 'Updated By',
-    render: (row) => (
-      row.is_current_snapshot
-        ? (currentUser?.name ?? currentUser?.email ?? '-')
-        : (row.updated_by?.name ?? row.updated_by?.email ?? '-')
-    ),
+    render: (row) => <UserAvatarName user={row.is_current_snapshot ? currentUser : row.updated_by} />,
   },
   { label: 'Date Updated', render: (row) => <DateBadge value={row.updated_at} /> },
   { label: 'Time', render: (row) => formatTime(row.updated_at) },
@@ -3504,7 +3486,7 @@ function conditionColumns(role, onEdit, deleteRecord) {
     { label: 'ID', render: (row) => row.condition_check_id },
     { label: 'Vehicle', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
     { label: 'Result', render: (row) => <StatusBadge value={row.condition_result} /> },
-    { label: 'Checked By', render: (row) => row.checked_by?.name ?? '-' },
+    { label: 'Checked By', render: (row) => <UserAvatarName user={row.checked_by} /> },
     { label: 'Observations', className: 'cell-text', render: (row) => <ExpandableText text={row.observations} /> },
     { label: 'Date', render: (row) => <DateBadge value={row.created_at} /> },
     { label: 'Time', render: (row) => formatTime(row.created_at) },
@@ -3553,10 +3535,10 @@ function issueColumns(role, onEdit, onCreateTicketFromIssue, setUserInfoTarget, 
           ? (
             <button
               type="button"
-              className="issue-reporter issue-reporter-link"
+              className="issue-reporter-link"
               onClick={() => setUserInfoTarget(row.reported_by)}
             >
-              {row.reported_by.name}
+              <UserAvatarName user={row.reported_by} />
             </button>
           )
           : <span className="issue-reporter">-</span>
@@ -3605,7 +3587,7 @@ function maintenanceColumns(role, setEditTarget, updateRecord) {
     { label: 'Vehicle', width: '17%', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
     { label: 'Type', width: '11%', render: (row) => row.maintenance_type },
     { label: 'Problem / Reason', width: '17%', className: 'cell-text', render: (row) => <ExpandableText text={row.problem_reason} /> },
-    { label: 'Personnel', width: '11%', render: (row) => row.maintenance_personnel?.name ?? '-' },
+    { label: 'Personnel', width: '11%', render: (row) => <UserAvatarName user={row.maintenance_personnel} /> },
     { label: 'Progress', width: '9%', render: (row) => <StatusBadge value={row.progress_status} /> },
     { label: 'Verification', width: '9%', render: (row) => row.verification_result ? <StatusBadge value={row.verification_result} /> : '-' },
     { label: 'Date Started', width: '8%', render: (row) => <DateBadge value={row.date_started} /> },
@@ -3636,7 +3618,7 @@ function maintenanceStatusColumns(setEditTarget) {
     { label: 'Type', render: (row) => row.maintenance_type },
     { label: 'Problem / Reason', className: 'cell-text', render: (row) => <ExpandableText text={row.problem_reason} /> },
     { label: 'Action Taken', className: 'cell-text', render: (row) => <ExpandableText text={row.action_taken} /> },
-    { label: 'Personnel', render: (row) => row.maintenance_personnel?.name ?? '-' },
+    { label: 'Personnel', render: (row) => <UserAvatarName user={row.maintenance_personnel} /> },
     { label: 'Progress', render: (row) => <StatusBadge value={row.progress_status} /> },
     { label: 'Action', render: (row) => <button className="btn-edit-action" onClick={() => setEditTarget(row)} type="button" title="Verify" aria-label="Verify"><Icon name="checkCircle" size={14} /> Verify</button> },
   ];
@@ -3681,7 +3663,7 @@ const historyColumns = [
   { label: 'Activity', render: (row) => row.activity_type },
   { label: 'Description', className: 'cell-text', render: (row) => <ExpandableText text={row.description} /> },
   { label: 'Related Record', render: (row) => row.related_record_id ?? '-' },
-  { label: 'Updated By', render: (row) => row.updated_by?.name ?? '-' },
+  { label: 'Updated By', render: (row) => <UserAvatarName user={row.updated_by} /> },
   { label: 'Date', render: (row) => <DateBadge value={row.created_at} /> },
   { label: 'Time', render: (row) => formatTime(row.created_at) },
 ];
@@ -3689,7 +3671,7 @@ const historyColumns = [
 function logColumns(vehicles, onViewVehicle) {
   return [
     { label: 'ID', render: (row) => row.log_id },
-    { label: 'User', render: (row) => row.user?.name ?? '-' },
+    { label: 'User', render: (row) => <UserAvatarName user={row.user} /> },
     { label: 'Role', render: (row) => row.role ?? '-' },
     { label: 'Action', render: (row) => row.action },
     { label: 'Module', render: (row) => row.module },
@@ -3854,6 +3836,27 @@ function PhotoCell({ url, alt }) {
     <a className="photo-cell" href={resolved} rel="noreferrer" target="_blank">
       <img alt={alt} className="photo-thumb" src={resolved} loading="lazy" />
     </a>
+  );
+}
+
+// Consistent "avatar + name" cell used everywhere a table references a user
+// (Reported By, Checked By, Personnel, Updated By, Archived By, etc.).
+function UserAvatarName({ user, fallback = '-' }) {
+  if (!user || !user.name) {
+    return <span className="user-avatar-name-empty">{fallback}</span>;
+  }
+
+  const initials = user.name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase();
+
+  return (
+    <span className="user-avatar-name">
+      {user.photo_url ? (
+        <img className="user-avatar-name-photo" src={resolvePhotoUrl(user.photo_url)} alt={user.name} />
+      ) : (
+        <span className="user-avatar-name-initials">{initials}</span>
+      )}
+      <span>{user.name}</span>
+    </span>
   );
 }
 
@@ -4841,7 +4844,7 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, onBack, setNotice, on
             columns={[
               { label: 'Current Location', render: (r) => r.current_location ?? '-' },
               { label: 'Address / Area', render: (r) => r.address_area ?? '-' },
-              { label: 'Updated By', render: (r) => r.updated_by?.name ?? '-' },
+              { label: 'Updated By', render: (r) => <UserAvatarName user={r.updated_by} /> },
               { label: 'Date Updated', render: (r) => <DateBadge value={r.updated_at} /> },
               { label: 'Time', render: (r) => formatTime(r.updated_at) },
             ]}
@@ -4856,7 +4859,7 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, onBack, setNotice, on
             columns={[
               { label: 'Type', render: (r) => r.maintenance_type },
               { label: 'Problem / Reason', className: 'cell-text', render: (r) => <ExpandableText text={r.problem_reason} /> },
-              { label: 'Personnel', render: (r) => r.maintenance_personnel?.name ?? '-' },
+              { label: 'Personnel', render: (r) => <UserAvatarName user={r.maintenance_personnel} /> },
               { label: 'Progress', render: (r) => <StatusBadge value={r.progress_status} /> },
               { label: 'Date Started', render: (r) => <DateBadge value={r.date_started} /> },
               { label: 'Date Completed', render: (r) => <DateBadge value={r.date_completed} /> },
@@ -4889,7 +4892,7 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, onBack, setNotice, on
             columns={[
               { label: 'Activity', render: (r) => r.activity_type },
               { label: 'Description', className: 'cell-text', render: (r) => <ExpandableText text={r.description} /> },
-              { label: 'Updated By', render: (r) => r.updated_by?.name ?? '-' },
+              { label: 'Updated By', render: (r) => <UserAvatarName user={r.updated_by} /> },
               { label: 'Date', render: (r) => <DateBadge value={r.created_at} /> },
               { label: 'Time', render: (r) => formatTime(r.created_at) },
             ]}
@@ -5313,7 +5316,7 @@ const ticketArchiveColumns = [
   { label: 'Vehicle', render: (r) => <VehicleCell vehicle={r.vehicle ?? { vehicle_name: r.vehicle_name, plate_number: r.plate_number }} /> },
   { label: 'Expenses', render: (r) => r.maintenance_cost ? `₱${Number(r.maintenance_cost).toLocaleString('en-US', { minimumFractionDigits: 2 })}` : '₱0.00' },
   { label: 'Final Status', render: (r) => <TicketStatusBadge value={r.final_status} /> },
-  { label: 'Archived By', render: (r) => r.archived_by?.name ?? '—' },
+  { label: 'Archived By', render: (r) => <UserAvatarName user={r.archived_by} fallback="—" /> },
   { label: 'Archived At', render: (r) => <DateBadge value={r.archived_at} /> },
   { label: 'Time', render: (r) => formatTime(r.archived_at) },
 ];
