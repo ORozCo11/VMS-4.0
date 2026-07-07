@@ -602,7 +602,7 @@ function LocationDensityMap({
         <TileLayer attribution={CARTO_ATTRIBUTION} maxZoom={19} url={CARTO_LIGHT_TILE_URL} />
         <Polygon
           pathOptions={{
-            color: '#FF7A1A',
+            color: '#2563eb',
             fillColor: '#7C3DFF',
             fillOpacity: 0.08,
             opacity: 0.95,
