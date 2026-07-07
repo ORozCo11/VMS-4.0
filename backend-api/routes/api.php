@@ -45,6 +45,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/vehicles', [FleetController::class, 'storeVehicle']);
     Route::put('/vehicles/{vehicle}', [FleetController::class, 'updateVehicle']);
     Route::delete('/vehicles/{vehicle}', [FleetController::class, 'archiveVehicle']);
+    Route::post('/vehicles/{vehicle}/restore', [FleetController::class, 'restoreVehicle']);
 
     Route::get('/locations', [FleetController::class, 'locations']);
     Route::post('/locations', [FleetController::class, 'storeLocation']);
