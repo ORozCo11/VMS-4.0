@@ -1,10 +1,10 @@
-# VMS Frontend Watchdog — keeps Vite dev server alive on port 5173
-$nodeExe   = (Get-Command node -ErrorAction SilentlyContinue)?.Source
-if (-not $nodeExe) { $nodeExe = "node" }
-$frontendDir = "C:\vms-run\frontend-spa"
-$logFile     = "C:\vms-run\logs\frontend-watchdog.log"
+# VMS Frontend Watchdog - keeps Vite dev server alive on port 5173
+$projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$frontendDir = Join-Path $projectRoot "frontend-spa"
+$logDir      = Join-Path $projectRoot "logs"
+$logFile     = Join-Path $logDir "frontend-watchdog.log"
 
-New-Item -ItemType Directory -Force -Path "C:\vms-run\logs" | Out-Null
+New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 
 function Log($msg) {
     $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
@@ -16,7 +16,7 @@ Log "Watchdog started."
 while ($true) {
     $running = Get-NetTCPConnection -LocalPort 5173 -State Listen -ErrorAction SilentlyContinue
     if (-not $running) {
-        Log "Port 5173 not listening — starting Vite dev server..."
+        Log "Port 5173 not listening - starting Vite dev server..."
         Start-Process -FilePath "cmd.exe" `
             -ArgumentList "/c npm run dev" `
             -WorkingDirectory $frontendDir `
