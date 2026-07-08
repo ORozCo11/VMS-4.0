@@ -21,7 +21,11 @@ class User extends Authenticatable
         'name',
         'email',
         'password',
-        'role', 
+        'role',
+        'phone',
+        'address',
+        'photo_url',
+        'is_active',
     ];
 
     /**
@@ -30,5 +34,9 @@ class User extends Authenticatable
     protected $hidden = [
         'password',
         'remember_token',
+    ];
+
+    protected $casts = [
+        'is_active' => 'boolean',
     ];
 }

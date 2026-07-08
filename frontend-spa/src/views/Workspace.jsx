@@ -33,7 +33,8 @@ const modulesByRole = {
     ['conditions', 'Condition Monitoring'],
     ['schedules', 'Maintenance Schedule'],
     ['maintenance', 'Maintenance Records'],
-    // Admin Auditing & Logs
+    // Administration
+    ['users', 'Users'],
     ['reports', 'Reports'],
     ['logs', 'Logs'],
   ],
@@ -77,6 +78,7 @@ const moduleEndpoints = {
   ticketVerifications: '/tickets',
   ticketWorkOrders: '/tickets',
   ticketArchives: '/ticket-archives',
+  users: '/users',
 };
 
 const moduleIcons = {
@@ -202,6 +204,14 @@ const moduleIcons = {
       <polyline points="13 2 13 9 20 9" />
     </svg>
   ),
+  users: (
+    <svg className="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+      <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+    </svg>
+  ),
 };
 
 function Workspace() {
@@ -221,11 +231,17 @@ function Workspace() {
   const editIssueId = location.pathname.match(/\/issues\/(\d+)\/edit$/)?.[1] ?? null;
   const isNewConditionPage = /\/conditions\/new$/.test(location.pathname);
   const editConditionId = location.pathname.match(/\/conditions\/(\d+)\/edit$/)?.[1] ?? null;
+  const isNewMaintenancePage = /\/maintenance\/new$/.test(location.pathname);
+  const editMaintenanceId = location.pathname.match(/\/maintenance\/(\d+)\/edit$/)?.[1] ?? null;
+  const isNewUserPage = /\/users\/new$/.test(location.pathname);
+  const editUserId = location.pathname.match(/\/users\/(\d+)\/edit$/)?.[1] ?? null;
   const logRepairsTicketId = location.pathname.match(/\/work-orders\/(\d+)\/log-repairs$/)?.[1] ?? null;
   const isOnSpecialPage = Boolean(
     isNewVehiclePage || vehicleProfileId || isNewTicketPage || ticketProfileId
     || isNewCategoryPage || editCategoryId || isNewSchedulePage || editScheduleId
-    || isNewIssuePage || editIssueId || isNewConditionPage || editConditionId || logRepairsTicketId
+    || isNewIssuePage || editIssueId || isNewConditionPage || editConditionId
+    || isNewMaintenancePage || editMaintenanceId || isNewUserPage || editUserId
+    || logRepairsTicketId
   );
   const { user, logout } = useContext(AuthContext);
   const modules = useMemo(() => modulesByRole[user.role] ?? [], [user.role]);
@@ -240,8 +256,14 @@ function Workspace() {
   const [editTarget, setEditTarget] = useState(null);
   const [report, setReport] = useState(null);
   const [notice, setNotice] = useState(null);
+  useEffect(() => {
+    if (!notice) return;
+    const timer = setTimeout(() => setNotice(null), 5000);
+    return () => clearTimeout(timer);
+  }, [notice]);
   const [loading, setLoading] = useState(false);
   const [userInfoTarget, setUserInfoTarget] = useState(null);
+  const [issueViewTarget, setIssueViewTarget] = useState(null);
   const [confirmDialog, setConfirmDialog] = useState(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [notifications, setNotifications] = useState([]);
@@ -271,6 +293,8 @@ function Workspace() {
     try { return localStorage.getItem('theme') || 'light'; } catch { return 'light'; }
   });
   const notificationsRef = useRef(null);
+  const profileMenuRef = useRef(null);
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
   const hasVehicles = (lookups.vehicles ?? []).length > 0;
 
   const loadNotifications = useCallback(async () => {
@@ -406,6 +430,9 @@ function Workspace() {
     function handleClickOutside(event) {
       if (notificationsRef.current && !notificationsRef.current.contains(event.target)) {
         setShowNotifications(false);
+      }
+      if (profileMenuRef.current && !profileMenuRef.current.contains(event.target)) {
+        setShowProfileMenu(false);
       }
     }
     document.addEventListener('mousedown', handleClickOutside);
@@ -545,6 +572,26 @@ function Workspace() {
         try {
           await api.delete(path);
           setNotice({ type: 'success', text: success });
+          await refreshCurrent();
+        } catch (error) {
+          showError(error, setNotice);
+        }
+      },
+    });
+  };
+
+  const toggleUserActive = (row, activate) => {
+    setConfirmDialog({
+      title: 'Confirm Action',
+      message: activate
+        ? `Reactivate ${row.name}'s account? They will be able to log in again.`
+        : `Deactivate ${row.name}'s account? They won't be able to log in until reactivated.`,
+      confirmLabel: activate ? 'Activate' : 'Deactivate',
+      variant: activate ? 'primary' : 'danger',
+      onConfirm: async () => {
+        try {
+          await api.put(`/users/${row.id}/${activate ? 'activate' : 'deactivate'}`);
+          setNotice({ type: 'success', text: activate ? 'User activated.' : 'User deactivated.' });
           await refreshCurrent();
         } catch (error) {
           showError(error, setNotice);
@@ -883,8 +930,6 @@ function Workspace() {
               );
             })}
           </nav>
-
-          <ProfilePanel user={user} onLogout={handleLogout} setNotice={setNotice} />
         </aside>
 
         <section className="content-area">
@@ -991,13 +1036,28 @@ function Workspace() {
               )}
             </button>
 
-            <div className="status-pill">
-              <span className="status-name">{user.name}</span>
+            <div className="profile-menu-container" ref={profileMenuRef}>
+              <ProfileMenu
+                user={user}
+                open={showProfileMenu}
+                setOpen={setShowProfileMenu}
+                onLogout={handleLogout}
+                onOpenNotifications={() => setShowNotifications(true)}
+                setNotice={setNotice}
+              />
             </div>
           </div>
         </header>
 
-        {notice ? <p className={`notice ${notice.type}`} style={{margin: '20px 32px 0'}}>{notice.text}</p> : null}
+        {notice && (
+          <div className={`toast-notice ${notice.type}`} role="alert">
+            <Icon name={notice.type === 'success' ? 'checkCircle' : 'alert'} size={16} />
+            <span>{notice.text}</span>
+            <button type="button" className="toast-notice-close" onClick={() => setNotice(null)} aria-label="Dismiss">
+              <Icon name="close" size={13} />
+            </button>
+          </div>
+        )}
         <div className="content-body">
           {isNewVehiclePage ? (
             <NewVehiclePage
@@ -1073,6 +1133,26 @@ function Workspace() {
               onSubmit={(payload) => submitFormPage('conditions', editConditionId ? { condition_check_id: editConditionId } : null, payload)}
               submitLabel={editConditionId ? 'Update Condition' : 'Record Condition'}
             />
+          ) : (isNewMaintenancePage || editMaintenanceId) ? (
+            <FormPage
+              title={editMaintenanceId ? 'Update Maintenance Record' : 'Add Maintenance Record'}
+              description="Directly log external, historical, or third-party vehicle maintenance records and expenses without running the 5-phase ticket workflow."
+              onBack={() => navigate(-1)}
+              fields={maintenanceFields(lookups, user.role)}
+              initialValues={editMaintenanceId ? (records.maintenance ?? []).find((m) => String(m.maintenance_id) === String(editMaintenanceId)) : EMPTY_OBJ}
+              onSubmit={(payload) => submitFormPage('maintenance', editMaintenanceId ? { maintenance_id: editMaintenanceId } : null, payload)}
+              submitLabel={editMaintenanceId ? 'Update Maintenance' : 'Add Maintenance'}
+            />
+          ) : (isNewUserPage || editUserId) ? (
+            <FormPage
+              title={editUserId ? 'Update User' : 'Add User'}
+              description="Create and manage user accounts — Admin, Custodian, and Maintenance Personnel."
+              onBack={() => navigate(-1)}
+              fields={userFields(Boolean(editUserId))}
+              initialValues={editUserId ? (records.users ?? []).find((u) => String(u.id) === String(editUserId)) : EMPTY_OBJ}
+              onSubmit={(payload) => submitFormPage('users', editUserId ? { id: editUserId } : null, payload)}
+              submitLabel={editUserId ? 'Update User' : 'Add User'}
+            />
           ) : logRepairsTicketId ? (
             <LogRepairsPage
               ticket={(records.ticketWorkOrders ?? []).find((t) => String(t.ticket_id) === String(logRepairsTicketId))}
@@ -1091,6 +1171,7 @@ function Workspace() {
       onConfirm={handleConfirmDialog}
     />
     {userInfoTarget && <UserInfoModal user={userInfoTarget} onClose={() => setUserInfoTarget(null)} />}
+    {issueViewTarget && <IssueViewModal issue={issueViewTarget} onClose={() => setIssueViewTarget(null)} />}
     </FormNoticeContext.Provider>
   );
 
@@ -1104,8 +1185,13 @@ function Workspace() {
         <ModulePanel description={(user.role === 'Custodian' ? 'View-only fleet information.' : 'Register, edit, and archive vehicle records.') + ' Status = availability (can it be dispatched right now?). Condition = physical state (does it need repair or inspection?). Click a row to see full vehicle details.'}>
           <div className="module-action-bar">
             <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-              <h3>All Vehicles ({visibleRows.length})</h3>
-              <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search vehicles..." />
+              <h3>All Vehicles <span className="count-badge">{visibleRows.length}</span></h3>
+              <LocalSearchInput
+                value={searchQuery}
+                onChange={setSearchQuery}
+                placeholder="Search vehicles..."
+                onExport={() => exportRowsToCsv('vehicles.csv', VEHICLE_EXPORT_COLUMNS, visibleRows)}
+              />
             </div>
             {user.role === 'Admin' && (
               <button className="primary-button" type="button" onClick={() => navigate(`${roleRoutes[user.role]}/vehicles/new`)}>+ Add Vehicle</button>
@@ -1172,12 +1258,30 @@ function Workspace() {
         <ModulePanel description="Maintain standard vehicle type choices used across dropdowns.">
           <div className="module-action-bar">
             <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-              <h3>Vehicle Types ({visibleRows.length})</h3>
+              <h3>Vehicle Types <span className="count-badge">{visibleRows.length}</span></h3>
               <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search types..." />
             </div>
             <button className="primary-button" type="button" onClick={() => navigate(`${roleRoutes[user.role]}/categories/new`)}>+ Add Type</button>
           </div>
           <DataTable columns={categoryColumns((row) => navigate(`${roleRoutes[user.role]}/categories/${row.category_id}/edit`), deleteRecord)} rows={visibleRows} />
+        </ModulePanel>
+      );
+    }
+
+    if (activeModule === 'users') {
+      return (
+        <ModulePanel description="Create and manage user accounts — Admin, Custodian, and Maintenance Personnel.">
+          <div className="module-action-bar">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+              <h3>Users <span className="count-badge">{visibleRows.length}</span></h3>
+              <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search users..." />
+            </div>
+            <button className="primary-button" type="button" onClick={() => navigate(`${roleRoutes[user.role]}/users/new`)}>+ Add User</button>
+          </div>
+          <DataTable
+            columns={userColumns((row) => navigate(`${roleRoutes[user.role]}/users/${row.id}/edit`), toggleUserActive, user.id)}
+            rows={visibleRows}
+          />
         </ModulePanel>
       );
     }
@@ -1269,7 +1373,7 @@ function Workspace() {
         <ModulePanel description="Periodic inspection log — a Custodian's routine check-in on a vehicle's physical condition (e.g. a monthly walkaround), separate from Maintenance Records (which logs actual repair work already performed). Each entry here can update the vehicle's Condition field on the fleet list.">
             <div className="module-action-bar">
               <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                <h3>Condition Records ({visibleRows.length})</h3>
+                <h3>Condition Records <span className="count-badge">{visibleRows.length}</span></h3>
                 <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search conditions..." />
               </div>
               {user.role === 'Custodian' && (
@@ -1398,7 +1502,7 @@ function Workspace() {
         <ModulePanel description={issueDescription(user.role)}>
           <div className="module-action-bar">
             <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-              <h3>Issue Reports ({visibleRows.length})</h3>
+              <h3>Issue Reports <span className="count-badge">{visibleRows.length}</span></h3>
               <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search issues..." />
             </div>
             {user.role === 'Custodian' && (
@@ -1421,7 +1525,7 @@ function Workspace() {
             priorityLabel="Severity"
           />
           <DataTable
-            columns={issueColumns(user.role, (row) => navigate(`${roleRoutes[user.role]}/issues/${row.issue_report_id}/edit`), handleCreateTicketFromIssue, setUserInfoTarget)}
+            columns={issueColumns(user.role, (row) => navigate(`${roleRoutes[user.role]}/issues/${row.issue_report_id}/edit`), handleCreateTicketFromIssue, setUserInfoTarget, setIssueViewTarget, deleteRecord)}
             rows={visibleRows}
             onRowClick={(row) => row.vehicle && openVehicleProfile(row.vehicle)}
           />
@@ -1431,48 +1535,35 @@ function Workspace() {
 
     if (activeModule === 'maintenance') {
       return (
-        <>
-          <ModulePanel description="Directly log external, historical, or third-party vehicle maintenance records and expenses without running the 5-phase ticket workflow.">
-            <div className="module-action-bar">
-              <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                <h3>Maintenance Records ({visibleRows.length})</h3>
-                <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search maintenance..." />
-              </div>
-              {user.role === 'Admin' && (
-                <button className="primary-button" type="button" onClick={() => setEditTarget({})}>+ Add Maintenance</button>
-              )}
+        <ModulePanel description="Directly log external, historical, or third-party vehicle maintenance records and expenses without running the 5-phase ticket workflow.">
+          <div className="module-action-bar">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+              <h3>Maintenance Records <span className="count-badge">{visibleRows.length}</span></h3>
+              <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search maintenance..." />
             </div>
-            <FilterBar
-              categories={lookups.categories}
-              vehicles={lookups.vehicles}
-              filterCategory={filterCategory}
-              setFilterCategory={setFilterCategory}
-              filterCapacity={filterCapacity}
-              setFilterCapacity={setFilterCapacity}
-              filterStatus={filterStatus}
-              setFilterStatus={setFilterStatus}
-              statusOptions={lookups.maintenance_statuses}
-              statusLabel="Progress"
-            />
-            <DataTable
-              columns={maintenanceColumns(user.role, setEditTarget, updateRecord)}
-              rows={visibleRows}
-              compact
-              onRowClick={(row) => row.vehicle && openVehicleProfile(row.vehicle)}
-            />
-          </ModulePanel>
-          <FormModal open={!!editTarget} title={editTarget?.maintenance_id ? 'Update Maintenance Record' : 'Add Maintenance Record'} onClose={() => setEditTarget(null)} confirmClose>
-            <SmartForm
-              fields={maintenanceFields(lookups, user.role)}
-              initialValues={editTarget?.maintenance_id ? editTarget : EMPTY_OBJ}
-              key={editTarget?.maintenance_id ?? 'maintenance-create'}
-              onCancel={() => setEditTarget(null)}
-              onSubmit={submitModuleForm}
-              submitLabel={editTarget?.maintenance_id ? 'Update Maintenance' : 'Add Maintenance'}
-              title=""
-            />
-          </FormModal>
-        </>
+            {user.role === 'Admin' && (
+              <button className="primary-button" type="button" onClick={() => navigate(`${roleRoutes[user.role]}/maintenance/new`)}>+ Add Maintenance</button>
+            )}
+          </div>
+          <FilterBar
+            categories={lookups.categories}
+            vehicles={lookups.vehicles}
+            filterCategory={filterCategory}
+            setFilterCategory={setFilterCategory}
+            filterCapacity={filterCapacity}
+            setFilterCapacity={setFilterCapacity}
+            filterStatus={filterStatus}
+            setFilterStatus={setFilterStatus}
+            statusOptions={lookups.maintenance_statuses}
+            statusLabel="Progress"
+          />
+          <DataTable
+            columns={maintenanceColumns(user.role, (row) => navigate(`${roleRoutes[user.role]}/maintenance/${row.maintenance_id}/edit`), updateRecord)}
+            rows={visibleRows}
+            compact
+            onRowClick={(row) => row.vehicle && openVehicleProfile(row.vehicle)}
+          />
+        </ModulePanel>
       );
     }
 
@@ -1481,7 +1572,7 @@ function Workspace() {
         <>
           <ModulePanel description="Review records marked for field verification and send the result back to the ticket loop.">
             <div className="module-action-bar">
-              <h3>Pending Verifications ({visibleRows.length})</h3>
+              <h3>Pending Verifications <span className="count-badge">{visibleRows.length}</span></h3>
               <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search verifications..." />
             </div>
             <DataTable
@@ -1509,8 +1600,13 @@ function Workspace() {
         <ModulePanel description="Plan preventative maintenance and track schedule status.">
           <div className="module-action-bar">
             <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-              <h3>Maintenance Schedules ({visibleRows.length})</h3>
-              <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search schedules..." />
+              <h3>Maintenance Schedules <span className="count-badge">{visibleRows.length}</span></h3>
+              <LocalSearchInput
+                value={searchQuery}
+                onChange={setSearchQuery}
+                placeholder="Search schedules..."
+                onExport={() => exportRowsToCsv('maintenance-schedules.csv', SCHEDULE_EXPORT_COLUMNS, visibleRows)}
+              />
             </div>
             {user.role === 'Admin' && (
               <button className="primary-button" type="button" onClick={() => navigate(`${roleRoutes[user.role]}/schedules/new`)}>+ Add Schedule</button>
@@ -1529,7 +1625,7 @@ function Workspace() {
       return (
         <ModulePanel description="Completed repair and service records are listed here automatically.">
           <div className="module-action-bar">
-            <h3>Completed Maintenance ({visibleRows.length})</h3>
+            <h3>Completed Maintenance <span className="count-badge">{visibleRows.length}</span></h3>
             <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search records..." />
           </div>
           <DataTable
@@ -1545,7 +1641,7 @@ function Workspace() {
       return (
         <ModulePanel description="Automatic vehicle activity timeline across location, issue, condition, and maintenance events.">
           <div className="module-action-bar">
-            <h3>Activity History ({visibleRows.length})</h3>
+            <h3>Activity History <span className="count-badge">{visibleRows.length}</span></h3>
             <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search history..." />
           </div>
           <DataTable
@@ -1573,7 +1669,7 @@ function Workspace() {
       return (
         <ModulePanel description="Read-only accountability log of user actions.">
           <div className="module-action-bar">
-            <h3>System Activity Logs ({visibleRows.length})</h3>
+            <h3>System Activity Logs <span className="count-badge">{visibleRows.length}</span></h3>
             <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search logs..." />
           </div>
           <PaginatedTable columns={logColumns(lookups.vehicles, openVehicleProfile)} rows={visibleRows} />
@@ -1704,8 +1800,10 @@ function Workspace() {
           <div className="module-action-bar">
             <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
               <h3>
-                Archived Tickets ({visibleRows.length}
-                {visibleRows.length !== allArchiveRows.length ? ` of ${allArchiveRows.length} total` : ''})
+                Archived Tickets <span className="count-badge">{visibleRows.length}</span>
+                {visibleRows.length !== allArchiveRows.length && (
+                  <span style={{ fontWeight: 400, fontSize: '0.8rem', marginLeft: 6 }}>of {allArchiveRows.length} total</span>
+                )}
               </h3>
               <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search archives..." />
             </div>
@@ -2404,7 +2502,7 @@ function AreaChart({ rows = [], height = 180 }) {
 function ModulePanel({ children, description }) {
   return (
     <div className="module-grid">
-      <section className="panel">
+      {description && (
         <div className="info-callout">
           <svg className="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="12" cy="12" r="10"></circle>
@@ -2413,6 +2511,8 @@ function ModulePanel({ children, description }) {
           </svg>
           <p className="module-description">{description}</p>
         </div>
+      )}
+      <section className="panel">
         {children}
       </section>
     </div>
@@ -2519,6 +2619,57 @@ function UserInfoModal({ user, onClose }) {
   );
 }
 
+function IssueViewModal({ issue, onClose }) {
+  return createPortal(
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-box" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <h3>Issue #{issue.issue_report_id}</h3>
+          <button className="modal-close-btn" onClick={onClose} type="button" aria-label="Close"><Icon name="close" size={18} /></button>
+        </div>
+        <div className="modal-body">
+          <dl className="user-info-details">
+            <div>
+              <dt>Vehicle</dt>
+              <dd>{issue.vehicle ? `${issue.vehicle.vehicle_name} (${issue.vehicle.plate_number})` : '-'}</dd>
+            </div>
+            <div>
+              <dt>Issue Type</dt>
+              <dd>{issue.issue_type}</dd>
+            </div>
+            <div>
+              <dt>Description</dt>
+              <dd>{issue.issue_description || '-'}</dd>
+            </div>
+            <div>
+              <dt>Severity</dt>
+              <dd><TicketStatusBadge value={issue.severity_level} /></dd>
+            </div>
+            <div>
+              <dt>Status</dt>
+              <dd><StatusBadge value={issue.status} /></dd>
+            </div>
+            <div>
+              <dt>Reported By</dt>
+              <dd>{issue.reported_by?.name ?? '-'}</dd>
+            </div>
+            {issue.remarks && (
+              <div>
+                <dt>Remarks</dt>
+                <dd>{issue.remarks}</dd>
+              </div>
+            )}
+          </dl>
+          {issue.photo_url && (
+            <img src={issue.photo_url} alt="Issue attachment" style={{ maxWidth: '100%', borderRadius: '8px', marginTop: '12px' }} />
+          )}
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
 function ConfirmDialog({ busy, dialog, onCancel, onConfirm }) {
   if (!dialog) return null;
 
@@ -2561,8 +2712,7 @@ function ConfirmDialog({ busy, dialog, onCancel, onConfirm }) {
   );
 }
 
-function ProfilePanel({ user, onLogout, setNotice }) {
-  const [open, setOpen] = useState(false);
+function ProfileMenu({ user, open, setOpen, onLogout, onOpenNotifications, setNotice }) {
   const [pwOpen, setPwOpen] = useState(false);
 
   const updatePassword = async (payload) => {
@@ -2580,52 +2730,54 @@ function ProfilePanel({ user, onLogout, setNotice }) {
     : 'U';
 
   return (
-    <section className="profile-panel">
-      <div className="profile-card" onClick={() => setOpen((v) => !v)}>
-        <div className="profile-avatar-wrapper">
-          <div className="profile-avatar">{initials}</div>
-          <span className="profile-status-online"></span>
-        </div>
-        <div className="profile-info">
-          <span className="profile-name">{user.name}</span>
-          <span className="profile-role">{user.role}</span>
-        </div>
-        <svg className={`profile-arrow-icon ${open ? 'rotated' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-          <polyline points="6 9 12 15 18 9"></polyline>
-        </svg>
-      </div>
+    <>
+      <button className="profile-menu-trigger" type="button" onClick={() => setOpen((v) => !v)} aria-label="Account menu">
+        <span className="profile-menu-avatar">{initials}</span>
+      </button>
 
       {open && (
-        <div className="profile-details-dropdown">
-          {/* Compact info row — ID and email side by side */}
-          <dl className="profile-info-row">
-            <div className="profile-info-item">
-              <dt>ID</dt>
-              <dd>#{user.id}</dd>
+        <div className="profile-menu-dropdown">
+          <div className="profile-menu-user">
+            <span className="profile-menu-avatar">{initials}</span>
+            <div className="profile-menu-user-info">
+              <span className="profile-menu-name">{user.name}</span>
+              <span className="profile-menu-role">{user.role}</span>
             </div>
-            <div className="profile-info-item">
-              <dt>Email</dt>
-              <dd title={user.email}>{user.email}</dd>
-            </div>
-          </dl>
-
-          <div className="profile-actions">
-            <button className="ghost-button" style={{width:'100%',height:36,fontSize:'0.82rem',display:'inline-flex',alignItems:'center',justifyContent:'center',gap:7}} onClick={() => setPwOpen(true)} type="button">
-              <Icon name="key" size={15} /> Change Password
-            </button>
-            <button className="logout-button" onClick={onLogout} type="button">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{width:16,height:16}}>
-                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
-                <polyline points="16 17 21 12 16 7"></polyline>
-                <line x1="21" y1="12" x2="9" y2="12"></line>
-              </svg>
-              <span>Sign out</span>
-            </button>
           </div>
+
+          <div className="profile-menu-divider" />
+
+          <button className="profile-menu-item" type="button" onClick={() => { setPwOpen(true); setOpen(false); }}>
+            <Icon name="key" size={15} /> My Settings
+          </button>
+          <button className="profile-menu-item" type="button" onClick={() => { onOpenNotifications(); setOpen(false); }}>
+            <Icon name="bell" size={15} /> Notifications
+          </button>
+
+          <div className="profile-menu-divider" />
+
+          <button className="profile-menu-item profile-menu-item-danger" type="button" onClick={onLogout}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 15, height: 15 }}>
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+              <polyline points="16 17 21 12 16 7"></polyline>
+              <line x1="21" y1="12" x2="9" y2="12"></line>
+            </svg>
+            Logout
+          </button>
         </div>
       )}
 
-      <FormModal open={pwOpen} title="Change Password" onClose={() => setPwOpen(false)}>
+      <FormModal open={pwOpen} title="My Settings" onClose={() => setPwOpen(false)}>
+        <dl className="profile-info-row" style={{ marginBottom: '16px' }}>
+          <div className="profile-info-item">
+            <dt>ID</dt>
+            <dd>#{user.id}</dd>
+          </div>
+          <div className="profile-info-item">
+            <dt>Email</dt>
+            <dd title={user.email}>{user.email}</dd>
+          </div>
+        </dl>
         <SmartForm
           fields={passwordFields}
           key="password-form"
@@ -2635,7 +2787,7 @@ function ProfilePanel({ user, onLogout, setNotice }) {
           title=""
         />
       </FormModal>
-    </section>
+    </>
   );
 }
 
@@ -2860,6 +3012,23 @@ const categoryFields = [
   { label: 'Description', name: 'description', type: 'textarea' },
 ];
 
+function userFields(isEditing) {
+  return [
+    { label: 'Full Name', name: 'name', required: true, type: 'text' },
+    { label: 'Email', name: 'email', required: true, type: 'text' },
+    { label: 'Phone', name: 'phone', type: 'text' },
+    { label: 'Address', name: 'address', type: 'text' },
+    { label: 'Role', name: 'role', options: ['Admin', 'Custodian', 'Maintenance Personnel'], required: true, type: 'select' },
+    { label: 'Profile Photo', name: 'photo', accept: 'image/*', type: 'file' },
+    {
+      label: isEditing ? 'New Password (leave blank to keep current)' : 'Password',
+      name: 'password',
+      required: !isEditing,
+      type: 'password',
+    },
+  ];
+}
+
 const verificationFields = [
   { label: 'Verification Result', name: 'verification_result', options: ['Passed', 'Failed'], required: true, type: 'select' },
   { label: 'Verification Notes', name: 'verification_notes', type: 'textarea' },
@@ -3026,6 +3195,16 @@ function conditionFields(lookups) {
 }
 
 function issueFields(lookups, editTarget, role) {
+  if (editTarget?.issue_report_id && role === 'Custodian') {
+    return [
+      { label: 'Issue Type', name: 'issue_type', options: lookups.issue_types, required: true, type: 'select' },
+      { label: 'Issue Description', name: 'issue_description', required: true, type: 'textarea' },
+      { label: 'Severity Level', name: 'severity_level', options: lookups.severity_levels, required: true, type: 'select' },
+      { label: 'Attachment / Photo', name: 'photo', accept: 'image/*', type: 'file' },
+      { label: 'Remarks', name: 'remarks', type: 'textarea' },
+    ];
+  }
+
   if (editTarget?.issue_report_id || role === 'Maintenance Personnel') {
     return [
       { label: 'Status', name: 'status', options: lookups.issue_statuses, required: true, type: 'select' },
@@ -3230,7 +3409,7 @@ function vehicleColumns(role, onEdit, deleteRecord, restoreRecord, filterStatus)
   if (filterStatus === 'Inactive') {
     columns.push(
       { label: 'Archived At', render: (row) => <DateBadge value={row.archived_at} /> },
-      { label: 'Archived By', render: (row) => row.archived_by?.name ?? '—' },
+      { label: 'Archived By', render: (row) => <UserAvatarName user={row.archived_by} fallback="—" /> },
     );
   }
 
@@ -3272,6 +3451,32 @@ function categoryColumns(onEdit, deleteRecord) {
   ];
 }
 
+function userColumns(onEdit, onToggleActive, currentUserId) {
+  return [
+    { label: 'ID', render: (row) => row.id },
+    { label: 'User', render: (row) => <UserAvatarName user={row} /> },
+    { label: 'Email', render: (row) => row.email },
+    { label: 'Phone', render: (row) => row.phone ?? '-' },
+    { label: 'Role', render: (row) => <StatusBadge value={row.role} /> },
+    { label: 'Status', render: (row) => <StatusBadge value={row.is_active ? 'Active' : 'Inactive'} /> },
+    {
+      label: 'Action',
+      render: (row) => (
+        <div className="row-actions">
+          <button className="btn-edit-action" onClick={() => onEdit(row)} type="button" title="Edit" aria-label="Edit"><Icon name="edit" size={14} /> Edit</button>
+          {row.id !== currentUserId && (
+            row.is_active ? (
+              <button className="btn-delete-action" onClick={() => onToggleActive(row, false)} type="button" title="Deactivate" aria-label="Deactivate"><Icon name="archive" size={14} /> Deactivate</button>
+            ) : (
+              <button className="btn-edit-action" onClick={() => onToggleActive(row, true)} type="button" title="Activate" aria-label="Activate"><Icon name="undo" size={14} /> Activate</button>
+            )
+          )}
+        </div>
+      ),
+    },
+  ];
+}
+
 function locationColumns(currentUser, onViewOnMap) {
   return [
   { label: 'ID', render: (row) => row.location_record_id ?? 'Current' },
@@ -3280,11 +3485,7 @@ function locationColumns(currentUser, onViewOnMap) {
   { label: 'Address / Area', render: (row) => row.address_area ?? '-' },
   {
     label: 'Updated By',
-    render: (row) => (
-      row.is_current_snapshot
-        ? (currentUser?.name ?? currentUser?.email ?? '-')
-        : (row.updated_by?.name ?? row.updated_by?.email ?? '-')
-    ),
+    render: (row) => <UserAvatarName user={row.is_current_snapshot ? currentUser : row.updated_by} />,
   },
   { label: 'Date Updated', render: (row) => <DateBadge value={row.updated_at} /> },
   { label: 'Time', render: (row) => formatTime(row.updated_at) },
@@ -3314,7 +3515,7 @@ function conditionColumns(role, onEdit, deleteRecord) {
     { label: 'ID', render: (row) => row.condition_check_id },
     { label: 'Vehicle', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
     { label: 'Result', render: (row) => <StatusBadge value={row.condition_result} /> },
-    { label: 'Checked By', render: (row) => row.checked_by?.name ?? '-' },
+    { label: 'Checked By', render: (row) => <UserAvatarName user={row.checked_by} /> },
     { label: 'Observations', className: 'cell-text', render: (row) => <ExpandableText text={row.observations} /> },
     { label: 'Date', render: (row) => <DateBadge value={row.created_at} /> },
     { label: 'Time', render: (row) => formatTime(row.created_at) },
@@ -3335,7 +3536,7 @@ function conditionColumns(role, onEdit, deleteRecord) {
   return columns;
 }
 
-function issueColumns(role, onEdit, onCreateTicketFromIssue, setUserInfoTarget) {
+function issueColumns(role, onEdit, onCreateTicketFromIssue, setUserInfoTarget, onView, deleteRecord) {
   const columns = [
     {
       label: 'Issue',
@@ -3363,10 +3564,10 @@ function issueColumns(role, onEdit, onCreateTicketFromIssue, setUserInfoTarget) 
           ? (
             <button
               type="button"
-              className="issue-reporter issue-reporter-link"
+              className="issue-reporter-link"
               onClick={() => setUserInfoTarget(row.reported_by)}
             >
-              {row.reported_by.name}
+              <UserAvatarName user={row.reported_by} />
             </button>
           )
           : <span className="issue-reporter">-</span>
@@ -3379,9 +3580,27 @@ function issueColumns(role, onEdit, onCreateTicketFromIssue, setUserInfoTarget) 
       label: 'Action',
       render: (row) => (
         <div className="row-actions">
+          <button className="btn-view-action" onClick={() => onView(row)} type="button" title="View" aria-label="View"><Icon name="eye" size={14} /> View</button>
           <button className="btn-edit-action" onClick={() => onEdit(row)} type="button" title="Update" aria-label="Update"><Icon name="edit" size={14} /> Update</button>
-          {role === 'Admin' && ['Pending', 'Under Review'].includes(row.status) && (
+          {role === 'Admin' && (
             <button className="btn-confirm-action" onClick={() => onCreateTicketFromIssue(row)} type="button" title="Create Ticket" aria-label="Create Ticket"><Icon name="ticket" size={14} /> Create Ticket</button>
+          )}
+        </div>
+      ),
+    });
+  }
+
+  if (role === 'Custodian') {
+    columns.push({
+      label: 'Action',
+      render: (row) => (
+        <div className="row-actions">
+          <button className="btn-view-action" onClick={() => onView(row)} type="button" title="View" aria-label="View"><Icon name="eye" size={14} /> View</button>
+          {row.status === 'Pending' && (
+            <>
+              <button className="btn-edit-action" onClick={() => onEdit(row)} type="button" title="Edit" aria-label="Edit"><Icon name="edit" size={14} /> Edit</button>
+              <button className="btn-delete-action" onClick={() => deleteRecord(`/issues/${row.issue_report_id}`, 'Issue deleted.')} type="button" title="Delete" aria-label="Delete"><Icon name="trash" size={14} /> Delete</button>
+            </>
           )}
         </div>
       ),
@@ -3397,7 +3616,7 @@ function maintenanceColumns(role, setEditTarget, updateRecord) {
     { label: 'Vehicle', width: '17%', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
     { label: 'Type', width: '11%', render: (row) => row.maintenance_type },
     { label: 'Problem / Reason', width: '17%', className: 'cell-text', render: (row) => <ExpandableText text={row.problem_reason} /> },
-    { label: 'Personnel', width: '11%', render: (row) => row.maintenance_personnel?.name ?? '-' },
+    { label: 'Personnel', width: '11%', render: (row) => <UserAvatarName user={row.maintenance_personnel} /> },
     { label: 'Progress', width: '9%', render: (row) => <StatusBadge value={row.progress_status} /> },
     { label: 'Verification', width: '9%', render: (row) => row.verification_result ? <StatusBadge value={row.verification_result} /> : '-' },
     { label: 'Date Started', width: '8%', render: (row) => <DateBadge value={row.date_started} /> },
@@ -3428,7 +3647,7 @@ function maintenanceStatusColumns(setEditTarget) {
     { label: 'Type', render: (row) => row.maintenance_type },
     { label: 'Problem / Reason', className: 'cell-text', render: (row) => <ExpandableText text={row.problem_reason} /> },
     { label: 'Action Taken', className: 'cell-text', render: (row) => <ExpandableText text={row.action_taken} /> },
-    { label: 'Personnel', render: (row) => row.maintenance_personnel?.name ?? '-' },
+    { label: 'Personnel', render: (row) => <UserAvatarName user={row.maintenance_personnel} /> },
     { label: 'Progress', render: (row) => <StatusBadge value={row.progress_status} /> },
     { label: 'Action', render: (row) => <button className="btn-edit-action" onClick={() => setEditTarget(row)} type="button" title="Verify" aria-label="Verify"><Icon name="checkCircle" size={14} /> Verify</button> },
   ];
@@ -3473,7 +3692,7 @@ const historyColumns = [
   { label: 'Activity', render: (row) => row.activity_type },
   { label: 'Description', className: 'cell-text', render: (row) => <ExpandableText text={row.description} /> },
   { label: 'Related Record', render: (row) => row.related_record_id ?? '-' },
-  { label: 'Updated By', render: (row) => row.updated_by?.name ?? '-' },
+  { label: 'Updated By', render: (row) => <UserAvatarName user={row.updated_by} /> },
   { label: 'Date', render: (row) => <DateBadge value={row.created_at} /> },
   { label: 'Time', render: (row) => formatTime(row.created_at) },
 ];
@@ -3481,7 +3700,7 @@ const historyColumns = [
 function logColumns(vehicles, onViewVehicle) {
   return [
     { label: 'ID', render: (row) => row.log_id },
-    { label: 'User', render: (row) => row.user?.name ?? '-' },
+    { label: 'User', render: (row) => <UserAvatarName user={row.user} /> },
     { label: 'Role', render: (row) => row.role ?? '-' },
     { label: 'Action', render: (row) => row.action },
     { label: 'Module', render: (row) => row.module },
@@ -3649,6 +3868,27 @@ function PhotoCell({ url, alt }) {
   );
 }
 
+// Consistent "avatar + name" cell used everywhere a table references a user
+// (Reported By, Checked By, Personnel, Updated By, Archived By, etc.).
+function UserAvatarName({ user, fallback = '-' }) {
+  if (!user || !user.name) {
+    return <span className="user-avatar-name-empty">{fallback}</span>;
+  }
+
+  const initials = user.name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase();
+
+  return (
+    <span className="user-avatar-name">
+      {user.photo_url ? (
+        <img className="user-avatar-name-photo" src={resolvePhotoUrl(user.photo_url)} alt={user.name} />
+      ) : (
+        <span className="user-avatar-name-initials">{initials}</span>
+      )}
+      <span>{user.name}</span>
+    </span>
+  );
+}
+
 function VehicleCell({ vehicle }) {
   if (!vehicle) {
     return '-';
@@ -3675,6 +3915,12 @@ function moduleRequest(moduleKey, editTarget, payload) {
     return (editTarget && editTarget.category_id)
       ? { method: 'put', path: `/categories/${editTarget.category_id}`, success: 'Vehicle type updated.' }
       : { method: 'post', path: '/categories', success: 'Vehicle type added.' };
+  }
+
+  if (moduleKey === 'users') {
+    return (editTarget && editTarget.id)
+      ? { method: 'put', path: `/users/${editTarget.id}`, success: 'User updated.' }
+      : { method: 'post', path: '/users', success: 'User added.' };
   }
 
   if (moduleKey === 'locations') {
@@ -3817,6 +4063,53 @@ function formatTime(value) {
 
   return new Intl.DateTimeFormat('en-PH', { timeStyle: 'short' }).format(date);
 }
+
+// Builds a CSV file from `columns` (each { label, value(row) }) and `rows`,
+// then triggers a browser download named `filename`.
+function exportRowsToCsv(filename, columns, rows) {
+  const escapeCell = (value) => {
+    const str = String(value ?? '');
+    return /[",\n]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
+  };
+
+  const lines = [columns.map((c) => escapeCell(c.label)).join(',')];
+  rows.forEach((row) => {
+    lines.push(columns.map((c) => escapeCell(c.value(row))).join(','));
+  });
+
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+const VEHICLE_EXPORT_COLUMNS = [
+  { label: 'ID', value: (r) => r.vehicle_id },
+  { label: 'Vehicle Name', value: (r) => r.vehicle_name },
+  { label: 'Plate Number', value: (r) => r.plate_number },
+  { label: 'Type', value: (r) => r.category?.category_name ?? 'Unassigned' },
+  { label: 'Brand', value: (r) => r.brand },
+  { label: 'Model', value: (r) => r.model },
+  { label: 'Capacity', value: (r) => r.capacity },
+  { label: 'Location', value: (r) => r.current_location },
+  { label: 'Status', value: (r) => r.status },
+  { label: 'Condition', value: (r) => r.condition },
+];
+
+const SCHEDULE_EXPORT_COLUMNS = [
+  { label: 'ID', value: (r) => r.schedule_id },
+  { label: 'Vehicle', value: (r) => (r.vehicle ? `${r.vehicle.vehicle_name} (${r.vehicle.plate_number})` : '') },
+  { label: 'Type', value: (r) => r.maintenance_type },
+  { label: 'Date', value: (r) => r.scheduled_date },
+  { label: 'Time', value: (r) => r.scheduled_time },
+  { label: 'Location', value: (r) => r.service_location },
+  { label: 'Status', value: (r) => r.status },
+];
 
 function rowKey(row, index) {
   // Use the most-specific ID first so tickets sharing a vehicle never collide.
@@ -4361,7 +4654,7 @@ function TicketModule({
 
         <div className="module-action-bar" style={{ marginBottom: '8px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-            <h3>All Tickets ({tickets.length})</h3>
+            <h3>All Tickets <span className="count-badge">{tickets.length}</span></h3>
             <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search tickets..." />
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: '0 0 auto' }}>
@@ -4580,7 +4873,7 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, onBack, setNotice, on
             columns={[
               { label: 'Current Location', render: (r) => r.current_location ?? '-' },
               { label: 'Address / Area', render: (r) => r.address_area ?? '-' },
-              { label: 'Updated By', render: (r) => r.updated_by?.name ?? '-' },
+              { label: 'Updated By', render: (r) => <UserAvatarName user={r.updated_by} /> },
               { label: 'Date Updated', render: (r) => <DateBadge value={r.updated_at} /> },
               { label: 'Time', render: (r) => formatTime(r.updated_at) },
             ]}
@@ -4595,7 +4888,7 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, onBack, setNotice, on
             columns={[
               { label: 'Type', render: (r) => r.maintenance_type },
               { label: 'Problem / Reason', className: 'cell-text', render: (r) => <ExpandableText text={r.problem_reason} /> },
-              { label: 'Personnel', render: (r) => r.maintenance_personnel?.name ?? '-' },
+              { label: 'Personnel', render: (r) => <UserAvatarName user={r.maintenance_personnel} /> },
               { label: 'Progress', render: (r) => <StatusBadge value={r.progress_status} /> },
               { label: 'Date Started', render: (r) => <DateBadge value={r.date_started} /> },
               { label: 'Date Completed', render: (r) => <DateBadge value={r.date_completed} /> },
@@ -4628,7 +4921,7 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, onBack, setNotice, on
             columns={[
               { label: 'Activity', render: (r) => r.activity_type },
               { label: 'Description', className: 'cell-text', render: (r) => <ExpandableText text={r.description} /> },
-              { label: 'Updated By', render: (r) => r.updated_by?.name ?? '-' },
+              { label: 'Updated By', render: (r) => <UserAvatarName user={r.updated_by} /> },
               { label: 'Date', render: (r) => <DateBadge value={r.created_at} /> },
               { label: 'Time', render: (r) => formatTime(r.created_at) },
             ]}
@@ -4698,6 +4991,9 @@ function CustodianInspectionModule({
             <line x1="12" y1="8" x2="12.01" y2="8"></line>
           </svg>
           <p className="module-description">Phase 2 — Vehicle Evaluation. Review tickets assigned to you and submit your physical inspection findings.</p>
+        </div>
+        <div className="module-action-bar">
+          <h3>Assigned Inspections <span className="count-badge">{tickets.length}</span></h3>
         </div>
         <FilterBar
           categories={categories}
@@ -4775,6 +5071,9 @@ function CustodianVerificationModule({
             <line x1="12" y1="8" x2="12.01" y2="8"></line>
           </svg>
           <p className="module-description">Phase 4 Tier 1 — Repair Integrity Verification. Review mechanic work and issue your inspection verdict before Admin confirmation.</p>
+        </div>
+        <div className="module-action-bar">
+          <h3>Repair Verifications <span className="count-badge">{tickets.length}</span></h3>
         </div>
         <FilterBar
           categories={categories}
@@ -4919,6 +5218,7 @@ function MechanicWorkOrderModule({
           <p className="module-description">Phase 3 — Work Orders assigned to you. Execute vehicle repairs and submit your repair logs to send the ticket for Custodian inspection.</p>
         </div>
         <div className="module-action-bar">
+          <h3>Work Orders <span className="count-badge">{tickets.length}</span></h3>
           <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search work orders..." />
         </div>
         <FilterBar
@@ -5045,7 +5345,7 @@ const ticketArchiveColumns = [
   { label: 'Vehicle', render: (r) => <VehicleCell vehicle={r.vehicle ?? { vehicle_name: r.vehicle_name, plate_number: r.plate_number }} /> },
   { label: 'Expenses', render: (r) => r.maintenance_cost ? `₱${Number(r.maintenance_cost).toLocaleString('en-US', { minimumFractionDigits: 2 })}` : '₱0.00' },
   { label: 'Final Status', render: (r) => <TicketStatusBadge value={r.final_status} /> },
-  { label: 'Archived By', render: (r) => r.archived_by?.name ?? '—' },
+  { label: 'Archived By', render: (r) => <UserAvatarName user={r.archived_by} fallback="—" /> },
   { label: 'Archived At', render: (r) => <DateBadge value={r.archived_at} /> },
   { label: 'Time', render: (r) => formatTime(r.archived_at) },
 ];
@@ -5232,23 +5532,30 @@ function FilterBar({
   );
 }
 
-function LocalSearchInput({ value, onChange, placeholder = "Search..." }) {
+function LocalSearchInput({ value, onChange, placeholder = "Search...", onExport }) {
   return (
-    <div className="local-search-container">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="local-search-icon">
-        <circle cx="11" cy="11" r="8"></circle>
-        <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-      </svg>
-      <input 
-        type="text" 
-        value={value} 
-        onChange={(e) => onChange(e.target.value)} 
-        placeholder={placeholder} 
-        className="local-search-input"
-      />
-      {value && (
-        <button className="local-search-clear" onClick={() => onChange('')} type="button" title="Clear search">
-          <Icon name="close" size={14} />
+    <div className="local-search-bar">
+      <div className="local-search-container">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="local-search-icon">
+          <circle cx="11" cy="11" r="8"></circle>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+        <input
+          type="text"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          className="local-search-input"
+        />
+        {value && (
+          <button className="local-search-clear" onClick={() => onChange('')} type="button" title="Clear search">
+            <Icon name="close" size={14} />
+          </button>
+        )}
+      </div>
+      {onExport && (
+        <button className="export-btn" onClick={onExport} type="button" title="Export to CSV" aria-label="Export to CSV">
+          <Icon name="download" size={15} />
         </button>
       )}
     </div>

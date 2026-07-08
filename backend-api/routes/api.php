@@ -7,6 +7,7 @@ use App\Http\Controllers\FleetController;
 use App\Http\Controllers\HubController;
 use App\Http\Controllers\TicketController;
 use App\Http\Controllers\NotificationController;
+use App\Http\Controllers\UserController;
 
 /*
 |--------------------------------------------------------------------------
@@ -50,6 +51,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/locations', [FleetController::class, 'locations']);
     Route::post('/locations', [FleetController::class, 'storeLocation']);
 
+    Route::get('/users', [UserController::class, 'index']);
+    Route::post('/users', [UserController::class, 'store']);
+    Route::put('/users/{user}', [UserController::class, 'update']);
+    Route::put('/users/{user}/deactivate', [UserController::class, 'deactivate']);
+    Route::put('/users/{user}/activate', [UserController::class, 'activate']);
+
     Route::get('/hubs', [HubController::class, 'index']);
     Route::post('/hubs', [HubController::class, 'store']);
     Route::put('/hubs/{hub}', [HubController::class, 'update']);
@@ -63,6 +70,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/issues', [FleetController::class, 'issues']);
     Route::post('/issues', [FleetController::class, 'storeIssue']);
     Route::put('/issues/{issue}', [FleetController::class, 'updateIssue']);
+    Route::delete('/issues/{issue}', [FleetController::class, 'destroyIssue']);
 
     Route::get('/maintenance-records', [FleetController::class, 'maintenanceRecords']);
     Route::post('/maintenance-records', [FleetController::class, 'storeMaintenanceRecord']);
