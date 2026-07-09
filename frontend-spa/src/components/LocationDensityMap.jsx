@@ -198,6 +198,9 @@ async function captureMapToPng(mapEl) {
   const dataUrl = await toPng(mapEl, {
     cacheBust: true,
     pixelRatio: 2,
+    // Light fallback fill instead of black/transparent for any tile that
+    // fails to capture (cross-origin CDN tiles can silently fail to draw).
+    backgroundColor: '#eef2f7',
     // Skip Leaflet's interactive controls so the export is a clean map snapshot.
     filter: (node) => !(node.classList && (
       node.classList.contains('leaflet-control-zoom')
@@ -599,7 +602,7 @@ function LocationDensityMap({
         zoomControl={false}
       >
         <MapClickHandler addMode={addMode} onPickLocation={handlePickLocation} />
-        <TileLayer attribution={CARTO_ATTRIBUTION} maxZoom={19} url={CARTO_LIGHT_TILE_URL} />
+        <TileLayer attribution={CARTO_ATTRIBUTION} crossOrigin="anonymous" maxZoom={19} url={CARTO_LIGHT_TILE_URL} />
         <Polygon
           pathOptions={{
             color: '#2563eb',

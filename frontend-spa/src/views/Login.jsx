@@ -1,7 +1,7 @@
 import { useContext, useState } from 'react';
 import { Link, Navigate, useNavigate } from 'react-router-dom';
 import api from '../api/axios';
-import vmsLogo from '../assets/vms-logo.png';
+import Icon from '../components/Icon';
 import { AuthContext } from '../context/AuthContextObject';
 
 const roleRoutes = {
@@ -19,6 +19,7 @@ function Login() {
   });
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   const demoAccounts = {
     Admin: {
@@ -81,12 +82,12 @@ function Login() {
     <main className="auth-page">
       <section className="auth-card" aria-labelledby="login-title">
         <div className="auth-logo-header">
-          <img className="auth-logo-image" src={vmsLogo} alt="Vehicle Management" />
-          <p className="eyebrow">Barangay VMS</p>
+          <div className="auth-logo-cluster">
+            <Icon name="gear" size={40} className="auth-gear-icon" filled />
+            <span className="vms-wordmark vms-wordmark-xl">vms</span>
+          </div>
+          <p className="eyebrow">Barangay Vehicle Management System</p>
           <h1 id="login-title">Sign in</h1>
-          <p className="auth-subtitle">
-            Use your assigned account to access the fleet workspace.
-          </p>
         </div>
 
         <div className="demo-account-grid" aria-label="Demo account shortcuts">
@@ -120,15 +121,26 @@ function Login() {
 
           <label>
             <span>Password</span>
-            <input
-              autoComplete="off"
-              name="password"
-              onChange={handleChange}
-              placeholder="••••••••"
-              required
-              type="password"
-              value={credentials.password}
-            />
+            <div className="password-field-wrapper">
+              <input
+                autoComplete="off"
+                name="password"
+                onChange={handleChange}
+                placeholder="••••••••"
+                required
+                type={showPassword ? 'text' : 'password'}
+                value={credentials.password}
+              />
+              <button
+                type="button"
+                className="password-toggle-btn"
+                onClick={() => setShowPassword((v) => !v)}
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+                title={showPassword ? 'Hide password' : 'Show password'}
+              >
+                <Icon name={showPassword ? 'eyeOff' : 'eye'} size={18} />
+              </button>
+            </div>
           </label>
 
           {error ? <p className="notice error">{error}</p> : null}

@@ -5,7 +5,6 @@ import api from '../api/axios';
 import LocationDensityMap from '../components/LocationDensityMap';
 import Icon from '../components/Icon';
 import TextType from '../components/TextType';
-import vmsLogo from '../assets/vms-logo.png';
 import { AuthContext } from '../context/AuthContextObject';
 import { groupLocationRowsByHub } from '../data/paknaanLocationDensity';
 
@@ -236,12 +235,13 @@ function Workspace() {
   const isNewUserPage = /\/users\/new$/.test(location.pathname);
   const editUserId = location.pathname.match(/\/users\/(\d+)\/edit$/)?.[1] ?? null;
   const logRepairsTicketId = location.pathname.match(/\/work-orders\/(\d+)\/log-repairs$/)?.[1] ?? null;
+  const inspectTicketId = location.pathname.match(/\/inspections\/(\d+)\/inspect$/)?.[1] ?? null;
   const isOnSpecialPage = Boolean(
     isNewVehiclePage || vehicleProfileId || isNewTicketPage || ticketProfileId
     || isNewCategoryPage || editCategoryId || isNewSchedulePage || editScheduleId
     || isNewIssuePage || editIssueId || isNewConditionPage || editConditionId
     || isNewMaintenancePage || editMaintenanceId || isNewUserPage || editUserId
-    || logRepairsTicketId
+    || logRepairsTicketId || inspectTicketId
   );
   const { user, logout } = useContext(AuthContext);
   const modules = useMemo(() => modulesByRole[user.role] ?? [], [user.role]);
@@ -393,15 +393,11 @@ function Workspace() {
     }
 
     // Ticket workflow — role-scoped status filters
-    if (key === 'ticketInspections') {
-      params.status = 'Open';
-    }
-    if (key === 'ticketVerifications') {
-      params.status = 'For Inspection';
-    }
-    if (key === 'ticketWorkOrders') {
-      params.status = 'Under Repair';
-    }
+    // ticketInspections, ticketVerifications, and ticketWorkOrders intentionally
+    // fetch every ticket assigned to this user (not just the pending-phase
+    // status) so each module can show a "Pending" vs "Submitted" toggle instead
+    // of only the pending queue — once submitted, a ticket moves to the next
+    // phase and would otherwise vanish from view entirely.
 
     const response = await api.get(endpoint, { params });
     setRecords((current) => ({ ...current, [key]: response.data }));
@@ -703,7 +699,25 @@ function Workspace() {
       result = result.filter((row) => row.status !== 'Inactive');
     }
 
-    if (filterStatus) {
+    if (activeModule === 'schedules' && !filterStatus) {
+      result = result.filter((row) => row.status !== 'Cancelled');
+    }
+
+    if (activeModule === 'ticketInspections') {
+      result = result.filter((row) => (
+        filterStatus === 'Inspected' ? row.status !== 'Open' : row.status === 'Open'
+      ));
+    } else if (activeModule === 'ticketWorkOrders') {
+      result = result.filter((row) => (
+        filterStatus === 'Submitted' ? row.status !== 'Under Repair' : row.status === 'Under Repair'
+      ));
+    } else if (activeModule === 'ticketVerifications') {
+      result = result.filter((row) => (
+        filterStatus === 'Verified' ? row.status !== 'For Inspection' : row.status === 'For Inspection'
+      ));
+    } else if (filterStatus && activeModule === 'users') {
+      result = result.filter((row) => row.role === filterStatus);
+    } else if (filterStatus) {
       result = result.filter((row) => {
         const statusVal = row.status ?? row.progress_status ?? row.final_status;
         return statusVal === filterStatus;
@@ -829,6 +843,57 @@ function Workspace() {
   // Status breakdown for the Vehicle Management stat cards — counted from the
   // full unfiltered fetch so the cards stay accurate regardless of the active
   // search/filter selection.
+  // Generic "total + count per value" helper reused by every module's stat
+  // card row (Issue Reports, Maintenance Schedule, Condition Monitoring, etc.).
+  const countByValues = (rows, getField, values) => {
+    const counts = { total: rows.length };
+    values.forEach((v) => { counts[v] = rows.filter((r) => getField(r) === v).length; });
+    return counts;
+  };
+
+  const issueStats = useMemo(
+    () => countByValues(records.issues ?? [], (r) => r.status, ['Pending', 'Under Review', 'In Maintenance', 'Resolved']),
+    [records.issues]
+  );
+
+  const scheduleStats = useMemo(
+    () => countByValues(records.schedules ?? [], (r) => r.status, ['Scheduled', 'Completed', 'Cancelled']),
+    [records.schedules]
+  );
+
+  const conditionStats = useMemo(
+    () => countByValues(records.conditions ?? [], (r) => r.condition_result, ['Good', 'Needs Inspection', 'Needs Repair', 'Damaged']),
+    [records.conditions]
+  );
+
+  const maintenanceRecordStats = useMemo(
+    () => countByValues(records.maintenance ?? [], (r) => r.progress_status, ['Assigned', 'Under Repair', 'For Verification', 'Completed']),
+    [records.maintenance]
+  );
+
+  const userStats = useMemo(
+    () => countByValues(records.users ?? [], (r) => r.role, ['Admin', 'Custodian', 'Maintenance Personnel']),
+    [records.users]
+  );
+
+  const inspectionStats = useMemo(() => {
+    const rows = records.ticketInspections ?? [];
+    const pending = rows.filter((r) => r.status === 'Open').length;
+    return { total: rows.length, Pending: pending, Inspected: rows.length - pending };
+  }, [records.ticketInspections]);
+
+  const workOrderStats = useMemo(() => {
+    const rows = records.ticketWorkOrders ?? [];
+    const pending = rows.filter((r) => r.status === 'Under Repair').length;
+    return { total: rows.length, Pending: pending, Submitted: rows.length - pending };
+  }, [records.ticketWorkOrders]);
+
+  const verificationStats = useMemo(() => {
+    const rows = records.ticketVerifications ?? [];
+    const pending = rows.filter((r) => r.status === 'For Inspection').length;
+    return { total: rows.length, Pending: pending, Verified: rows.length - pending };
+  }, [records.ticketVerifications]);
+
   const vehicleStats = useMemo(() => {
     const rows = records.vehicles ?? [];
     const countByStatus = (status) => rows.filter((row) => row.status === status).length;
@@ -898,15 +963,124 @@ function Workspace() {
 
   return (
     <FormNoticeContext.Provider value={notice}>
+      <header className="topbar">
+        <div className="topbar-left">
+          <div className="topbar-brand-cluster">
+            <button
+              aria-label={isSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              className="sidebar-toggle-btn"
+              onClick={toggleSidebar}
+              title={isSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              type="button"
+            >
+              <Icon name="menu" size={24} />
+            </button>
+            <Icon name="gear" size={28} className="topbar-gear-icon" filled />
+            <span className="vms-wordmark vms-wordmark-sm">vms</span>
+          </div>
+        </div>
+
+        <div className="topbar-right">
+          <div className="notifications-dropdown-container" ref={notificationsRef}>
+            <button
+              className="icon-btn notification-btn"
+              title="Notifications"
+              type="button"
+              onClick={() => setShowNotifications(!showNotifications)}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+                <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+              </svg>
+              {unreadCount > 0 && (
+                <span className="notification-indicator">{unreadCount}</span>
+              )}
+            </button>
+
+            {showNotifications && (
+              <div className="notifications-dropdown">
+                <div className="notifications-header">
+                  <h4>Notifications</h4>
+                  {unreadCount > 0 && (
+                    <button type="button" onClick={markAllNotificationsAsRead}>Mark all as read</button>
+                  )}
+                </div>
+                <div className="notifications-list">
+                  {notifications.length === 0 ? (
+                    <div className="notifications-empty">
+                      <span style={{ display: 'inline-flex', opacity: 0.6 }}><Icon name="bell" size={26} /></span>
+                      <span>No notifications yet.</span>
+                    </div>
+                  ) : (
+                    notifications.map((n) => (
+                      <div
+                        key={n.notification_id}
+                        className={`notification-item ${!n.read_at ? 'unread' : ''}`}
+                        onClick={async () => {
+                          await markNotificationAsRead(n.notification_id);
+                          if (n.ticket_id) {
+                            openTicketProfile({ ticket_id: n.ticket_id });
+                          }
+                          setShowNotifications(false);
+                        }}
+                      >
+                        <div className="notification-content">
+                          <span className="notification-title">{n.title}</span>
+                          <span className="notification-msg">{n.message}</span>
+                          <span className="notification-time">{formatDate(n.created_at)}</span>
+                      </div>
+                      <div className="notification-actions" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          className="notification-close-btn"
+                          type="button"
+                          title="Delete notification"
+                          onClick={() => deleteNotification(n.notification_id)}
+                        >
+                          <Icon name="close" size={14} />
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <button
+          className="icon-btn theme-toggle-btn"
+          type="button"
+          title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+          aria-label="Toggle light and dark mode"
+          onClick={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
+        >
+          {theme === 'dark' ? (
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="4" />
+              <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
+            </svg>
+          ) : (
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+            </svg>
+          )}
+        </button>
+
+        <div className="profile-menu-container" ref={profileMenuRef}>
+          <ProfileMenu
+            user={user}
+            open={showProfileMenu}
+            setOpen={setShowProfileMenu}
+            onLogout={handleLogout}
+            onOpenNotifications={() => setShowNotifications(true)}
+            setNotice={setNotice}
+          />
+        </div>
+      </div>
+      </header>
+
       <main className={`workspace${isSidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
         <aside className={`sidebar${isSidebarCollapsed ? ' collapsed' : ''}`}>
-          <div className="sidebar-brand">
-            <img className="sidebar-logo" src={vmsLogo} alt="Vehicle Management" />
-            <div>
-              <p className="eyebrow">Barangay VMS</p>
-            </div>
-          </div>
-
           <nav className="module-nav" aria-label="Workspace modules">
             {modules.map(([key, label]) => {
               const badgeCount = dashboard?.badge_counts?.[key] ?? 0;
@@ -933,121 +1107,9 @@ function Workspace() {
         </aside>
 
         <section className="content-area">
-          <header className="topbar">
-            <div className="topbar-left">
-              <button
-                aria-label={isSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-                className="icon-btn sidebar-toggle-btn"
-                onClick={toggleSidebar}
-                title={isSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-                type="button"
-              >
-                <Icon name="menu" size={18} />
-              </button>
-              <div>
-                <span className="breadcrumb-path">Workspace / {user.role}</span>
-                <h2>{moduleLabel(modules, activeModule)}</h2>
-              </div>
-            </div>
-
-            <div className="topbar-right">
-              <div className="notifications-dropdown-container" ref={notificationsRef}>
-                <button 
-                  className="icon-btn notification-btn" 
-                  title="Notifications" 
-                  type="button"
-                  onClick={() => setShowNotifications(!showNotifications)}
-                >
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
-                    <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
-                  </svg>
-                  {unreadCount > 0 && (
-                    <span className="notification-indicator">{unreadCount}</span>
-                  )}
-                </button>
-
-                {showNotifications && (
-                  <div className="notifications-dropdown">
-                    <div className="notifications-header">
-                      <h4>Notifications</h4>
-                      {unreadCount > 0 && (
-                        <button type="button" onClick={markAllNotificationsAsRead}>Mark all as read</button>
-                      )}
-                    </div>
-                    <div className="notifications-list">
-                      {notifications.length === 0 ? (
-                        <div className="notifications-empty">
-                          <span style={{ display: 'inline-flex', opacity: 0.6 }}><Icon name="bell" size={26} /></span>
-                          <span>No notifications yet.</span>
-                        </div>
-                      ) : (
-                        notifications.map((n) => (
-                          <div
-                            key={n.notification_id}
-                            className={`notification-item ${!n.read_at ? 'unread' : ''}`}
-                            onClick={async () => {
-                              await markNotificationAsRead(n.notification_id);
-                              if (n.ticket_id) {
-                                openTicketProfile({ ticket_id: n.ticket_id });
-                              }
-                              setShowNotifications(false);
-                            }}
-                          >
-                            <div className="notification-content">
-                              <span className="notification-title">{n.title}</span>
-                              <span className="notification-msg">{n.message}</span>
-                              <span className="notification-time">{formatDate(n.created_at)}</span>
-                          </div>
-                          <div className="notification-actions" onClick={(e) => e.stopPropagation()}>
-                            <button
-                              className="notification-close-btn"
-                              type="button"
-                              title="Delete notification"
-                              onClick={() => deleteNotification(n.notification_id)}
-                            >
-                              <Icon name="close" size={14} />
-                            </button>
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <button
-              className="icon-btn theme-toggle-btn"
-              type="button"
-              title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-              aria-label="Toggle light and dark mode"
-              onClick={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
-            >
-              {theme === 'dark' ? (
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="12" cy="12" r="4" />
-                  <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
-                </svg>
-              ) : (
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-                </svg>
-              )}
-            </button>
-
-            <div className="profile-menu-container" ref={profileMenuRef}>
-              <ProfileMenu
-                user={user}
-                open={showProfileMenu}
-                setOpen={setShowProfileMenu}
-                onLogout={handleLogout}
-                onOpenNotifications={() => setShowNotifications(true)}
-                setNotice={setNotice}
-              />
-            </div>
+          <div className="page-heading-row">
+            <h2>{moduleIcons[activeModule]} {moduleLabel(modules, activeModule)}</h2>
           </div>
-        </header>
 
         {notice && (
           <div className={`toast-notice ${notice.type}`} role="alert">
@@ -1159,6 +1221,12 @@ function Workspace() {
               onBack={() => navigate(-1)}
               onSubmit={(ticket, payload) => ticketAction(`/tickets/${ticket.ticket_id}/log-repairs`, payload, 'Repair logs submitted. Ticket sent for inspection.').then(() => navigate(-1))}
             />
+          ) : inspectTicketId ? (
+            <InspectTicketPage
+              ticket={(records.ticketInspections ?? []).find((t) => String(t.ticket_id) === String(inspectTicketId))}
+              onBack={() => navigate(-1)}
+              onSubmit={(ticket, payload) => ticketAction(`/tickets/${ticket.ticket_id}/inspect`, payload, 'Inspection submitted successfully.').then(() => navigate(-1))}
+            />
           ) : (loading ? <ModuleLoader /> : renderModule())}
         </div>
         <WorkspaceFooter />
@@ -1182,57 +1250,30 @@ function Workspace() {
 
     if (activeModule === 'vehicles') {
       return (
-        <ModulePanel description={(user.role === 'Custodian' ? 'View-only fleet information.' : 'Register, edit, and archive vehicle records.') + ' Status = availability (can it be dispatched right now?). Condition = physical state (does it need repair or inspection?). Click a row to see full vehicle details.'}>
-          <div className="module-action-bar">
-            <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-              <h3>All Vehicles <span className="count-badge">{visibleRows.length}</span></h3>
-              <LocalSearchInput
-                value={searchQuery}
-                onChange={setSearchQuery}
-                placeholder="Search vehicles..."
-                onExport={() => exportRowsToCsv('vehicles.csv', VEHICLE_EXPORT_COLUMNS, visibleRows)}
-              />
-            </div>
-            {user.role === 'Admin' && (
-              <button className="primary-button" type="button" onClick={() => navigate(`${roleRoutes[user.role]}/vehicles/new`)}>+ Add Vehicle</button>
-            )}
+        <ModulePanel
+          description={(user.role === 'Custodian' ? 'View-only fleet information.' : 'Register, edit, and archive vehicle records.') + ' Status = availability (can it be dispatched right now?). Condition = physical state (does it need repair or inspection?). Click a row to see full vehicle details.'}
+          statCards={
+            <ModuleStatCards
+              totalLabel="Total Vehicles"
+              total={vehicleStats.total}
+              cards={VEHICLE_STAT_CARDS}
+              counts={vehicleStats}
+              activeFilter={filterStatus}
+              onFilterChange={setFilterStatus}
+            />
+          }
+        >
+          <div className="panel-header-bar">
+            <h3>All Vehicles <span className="count-badge">{visibleRows.length}</span></h3>
+            <LocalSearchInput
+              value={searchQuery}
+              onChange={setSearchQuery}
+              placeholder="Search vehicles..."
+              onAdd={user.role === 'Admin' ? () => navigate(`${roleRoutes[user.role]}/vehicles/new`) : undefined}
+              addLabel="Add Vehicle"
+              onExport={() => exportRowsToCsv('vehicles.csv', VEHICLE_EXPORT_COLUMNS, visibleRows)}
+            />
           </div>
-          <section className="metric-grid" aria-label="Vehicle status summary" style={{ marginBottom: '16px' }}>
-            <article className="metric-card metric-card-iconic">
-              <span className="metric-card-icon" style={{ background: '#dbeafe', color: '#2563eb' }}>
-                <Icon name="grid" size={18} />
-              </span>
-              <div className="metric-card-body">
-                <span>Total Vehicles</span>
-                <strong>{vehicleStats.total}</strong>
-              </div>
-            </article>
-            {VEHICLE_STAT_CARDS.map(({ key, label, icon, bg, color }) => {
-              const isActive = filterStatus === key;
-              return (
-                <button
-                  key={key}
-                  type="button"
-                  className="metric-card metric-card-iconic"
-                  style={{
-                    cursor: 'pointer',
-                    borderColor: isActive ? color : undefined,
-                    boxShadow: isActive ? `0 0 0 2px ${color}59` : undefined,
-                  }}
-                  onClick={() => setFilterStatus(isActive ? '' : key)}
-                  title={key === 'Inactive' ? 'Archived vehicles' : `Filter: ${key}`}
-                >
-                  <span className="metric-card-icon" style={{ background: bg, color }}>
-                    <Icon name={icon} size={18} />
-                  </span>
-                  <div className="metric-card-body">
-                    <span>{label}</span>
-                    <strong>{vehicleStats[key]}</strong>
-                  </div>
-                </button>
-              );
-            })}
-          </section>
           <FilterBar
             categories={lookups.categories}
             vehicles={lookups.vehicles}
@@ -1256,12 +1297,15 @@ function Workspace() {
     if (activeModule === 'categories') {
       return (
         <ModulePanel description="Maintain standard vehicle type choices used across dropdowns.">
-          <div className="module-action-bar">
-            <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-              <h3>Vehicle Types <span className="count-badge">{visibleRows.length}</span></h3>
-              <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search types..." />
-            </div>
-            <button className="primary-button" type="button" onClick={() => navigate(`${roleRoutes[user.role]}/categories/new`)}>+ Add Type</button>
+          <div className="panel-header-bar">
+            <h3>Vehicle Types <span className="count-badge">{visibleRows.length}</span></h3>
+            <LocalSearchInput
+              value={searchQuery}
+              onChange={setSearchQuery}
+              placeholder="Search types..."
+              onAdd={() => navigate(`${roleRoutes[user.role]}/categories/new`)}
+              addLabel="Add Type"
+            />
           </div>
           <DataTable columns={categoryColumns((row) => navigate(`${roleRoutes[user.role]}/categories/${row.category_id}/edit`), deleteRecord)} rows={visibleRows} />
         </ModulePanel>
@@ -1270,13 +1314,28 @@ function Workspace() {
 
     if (activeModule === 'users') {
       return (
-        <ModulePanel description="Create and manage user accounts — Admin, Custodian, and Maintenance Personnel.">
-          <div className="module-action-bar">
-            <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-              <h3>Users <span className="count-badge">{visibleRows.length}</span></h3>
-              <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search users..." />
-            </div>
-            <button className="primary-button" type="button" onClick={() => navigate(`${roleRoutes[user.role]}/users/new`)}>+ Add User</button>
+        <ModulePanel
+          description="Create and manage user accounts — Admin, Custodian, and Maintenance Personnel."
+          statCards={
+            <ModuleStatCards
+              totalLabel="Total Users"
+              total={userStats.total}
+              cards={USER_STAT_CARDS}
+              counts={userStats}
+              activeFilter={filterStatus}
+              onFilterChange={setFilterStatus}
+            />
+          }
+        >
+          <div className="panel-header-bar">
+            <h3>Users <span className="count-badge">{visibleRows.length}</span></h3>
+            <LocalSearchInput
+              value={searchQuery}
+              onChange={setSearchQuery}
+              placeholder="Search users..."
+              onAdd={() => navigate(`${roleRoutes[user.role]}/users/new`)}
+              addLabel="Add User"
+            />
           </div>
           <DataTable
             columns={userColumns((row) => navigate(`${roleRoutes[user.role]}/users/${row.id}/edit`), toggleUserActive, user.id)}
@@ -1333,12 +1392,15 @@ function Workspace() {
 
             {locationsTab === 'records' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                <div className="module-action-bar">
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                    <h3>Location Records ({locationRows.length})</h3>
-                    <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search records..." />
-                  </div>
-                  <button className="primary-button" type="button" onClick={() => setEditTarget({})}>+ Add Record</button>
+                <div className="panel-header-bar inline">
+                  <h3>Location Records ({locationRows.length})</h3>
+                  <LocalSearchInput
+                    value={searchQuery}
+                    onChange={setSearchQuery}
+                    placeholder="Search records..."
+                    onAdd={() => setEditTarget({})}
+                    addLabel="Add Record"
+                  />
                 </div>
                 <div style={{ overflowX: 'auto' }}>
                   <DataTable
@@ -1370,15 +1432,28 @@ function Workspace() {
 
     if (activeModule === 'conditions') {
       return (
-        <ModulePanel description="Periodic inspection log — a Custodian's routine check-in on a vehicle's physical condition (e.g. a monthly walkaround), separate from Maintenance Records (which logs actual repair work already performed). Each entry here can update the vehicle's Condition field on the fleet list.">
-            <div className="module-action-bar">
-              <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                <h3>Condition Records <span className="count-badge">{visibleRows.length}</span></h3>
-                <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search conditions..." />
-              </div>
-              {user.role === 'Custodian' && (
-                <button className="primary-button" type="button" onClick={() => navigate(`${roleRoutes[user.role]}/conditions/new`)}>+ Add Condition Check</button>
-              )}
+        <ModulePanel
+          description="Periodic inspection log — a Custodian's routine check-in on a vehicle's physical condition (e.g. a monthly walkaround), separate from Maintenance Records (which logs actual repair work already performed). Each entry here can update the vehicle's Condition field on the fleet list."
+          statCards={
+            <ModuleStatCards
+              totalLabel="Total Records"
+              total={conditionStats.total}
+              cards={CONDITION_STAT_CARDS}
+              counts={conditionStats}
+              activeFilter={filterStatus}
+              onFilterChange={setFilterStatus}
+            />
+          }
+        >
+            <div className="panel-header-bar">
+              <h3>Condition Records <span className="count-badge">{visibleRows.length}</span></h3>
+              <LocalSearchInput
+                value={searchQuery}
+                onChange={setSearchQuery}
+                placeholder="Search conditions..."
+                onAdd={user.role === 'Custodian' ? () => navigate(`${roleRoutes[user.role]}/conditions/new`) : undefined}
+                addLabel="Add Condition Check"
+              />
             </div>
 
             <div className="filter-bar-container">
@@ -1499,15 +1574,28 @@ function Workspace() {
       }
 
       return (
-        <ModulePanel description={issueDescription(user.role)}>
-          <div className="module-action-bar">
-            <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-              <h3>Issue Reports <span className="count-badge">{visibleRows.length}</span></h3>
-              <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search issues..." />
-            </div>
-            {user.role === 'Custodian' && (
-              <button className="primary-button" type="button" onClick={() => navigate(`${roleRoutes[user.role]}/issues/new`)}>+ Report Issue</button>
-            )}
+        <ModulePanel
+          description={issueDescription(user.role)}
+          statCards={
+            <ModuleStatCards
+              totalLabel="Total Issues"
+              total={issueStats.total}
+              cards={ISSUE_STAT_CARDS}
+              counts={issueStats}
+              activeFilter={filterStatus}
+              onFilterChange={setFilterStatus}
+            />
+          }
+        >
+          <div className="panel-header-bar">
+            <h3>Issue Reports <span className="count-badge">{visibleRows.length}</span></h3>
+            <LocalSearchInput
+              value={searchQuery}
+              onChange={setSearchQuery}
+              placeholder="Search issues..."
+              onAdd={user.role === 'Custodian' ? () => navigate(`${roleRoutes[user.role]}/issues/new`) : undefined}
+              addLabel="Report Issue"
+            />
           </div>
           <FilterBar
             categories={lookups.categories}
@@ -1535,15 +1623,28 @@ function Workspace() {
 
     if (activeModule === 'maintenance') {
       return (
-        <ModulePanel description="Directly log external, historical, or third-party vehicle maintenance records and expenses without running the 5-phase ticket workflow.">
-          <div className="module-action-bar">
-            <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-              <h3>Maintenance Records <span className="count-badge">{visibleRows.length}</span></h3>
-              <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search maintenance..." />
-            </div>
-            {user.role === 'Admin' && (
-              <button className="primary-button" type="button" onClick={() => navigate(`${roleRoutes[user.role]}/maintenance/new`)}>+ Add Maintenance</button>
-            )}
+        <ModulePanel
+          description="Directly log external, historical, or third-party vehicle maintenance records and expenses without running the 5-phase ticket workflow."
+          statCards={
+            <ModuleStatCards
+              totalLabel="Total Records"
+              total={maintenanceRecordStats.total}
+              cards={MAINTENANCE_RECORD_STAT_CARDS}
+              counts={maintenanceRecordStats}
+              activeFilter={filterStatus}
+              onFilterChange={setFilterStatus}
+            />
+          }
+        >
+          <div className="panel-header-bar">
+            <h3>Maintenance Records <span className="count-badge">{visibleRows.length}</span></h3>
+            <LocalSearchInput
+              value={searchQuery}
+              onChange={setSearchQuery}
+              placeholder="Search maintenance..."
+              onAdd={user.role === 'Admin' ? () => navigate(`${roleRoutes[user.role]}/maintenance/new`) : undefined}
+              addLabel="Add Maintenance"
+            />
           </div>
           <FilterBar
             categories={lookups.categories}
@@ -1571,7 +1672,7 @@ function Workspace() {
       return (
         <>
           <ModulePanel description="Review records marked for field verification and send the result back to the ticket loop.">
-            <div className="module-action-bar">
+            <div className="panel-header-bar">
               <h3>Pending Verifications <span className="count-badge">{visibleRows.length}</span></h3>
               <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search verifications..." />
             </div>
@@ -1597,20 +1698,29 @@ function Workspace() {
 
     if (activeModule === 'schedules') {
       return (
-        <ModulePanel description="Plan preventative maintenance and track schedule status.">
-          <div className="module-action-bar">
-            <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-              <h3>Maintenance Schedules <span className="count-badge">{visibleRows.length}</span></h3>
-              <LocalSearchInput
-                value={searchQuery}
-                onChange={setSearchQuery}
-                placeholder="Search schedules..."
-                onExport={() => exportRowsToCsv('maintenance-schedules.csv', SCHEDULE_EXPORT_COLUMNS, visibleRows)}
-              />
-            </div>
-            {user.role === 'Admin' && (
-              <button className="primary-button" type="button" onClick={() => navigate(`${roleRoutes[user.role]}/schedules/new`)}>+ Add Schedule</button>
-            )}
+        <ModulePanel
+          description="Plan preventative maintenance and track schedule status."
+          statCards={
+            <ModuleStatCards
+              totalLabel="Total Schedules"
+              total={scheduleStats.total}
+              cards={SCHEDULE_STAT_CARDS}
+              counts={scheduleStats}
+              activeFilter={filterStatus}
+              onFilterChange={setFilterStatus}
+            />
+          }
+        >
+          <div className="panel-header-bar">
+            <h3>Maintenance Schedules <span className="count-badge">{visibleRows.length}</span></h3>
+            <LocalSearchInput
+              value={searchQuery}
+              onChange={setSearchQuery}
+              placeholder="Search schedules..."
+              onAdd={user.role === 'Admin' ? () => navigate(`${roleRoutes[user.role]}/schedules/new`) : undefined}
+              addLabel="Add Schedule"
+              onExport={() => exportRowsToCsv('maintenance-schedules.csv', SCHEDULE_EXPORT_COLUMNS, visibleRows)}
+            />
           </div>
           <DataTable
             columns={scheduleColumns((row) => navigate(`${roleRoutes[user.role]}/schedules/${row.schedule_id}/edit`), deleteRecord)}
@@ -1624,7 +1734,7 @@ function Workspace() {
     if (activeModule === 'maintenanceHistory') {
       return (
         <ModulePanel description="Completed repair and service records are listed here automatically.">
-          <div className="module-action-bar">
+          <div className="panel-header-bar">
             <h3>Completed Maintenance <span className="count-badge">{visibleRows.length}</span></h3>
             <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search records..." />
           </div>
@@ -1640,7 +1750,7 @@ function Workspace() {
     if (activeModule === 'histories') {
       return (
         <ModulePanel description="Automatic vehicle activity timeline across location, issue, condition, and maintenance events.">
-          <div className="module-action-bar">
+          <div className="panel-header-bar">
             <h3>Activity History <span className="count-badge">{visibleRows.length}</span></h3>
             <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search history..." />
           </div>
@@ -1656,7 +1766,7 @@ function Workspace() {
     if (activeModule === 'reports') {
       return (
         <ModulePanel description="Pick a report below, then narrow it down with the filters that apply to it.">
-          <div className="module-action-bar">
+          <div className="panel-header-bar">
             <h3>Reports</h3>
           </div>
           <ReportsModule lookups={lookups} onGenerate={submitModuleForm} />
@@ -1668,7 +1778,7 @@ function Workspace() {
     if (activeModule === 'logs') {
       return (
         <ModulePanel description="Read-only accountability log of user actions.">
-          <div className="module-action-bar">
+          <div className="panel-header-bar">
             <h3>System Activity Logs <span className="count-badge">{visibleRows.length}</span></h3>
             <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search logs..." />
           </div>
@@ -1797,16 +1907,14 @@ function Workspace() {
 
       return (
         <ModulePanel description="Immutable audit trail of all completed and closed maintenance tickets (Phase 5 — History Logging & Archive Auditing).">
-          <div className="module-action-bar">
-            <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-              <h3>
-                Archived Tickets <span className="count-badge">{visibleRows.length}</span>
-                {visibleRows.length !== allArchiveRows.length && (
-                  <span style={{ fontWeight: 400, fontSize: '0.8rem', marginLeft: 6 }}>of {allArchiveRows.length} total</span>
-                )}
-              </h3>
-              <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search archives..." />
-            </div>
+          <div className="panel-header-bar">
+            <h3>
+              Archived Tickets <span className="count-badge">{visibleRows.length}</span>
+              {visibleRows.length !== allArchiveRows.length && (
+                <span style={{ fontWeight: 400, fontSize: '0.8rem', marginLeft: 6 }}>of {allArchiveRows.length} total</span>
+              )}
+            </h3>
+            <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search archives..." />
           </div>
 
           {/* ── Archive Date Filter Bar ─────────────────────────────── */}
@@ -1941,10 +2049,7 @@ function Workspace() {
       return (
         <CustodianInspectionModule
           tickets={visibleRows}
-          editTarget={editTarget}
-          setEditTarget={setEditTarget}
-          onInspect={(ticket, payload) => ticketAction(`/tickets/${ticket.ticket_id}/inspect`, payload, 'Inspection submitted successfully.')}
-          onCancelEdit={() => setEditTarget(null)}
+          onOpenInspect={(ticket) => navigate(`${roleRoutes[user.role]}/inspections/${ticket.ticket_id}/inspect`)}
           categories={lookups.categories}
           vehicles={lookups.vehicles}
           filterCategory={filterCategory}
@@ -1952,6 +2057,9 @@ function Workspace() {
           filterCapacity={filterCapacity}
           setFilterCapacity={setFilterCapacity}
           onViewVehicle={openVehicleProfile}
+          stats={inspectionStats}
+          activeFilter={filterStatus}
+          onFilterChange={setFilterStatus}
         />
       );
     }
@@ -1972,6 +2080,9 @@ function Workspace() {
           filterCapacity={filterCapacity}
           setFilterCapacity={setFilterCapacity}
           onViewVehicle={openVehicleProfile}
+          stats={verificationStats}
+          activeFilter={filterStatus}
+          onFilterChange={setFilterStatus}
         />
       );
     }
@@ -1991,6 +2102,9 @@ function Workspace() {
           onViewVehicle={openVehicleProfile}
           searchQuery={searchQuery}
           setSearchQuery={setSearchQuery}
+          stats={workOrderStats}
+          activeFilter={filterStatus}
+          onFilterChange={setFilterStatus}
         />
       );
     }
@@ -2134,14 +2248,20 @@ function Dashboard({ data, hubs = null, user }) {
       <section className="metric-grid">
         {data.metrics.map((metric) => {
           const isReportedIssueAlert = metric.label === 'Reported Issues' && reportedIssues > 0;
+          const style = DASHBOARD_METRIC_STYLES[metric.label] ?? DASHBOARD_METRIC_STYLE_DEFAULT;
 
           return (
             <article
-              className={`metric-card${isReportedIssueAlert ? ' metric-card-alert' : ''}`}
+              className={`metric-card metric-card-iconic dashboard-metric-card${isReportedIssueAlert ? ' metric-card-alert' : ''}`}
               key={metric.label}
             >
-              <span>{metric.label}</span>
-              <strong>{metric.value}</strong>
+              <span className="metric-card-icon" style={{ background: style.bg, color: style.color }}>
+                <Icon name={style.icon} size={16} />
+              </span>
+              <div className="metric-card-body">
+                <span>{metric.label}</span>
+                <strong>{metric.value}</strong>
+              </div>
             </article>
           );
         })}
@@ -2175,15 +2295,15 @@ function Dashboard({ data, hubs = null, user }) {
       </section>
 
       <section className="panel full-span area-chart-panel">
-        <div className="panel-header area-chart-header">
+        <div className="panel-header-bar">
           <h3>Fleet Activity by Day</h3>
           <span className="area-chart-tag">Last 14 days</span>
         </div>
-        <AreaChart rows={data.activity_by_day ?? []} />
+        <ActivityChart rows={data.activity_by_day ?? []} />
       </section>
 
       <section className="panel full-span">
-        <div className="panel-header">
+        <div className="panel-header-bar">
           <h3>Recent Updates</h3>
         </div>
         <DataTable columns={historyColumns.slice(1)} rows={data.recent_updates} />
@@ -2338,6 +2458,8 @@ function ChartLegend({ rows }) {
   );
 }
 
+const BAR_CHART_PALETTE = ['#2563eb', '#f97316', '#22c55e', '#a855f7', '#ec4899', '#06b6d4', '#eab308', '#ef4444'];
+
 function HorizontalBarChart({ rows = [] }) {
   const maxValue = Math.max(1, ...rows.map((row) => Number(row.value) || 0));
 
@@ -2347,9 +2469,10 @@ function HorizontalBarChart({ rows = [] }) {
 
   return (
     <div className="horizontal-bars">
-      {rows.map((row) => {
+      {rows.map((row, i) => {
         const value = Number(row.value) || 0;
         const percent = Math.round((value / maxValue) * 100);
+        const color = row.color || BAR_CHART_PALETTE[i % BAR_CHART_PALETTE.length];
         return (
           <div className="bar-row" key={row.label || 'Unassigned'}>
             <div className="bar-row-label">
@@ -2357,7 +2480,7 @@ function HorizontalBarChart({ rows = [] }) {
               <strong>{value}</strong>
             </div>
             <div className="bar-track">
-              <span style={{ width: `${percent}%` }}></span>
+              <span style={{ width: `${percent}%`, background: color }}></span>
             </div>
           </div>
         );
@@ -2388,40 +2511,95 @@ function ColumnChart({ rows = [] }) {
   );
 }
 
-// Quadratic curve through each point, using the midpoint between consecutive
-// points as the curve's endpoint — a lightweight way to smooth a line chart
-// without pulling in a charting library.
+// Monotone cubic spline (Fritsch-Carlson) through each point. Unlike a naive
+// quadratic-midpoint curve, this never overshoots past a point's neighbors —
+// so a sharp rise out of a run of flat zeros can't dip below the axis or
+// bulge above the peak it's approaching.
 function smoothLinePath(points) {
-  if (points.length < 2) {
-    return points.length === 1 ? `M ${points[0].x.toFixed(1)} ${points[0].y.toFixed(1)}` : '';
+  const n = points.length;
+  if (n < 2) {
+    return n === 1 ? `M ${points[0].x.toFixed(1)} ${points[0].y.toFixed(1)}` : '';
   }
+
+  const dx = [];
+  const slope = [];
+  for (let i = 0; i < n - 1; i++) {
+    dx.push(points[i + 1].x - points[i].x);
+    slope.push((points[i + 1].y - points[i].y) / (dx[i] || 1));
+  }
+
+  const m = [slope[0]];
+  for (let i = 1; i < n - 1; i++) {
+    if (slope[i - 1] * slope[i] <= 0) {
+      m.push(0);
+    } else {
+      m.push((slope[i - 1] + slope[i]) / 2);
+    }
+  }
+  m.push(slope[n - 2]);
+
+  for (let i = 0; i < n - 1; i++) {
+    if (slope[i] === 0) {
+      m[i] = 0;
+      m[i + 1] = 0;
+      continue;
+    }
+    const a = m[i] / slope[i];
+    const b = m[i + 1] / slope[i];
+    const h = Math.hypot(a, b);
+    if (h > 3) {
+      const t = 3 / h;
+      m[i] = t * a * slope[i];
+      m[i + 1] = t * b * slope[i];
+    }
+  }
+
   let d = `M ${points[0].x.toFixed(1)} ${points[0].y.toFixed(1)}`;
-  for (let i = 0; i < points.length - 1; i++) {
+  for (let i = 0; i < n - 1; i++) {
     const cur = points[i];
     const next = points[i + 1];
-    const midX = (cur.x + next.x) / 2;
-    const midY = (cur.y + next.y) / 2;
-    d += ` Q ${cur.x.toFixed(1)} ${cur.y.toFixed(1)} ${midX.toFixed(1)} ${midY.toFixed(1)}`;
+    const c1x = cur.x + dx[i] / 3;
+    const c1y = cur.y + (m[i] * dx[i]) / 3;
+    const c2x = next.x - dx[i] / 3;
+    const c2y = next.y - (m[i + 1] * dx[i]) / 3;
+    d += ` C ${c1x.toFixed(1)} ${c1y.toFixed(1)}, ${c2x.toFixed(1)} ${c2y.toFixed(1)}, ${next.x.toFixed(1)} ${next.y.toFixed(1)}`;
   }
-  const last = points[points.length - 1];
-  d += ` T ${last.x.toFixed(1)} ${last.y.toFixed(1)}`;
   return d;
 }
 
-function AreaChart({ rows = [], height = 180 }) {
+function ActivityChart({ rows = [], height = 220 }) {
+  // Measure the actual rendered width so the SVG viewBox always matches the
+  // real pixel size 1:1 — otherwise a fixed viewBox width stretched to fill a
+  // wider container scales x/y unevenly and distorts the axis text and bars.
+  const containerRef = useRef(null);
+  const [measuredWidth, setMeasuredWidth] = useState(560);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return undefined;
+    const observer = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect?.width;
+      if (w) setMeasuredWidth(w);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
   if (!rows.length) {
     return <p className="empty-state">No activity data yet.</p>;
   }
 
-  const width = 560;
+  const width = Math.max(320, measuredWidth);
   const padX = 36;
   const padTop = 16;
   const padBottom = 26;
   const innerW = width - padX * 2;
   const innerH = height - padTop - padBottom;
 
-  const values = rows.map((r) => Number(r.value) || 0);
-  const rawMax = Math.max(1, ...values);
+  const fleetValues = rows.map((r) => Number(r.fleet_value ?? r.value) || 0);
+  const maintenanceValues = rows.map((r) => Number(r.maintenance_value) || 0);
+  const totalValues = rows.map((r, i) => Number(r.value) || fleetValues[i] + maintenanceValues[i]);
+  const rawMax = Math.max(1, ...totalValues, ...fleetValues, ...maintenanceValues);
   // Choose a "nice" integer step so the Y axis has clean, unique labels
   // (counts are whole numbers, so the step is always >= 1).
   const niceStep = (() => {
@@ -2436,37 +2614,42 @@ function AreaChart({ rows = [], height = 180 }) {
     return Math.max(1, s * pow);
   })();
   // Give the chart a sensible minimum headroom so a day or two of low
-  // activity doesn't pin the whole line to the very top/bottom edges.
+  // activity doesn't pin every bar to the very top/bottom edges.
   const niceMax = Math.max(4, Math.ceil(rawMax / niceStep) * niceStep);
   // Top-to-bottom integer ticks (e.g. 3, 2, 1, 0) — no rounding duplicates.
   const yTicks = [];
   for (let v = niceMax; v >= 0; v -= niceStep) yTicks.push(v);
 
-  const stepX = rows.length > 1 ? innerW / (rows.length - 1) : 0;
+  const bandW = innerW / rows.length;
+  const barW = Math.max(4, Math.min(16, bandW * 0.28));
+  const barGap = 3;
+  const toY = (value) => padTop + innerH - (value / niceMax) * innerH;
+  const baseline = padTop + innerH;
+
   const points = rows.map((row, i) => {
-    const x = padX + stepX * i;
-    const y = padTop + innerH - ((Number(row.value) || 0) / niceMax) * innerH;
-    return { x, y, ...row };
+    const cx = padX + bandW * i + bandW / 2;
+    return {
+      cx,
+      label: row.label,
+      fleetValue: fleetValues[i],
+      maintenanceValue: maintenanceValues[i],
+      totalValue: totalValues[i],
+      fleetTop: toY(fleetValues[i]),
+      maintenanceTop: toY(maintenanceValues[i]),
+      lineY: toY(totalValues[i]),
+    };
   });
 
-  // Smooth quadratic curve through each point (instead of straight segments) so the
-  // line reads as a proper trend rather than a flat, robotic polyline.
-  const linePath = smoothLinePath(points);
-  const areaPath = `${linePath} L ${points[points.length - 1].x.toFixed(1)} ${(padTop + innerH).toFixed(1)} L ${points[0].x.toFixed(1)} ${(padTop + innerH).toFixed(1)} Z`;
+  // Smooth trend line tracing total activity per day, echoing the reference
+  // combo chart's bar+line overlay.
+  const linePath = smoothLinePath(points.map((p) => ({ x: p.cx, y: p.lineY })));
 
   // Show at most ~8 x-axis labels to avoid crowding.
   const labelStep = Math.ceil(rows.length / 8);
 
   return (
-    <div className="area-chart">
-      <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" role="img" aria-label="Activity by day">
-        <defs>
-          <linearGradient id="areaFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#2563eb" stopOpacity="0.45" />
-            <stop offset="100%" stopColor="#2563eb" stopOpacity="0" />
-          </linearGradient>
-        </defs>
-
+    <div className="area-chart activity-chart" ref={containerRef}>
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Activity by day">
         {yTicks.map((val) => {
           const y = padTop + innerH * (1 - val / niceMax);
           return (
@@ -2481,25 +2664,56 @@ function AreaChart({ rows = [], height = 180 }) {
           );
         })}
 
-        <path d={areaPath} fill="url(#areaFill)" />
-        <path d={linePath} className="area-line" fill="none" />
+        {points.map((p, i) => (
+          <rect
+            key={`fleet-bar-${i}`}
+            className="activity-bar activity-bar-fleet"
+            x={p.cx - barGap / 2 - barW}
+            y={p.fleetTop}
+            width={barW}
+            height={Math.max(0, baseline - p.fleetTop)}
+            rx={3}
+          >
+            <title>{`${p.label} · Fleet updates: ${p.fleetValue}`}</title>
+          </rect>
+        ))}
+        {points.map((p, i) => (
+          <rect
+            key={`maint-bar-${i}`}
+            className="activity-bar activity-bar-maintenance"
+            x={p.cx + barGap / 2}
+            y={p.maintenanceTop}
+            width={barW}
+            height={Math.max(0, baseline - p.maintenanceTop)}
+            rx={3}
+          >
+            <title>{`${p.label} · Maintenance: ${p.maintenanceValue}`}</title>
+          </rect>
+        ))}
+
+        <path d={linePath} className="activity-trend-line" fill="none" />
+        {points.map((p, i) => (
+          <circle key={`dot-${i}`} className="activity-trend-dot" cx={p.cx} cy={p.lineY} r="3.2">
+            <title>{`${p.label} · Total: ${p.totalValue}`}</title>
+          </circle>
+        ))}
 
         {points.map((p, i) => (
-          <g key={i}>
-            <circle className="area-dot" cx={p.x} cy={p.y} r="3.6">
-              <title>{`${p.label}: ${p.value}`}</title>
-            </circle>
-            {i % labelStep === 0 && (
-              <text className="area-axis-label" x={p.x} y={height - 8} textAnchor="middle">{p.label}</text>
-            )}
-          </g>
+          i % labelStep === 0 && (
+            <text key={`label-${i}`} className="area-axis-label" x={p.cx} y={height - 8} textAnchor="middle">{p.label}</text>
+          )
         ))}
       </svg>
+      <div className="activity-chart-legend">
+        <span><i className="activity-legend-swatch activity-legend-fleet"></i>Fleet Updates</span>
+        <span><i className="activity-legend-swatch activity-legend-maintenance"></i>Maintenance</span>
+        <span><i className="activity-legend-swatch activity-legend-line"></i>Total Trend</span>
+      </div>
     </div>
   );
 }
 
-function ModulePanel({ children, description }) {
+function ModulePanel({ children, description, statCards }) {
   return (
     <div className="module-grid">
       {description && (
@@ -2512,6 +2726,7 @@ function ModulePanel({ children, description }) {
           <p className="module-description">{description}</p>
         </div>
       )}
+      {statCards}
       <section className="panel">
         {children}
       </section>
@@ -2661,7 +2876,7 @@ function IssueViewModal({ issue, onClose }) {
             )}
           </dl>
           {issue.photo_url && (
-            <img src={issue.photo_url} alt="Issue attachment" style={{ maxWidth: '100%', borderRadius: '8px', marginTop: '12px' }} />
+            <img src={resolvePhotoUrl(issue.photo_url)} alt="Issue attachment" style={{ maxWidth: '100%', borderRadius: '8px', marginTop: '12px' }} />
           )}
         </div>
       </div>
@@ -2793,6 +3008,16 @@ function ProfileMenu({ user, open, setOpen, onLogout, onOpenNotifications, setNo
 
 const EMPTY_OBJ = {};
 
+function splitQuantityValue(value, units) {
+  const str = String(value ?? '').trim();
+  if (!str) return { amount: '', unit: units[0] };
+  const lastSpace = str.lastIndexOf(' ');
+  if (lastSpace === -1) return { amount: str, unit: units[0] };
+  const amount = str.slice(0, lastSpace).trim();
+  const unitCandidate = str.slice(lastSpace + 1).trim();
+  return units.includes(unitCandidate) ? { amount, unit: unitCandidate } : { amount: str, unit: units[0] };
+}
+
 function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, onSubmit, submitLabel, title }) {
   const [values, setValues] = useState(() => valuesFromFields(fields, initialValues));
 
@@ -2802,9 +3027,11 @@ function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, onSubmit, subm
 
   const handleChange = (event) => {
     const { name, type, files, value } = event.target;
+    const field = fields.find((f) => f.name === name);
+    const nextValue = field?.uppercase ? value.toUpperCase() : value;
     setValues((current) => ({
       ...current,
-      [name]: type === 'file' ? files[0] : value,
+      [name]: type === 'file' ? files[0] : nextValue,
     }));
   };
 
@@ -2816,9 +3043,36 @@ function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, onSubmit, subm
   return (
     <form className="smart-form" onSubmit={handleSubmit}>
       <h3>{title}</h3>
-      {fields.map((field) => (
+      {fields.map((field) => {
+        const quantity = field.type === 'quantity' ? splitQuantityValue(values[field.name], field.units) : null;
+        return (
         <label key={field.name}>
           <span>{field.label}</span>
+          {field.type === 'quantity' ? (
+            <div className="quantity-field">
+              <input
+                min="0"
+                onChange={(e) => setValues((current) => ({
+                  ...current,
+                  [field.name]: `${e.target.value} ${quantity.unit}`.trim(),
+                }))}
+                placeholder={field.placeholder}
+                required={field.required}
+                step="any"
+                type="number"
+                value={quantity.amount}
+              />
+              <select
+                onChange={(e) => setValues((current) => ({
+                  ...current,
+                  [field.name]: `${quantity.amount} ${e.target.value}`.trim(),
+                }))}
+                value={quantity.unit}
+              >
+                {field.units.map((u) => <option key={u} value={u}>{u}</option>)}
+              </select>
+            </div>
+          ) : null}
           {field.type === 'textarea' ? (
             <textarea
               name={field.name}
@@ -2843,12 +3097,15 @@ function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, onSubmit, subm
               ))}
             </select>
           ) : null}
-          {!['textarea', 'select'].includes(field.type) ? (
+          {!['textarea', 'select', 'quantity'].includes(field.type) ? (
             <input
               accept={field.accept}
               name={field.name}
               onChange={handleChange}
+              pattern={field.pattern}
+              placeholder={field.placeholder}
               required={field.required}
+              title={field.title}
               type={field.type}
               value={field.type === 'file' ? undefined : values[field.name] ?? ''}
             />
@@ -2861,9 +3118,10 @@ function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, onSubmit, subm
             />
           ) : null}
         </label>
-      ))}
+        );
+      })}
       <div className="form-actions">
-        {onCancel ? <button className="ghost-button" onClick={onCancel} type="button">Cancel</button> : null}
+        {onCancel ? <button className="ghost-button btn-exit-action" onClick={onCancel} type="button">Cancel</button> : null}
         <button className="primary-button" type="submit">{submitLabel}</button>
       </div>
     </form>
@@ -3040,16 +3298,23 @@ const passwordFields = [
   { label: 'Confirm New Password', name: 'new_password_confirmation', required: true, type: 'password' },
 ];
 
+const FUEL_TYPE_OPTIONS = ['Diesel', 'Gasoline', 'Electric', 'Hybrid', 'CNG', 'LPG'];
+
+function capacityUnits(domain) {
+  return domain === 'Water' ? ['L', 'gal', 'm³'] : ['kg', 'tons', 'L', 'pax'];
+}
+
 function vehicleDomainFields(domain) {
   return domain === 'Water'
     ? [
         { label: 'Hull Material', name: 'hull_material', required: true, type: 'text' },
         { label: 'Engine Type', name: 'engine_type', required: true, type: 'text' },
       ]
-    : [{ label: 'Fuel Type', name: 'fuel_type', required: true, type: 'text' }];
+    : [{ label: 'Fuel Type', name: 'fuel_type', options: FUEL_TYPE_OPTIONS, required: true, type: 'select' }];
 }
 
 const VEHICLE_WIZARD_STEP_LABELS = ['Basic Info', 'Specs', 'Photo & Location'];
+const VEHICLE_WIZARD_STEP_ICONS = ['clipboard', 'wrench', 'pin'];
 
 function NewVehiclePage({ onBack, lookups, allHubs, onSubmit }) {
   const [step, setStep] = useState(1);
@@ -3064,14 +3329,18 @@ function NewVehiclePage({ onBack, lookups, allHubs, onSubmit }) {
   const stepFields = {
     1: [
       { label: 'Vehicle Name', name: 'vehicle_name', required: true, type: 'text' },
-      { label: 'Plate Number', name: 'plate_number', required: true, type: 'text' },
+      {
+        label: 'Plate Number', name: 'plate_number', required: true, type: 'text',
+        placeholder: 'e.g. ABC 1234', pattern: '^[A-Za-z]{2,6}[\\s-]?\\d{2,6}[A-Za-z]?$',
+        title: 'Enter a valid plate number, e.g. ABC 1234 or ABC-1234', uppercase: true,
+      },
       { label: 'Vehicle Type', name: 'category_id', options: options(lookups.categories, 'category_id', 'category_name'), required: true, type: 'select' },
     ],
     2: [
       { label: 'Brand', name: 'brand', required: true, type: 'text' },
       { label: 'Model', name: 'model', required: true, type: 'text' },
       { label: 'Year Model', name: 'year_model', required: true, type: 'number' },
-      { label: 'Capacity', name: 'capacity', required: true, type: 'text' },
+      { label: 'Capacity', name: 'capacity', required: true, type: 'quantity', units: capacityUnits(domain) },
       { label: 'Vehicle Color', name: 'vehicle_color', required: true, type: 'text' },
       ...vehicleDomainFields(domain),
     ],
@@ -3097,35 +3366,47 @@ function NewVehiclePage({ onBack, lookups, allHubs, onSubmit }) {
   return (
     <ModulePanel description="Register a new vehicle in the fleet — complete all three steps to add it.">
       <div className="vehicle-profile-header">
-        <button className="ghost-button" type="button" onClick={onBack}><Icon name="undo" size={14} /> Back</button>
+        <button className="ghost-button btn-exit-action" type="button" onClick={onBack}><Icon name="undo" size={14} /> Back</button>
         <h3 className="ticket-detail-title" style={{ margin: 0 }}>Add Vehicle — Step {step} of 3</h3>
       </div>
       <div className="wizard-steps" role="list" aria-label="Add vehicle steps">
         {VEHICLE_WIZARD_STEP_LABELS.map((label, i) => {
           const n = i + 1;
           const state = step === n ? 'active' : step > n ? 'done' : 'upcoming';
+          if (state === 'done') {
+            return (
+              <button
+                key={label}
+                type="button"
+                className="wizard-step-pill is-done"
+                role="listitem"
+                onClick={() => setStep(n)}
+                title={`Go back to ${label}`}
+              >
+                <Icon name="checkCircle" size={16} />
+                {label}
+              </button>
+            );
+          }
           return (
             <div key={label} className={`wizard-step-pill is-${state}`} role="listitem">
-              <span className="wizard-step-index">{state === 'done' ? <Icon name="checkCircle" size={12} /> : n}</span>
+              <Icon name={VEHICLE_WIZARD_STEP_ICONS[i]} size={16} />
               {label}
             </div>
           );
         })}
       </div>
-      {step > 1 && (
-        <button type="button" className="wizard-back-link" onClick={() => setStep((s) => s - 1)}>
-          <Icon name="undo" size={13} /> Back
-        </button>
-      )}
-      <SmartForm
-        fields={stepFields[step]}
-        initialValues={wizardData}
-        key={step}
-        onCancel={onBack}
-        onSubmit={handleStepSubmit}
-        submitLabel={isLastStep ? 'Add Vehicle' : 'Next'}
-        title=""
-      />
+      <div className="form-grid-2col">
+        <SmartForm
+          fields={stepFields[step]}
+          initialValues={wizardData}
+          key={step}
+          onCancel={onBack}
+          onSubmit={handleStepSubmit}
+          submitLabel={isLastStep ? 'Add Vehicle' : 'Next'}
+          title=""
+        />
+      </div>
     </ModulePanel>
   );
 }
@@ -3137,7 +3418,7 @@ function FormPage({ title, description, onBack, fields, initialValues, onSubmit,
   return (
     <ModulePanel description={description}>
       <div className="vehicle-profile-header">
-        <button className="ghost-button" type="button" onClick={onBack}><Icon name="undo" size={14} /> Back</button>
+        <button className="ghost-button btn-exit-action" type="button" onClick={onBack}><Icon name="undo" size={14} /> Back</button>
         <h3 className="ticket-detail-title" style={{ margin: 0 }}>{title}</h3>
       </div>
       <SmartForm
@@ -3163,7 +3444,7 @@ function vehicleFields(lookups, allHubs = [], domain = 'Land') {
     { label: 'Brand', name: 'brand', required: true, type: 'text' },
     { label: 'Model', name: 'model', required: true, type: 'text' },
     { label: 'Year Model', name: 'year_model', required: true, type: 'number' },
-    { label: 'Capacity', name: 'capacity', required: true, type: 'text' },
+    { label: 'Capacity', name: 'capacity', required: true, type: 'quantity', units: capacityUnits(domain) },
     { label: 'Vehicle Color', name: 'vehicle_color', required: true, type: 'text' },
     ...vehicleDomainFields(domain),
     { label: 'Current Location', name: 'current_location', options: hubOptions, required: true, type: 'select' },
@@ -3378,12 +3659,132 @@ function ReportsModule({ lookups, onGenerate }) {
   );
 }
 
+// Icon/color per dashboard top-metric label, keyed by the exact label text the
+// backend returns (varies per role) — falls back to a plain blue chip for any
+// label not explicitly mapped.
+const DASHBOARD_METRIC_STYLES = {
+  'Total Vehicles': { icon: 'grid', bg: '#dbeafe', color: '#2563eb' },
+  'Available Vehicles': { icon: 'checkCircle', bg: '#dcfce7', color: '#16a34a' },
+  'Vehicles Under Maintenance': { icon: 'wrench', bg: '#fef3c7', color: '#d97706' },
+  'Inactive Vehicles': { icon: 'archive', bg: '#fee2e2', color: '#dc2626' },
+  'Reported Issues': { icon: 'alert', bg: '#fee2e2', color: '#dc2626' },
+  'Reported Vehicle Issues': { icon: 'alert', bg: '#fee2e2', color: '#dc2626' },
+  'My Reported Issues': { icon: 'alert', bg: '#fee2e2', color: '#dc2626' },
+  'Upcoming Maintenance': { icon: 'calendar', bg: '#ede9fe', color: '#7c3aed' },
+  'Total Maintenance Expenses': { icon: 'clipboard', bg: '#e0f2fe', color: '#0284c7' },
+  'Maintenance Records': { icon: 'clipboard', bg: '#e0f2fe', color: '#0284c7' },
+  'Recently Completed Maintenance': { icon: 'checkCircle', bg: '#dcfce7', color: '#16a34a' },
+  'Vehicles Needing Attention': { icon: 'wrench', bg: '#fef3c7', color: '#d97706' },
+};
+const DASHBOARD_METRIC_STYLE_DEFAULT = { icon: 'grid', bg: '#dbeafe', color: '#2563eb' };
+
 const VEHICLE_STAT_CARDS = [
   { key: 'Available', label: 'Available', icon: 'checkCircle', bg: '#dcfce7', color: '#16a34a' },
   { key: 'In Use', label: 'In Use', icon: 'vehicle', bg: '#e0f2fe', color: '#0284c7' },
   { key: 'Under Maintenance', label: 'Under Maintenance', icon: 'wrench', bg: '#fef3c7', color: '#d97706' },
-  { key: 'Inactive', label: 'Archived', icon: 'archive', bg: '#fee2e2', color: '#dc2626' },
+  { key: 'Inactive', label: 'Inactive', icon: 'archive', bg: '#fee2e2', color: '#dc2626' },
 ];
+
+const ISSUE_STAT_CARDS = [
+  { key: 'Pending', label: 'Pending', icon: 'alert', bg: '#fef3c7', color: '#d97706' },
+  { key: 'Under Review', label: 'Under Review', icon: 'search', bg: '#e0f2fe', color: '#0284c7' },
+  { key: 'In Maintenance', label: 'In Maintenance', icon: 'wrench', bg: '#fee2e2', color: '#dc2626' },
+  { key: 'Resolved', label: 'Resolved', icon: 'checkCircle', bg: '#dcfce7', color: '#16a34a' },
+];
+
+const SCHEDULE_STAT_CARDS = [
+  { key: 'Scheduled', label: 'Scheduled', icon: 'calendar', bg: '#e0f2fe', color: '#0284c7' },
+  { key: 'Completed', label: 'Completed', icon: 'checkCircle', bg: '#dcfce7', color: '#16a34a' },
+  { key: 'Cancelled', label: 'Cancelled', icon: 'close', bg: '#fee2e2', color: '#dc2626' },
+];
+
+const CONDITION_STAT_CARDS = [
+  { key: 'Good', label: 'Good', icon: 'checkCircle', bg: '#dcfce7', color: '#16a34a' },
+  { key: 'Needs Inspection', label: 'Needs Inspection', icon: 'search', bg: '#e0f2fe', color: '#0284c7' },
+  { key: 'Needs Repair', label: 'Needs Repair', icon: 'wrench', bg: '#fef3c7', color: '#d97706' },
+  { key: 'Damaged', label: 'Damaged', icon: 'alert', bg: '#fee2e2', color: '#dc2626' },
+];
+
+const MAINTENANCE_RECORD_STAT_CARDS = [
+  { key: 'Assigned', label: 'Assigned', icon: 'clipboard', bg: '#e0f2fe', color: '#0284c7' },
+  { key: 'Under Repair', label: 'Under Repair', icon: 'wrench', bg: '#fef3c7', color: '#d97706' },
+  { key: 'For Verification', label: 'For Verification', icon: 'search', bg: '#ede9fe', color: '#7c3aed' },
+  { key: 'Completed', label: 'Completed', icon: 'checkCircle', bg: '#dcfce7', color: '#16a34a' },
+];
+
+const TICKET_STAT_CARDS = [
+  { key: 'Open', label: 'Open', icon: 'alert', bg: '#e0f2fe', color: '#0284c7' },
+  { key: 'Under Repair', label: 'Under Repair', icon: 'wrench', bg: '#fef3c7', color: '#d97706' },
+  { key: 'For Confirmation', label: 'For Confirmation', icon: 'search', bg: '#ede9fe', color: '#7c3aed' },
+  { key: 'Done', label: 'Done', icon: 'checkCircle', bg: '#dcfce7', color: '#16a34a' },
+  { key: 'Cancelled', label: 'Cancelled', icon: 'close', bg: '#fee2e2', color: '#dc2626' },
+];
+
+const TICKET_INSPECTION_STAT_CARDS = [
+  { key: 'Pending', label: 'Pending', icon: 'search', bg: '#fef3c7', color: '#d97706' },
+  { key: 'Inspected', label: 'Inspected', icon: 'checkCircle', bg: '#dcfce7', color: '#16a34a' },
+];
+
+const TICKET_WORK_ORDER_STAT_CARDS = [
+  { key: 'Pending', label: 'Pending', icon: 'wrench', bg: '#fef3c7', color: '#d97706' },
+  { key: 'Submitted', label: 'Submitted', icon: 'checkCircle', bg: '#dcfce7', color: '#16a34a' },
+];
+
+const TICKET_VERIFICATION_STAT_CARDS = [
+  { key: 'Pending', label: 'Pending', icon: 'checkCircle', bg: '#fef3c7', color: '#d97706' },
+  { key: 'Verified', label: 'Verified', icon: 'checkCircle', bg: '#dcfce7', color: '#16a34a' },
+];
+
+const USER_STAT_CARDS = [
+  { key: 'Admin', label: 'Admin', icon: 'key', bg: '#ede9fe', color: '#7c3aed' },
+  { key: 'Custodian', label: 'Custodian', icon: 'checkCircle', bg: '#e0f2fe', color: '#0284c7' },
+  { key: 'Maintenance Personnel', label: 'Maintenance Personnel', icon: 'wrench', bg: '#fef3c7', color: '#d97706' },
+];
+
+// Reusable "Total + clickable status breakdown" card row, sitting above a
+// module's table, matching the Vehicle Management stat cards exactly.
+// `cards` is [{ key, label, icon, bg, color }]; `counts` maps key -> number;
+// clicking a card toggles `activeFilter` via `onFilterChange`.
+function ModuleStatCards({ totalLabel = 'Total', total, cards, counts, activeFilter, onFilterChange }) {
+  return (
+    <section className="metric-grid" aria-label="Status summary" style={{ marginBottom: '16px' }}>
+      <article className="metric-card metric-card-iconic">
+        <span className="metric-card-icon" style={{ background: '#dbeafe', color: '#2563eb' }}>
+          <Icon name="grid" size={18} />
+        </span>
+        <div className="metric-card-body">
+          <span>{totalLabel}</span>
+          <strong>{total}</strong>
+        </div>
+      </article>
+      {cards.map(({ key, label, icon, bg, color }) => {
+        const isActive = activeFilter === key;
+        return (
+          <button
+            key={key}
+            type="button"
+            className="metric-card metric-card-iconic"
+            style={{
+              cursor: 'pointer',
+              borderColor: isActive ? color : undefined,
+              boxShadow: isActive ? `0 0 0 2px ${color}59` : undefined,
+            }}
+            onClick={() => onFilterChange(isActive ? '' : key)}
+            title={`Filter: ${label}`}
+          >
+            <span className="metric-card-icon" style={{ background: bg, color }}>
+              <Icon name={icon} size={18} />
+            </span>
+            <div className="metric-card-body">
+              <span>{label}</span>
+              <strong>{counts[key] ?? 0}</strong>
+            </div>
+          </button>
+        );
+      })}
+    </section>
+  );
+}
 
 function vehicleColumns(role, onEdit, deleteRecord, restoreRecord, filterStatus) {
   const columns = [
@@ -3422,7 +3823,7 @@ function vehicleColumns(role, onEdit, deleteRecord, restoreRecord, filterStatus)
           {row.status === 'Inactive' ? (
             <button className="btn-edit-action" onClick={() => restoreRecord(`/vehicles/${row.vehicle_id}/restore`, 'Vehicle restored.')} type="button" title="Restore" aria-label="Restore"><Icon name="undo" size={14} /> Restore</button>
           ) : (
-            <button className="btn-delete-action" onClick={() => deleteRecord(`/vehicles/${row.vehicle_id}`, 'Vehicle archived.')} type="button" title="Archive" aria-label="Archive"><Icon name="archive" size={14} /> Archive</button>
+            <button className="btn-delete-action" onClick={() => deleteRecord(`/vehicles/${row.vehicle_id}`, 'Vehicle marked inactive.')} type="button" title="Deactivate" aria-label="Deactivate"><Icon name="archive" size={14} /> Deactivate</button>
           )}
         </div>
       ),
@@ -3481,6 +3882,7 @@ function locationColumns(currentUser, onViewOnMap) {
   return [
   { label: 'ID', render: (row) => row.location_record_id ?? 'Current' },
   { label: 'Vehicle', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
+  { label: 'Status', render: (row) => <StatusBadge value={row.vehicle?.status ?? '-'} /> },
   { label: 'Current Location', render: (row) => row.current_location ?? '-' },
   { label: 'Address / Area', render: (row) => row.address_area ?? '-' },
   {
@@ -3782,19 +4184,31 @@ function WorkspaceFooter() {
   return (
     <footer className="workspace-footer">
       <div className="workspace-footer-brand">
-        <img src={vmsLogo} alt="Barangay VMS" />
-        <div>
-          <strong>Barangay VMS</strong>
-          <span>A Smarter Way to Manage Your Barangay's Fleet.</span>
+        <div className="workspace-footer-wordmark">
+          <Icon name="gear" size={36} className="workspace-footer-gear-icon" filled />
+          <span className="vms-wordmark vms-wordmark-md workspace-footer-vms-text">vms</span>
+        </div>
+        <p className="workspace-footer-tagline">A Smarter Way to Manage Your Barangay's Fleet.</p>
+        <div className="workspace-footer-social">
+          <a href="#" aria-label="Facebook"><Icon name="facebook" size={15} filled /></a>
+          <a href="#" aria-label="Instagram"><Icon name="instagram" size={15} filled /></a>
+          <a href="#" aria-label="X"><Icon name="twitterX" size={15} filled /></a>
+          <a href="#" aria-label="LinkedIn"><Icon name="linkedin" size={15} filled /></a>
         </div>
       </div>
-      <div className="workspace-footer-links">
-        <Link to="/privacy">Privacy Policy</Link>
-        <Link to="/terms">Terms of Service</Link>
+      <div className="workspace-footer-actions">
+        <div className="workspace-footer-buttons">
+          <button type="button" className="workspace-footer-btn workspace-footer-btn-light">Visit Support Center</button>
+          <button type="button" className="workspace-footer-btn workspace-footer-btn-dark">Contact Us</button>
+        </div>
+        <p className="workspace-footer-copyright">
+          © {new Date().getFullYear()} Barangay Vehicle Management System. All rights reserved.
+        </p>
+        <div className="workspace-footer-links">
+          <Link to="/privacy">Privacy Policy</Link>
+          <Link to="/terms">Terms of Service</Link>
+        </div>
       </div>
-      <p className="workspace-footer-copyright">
-        © {new Date().getFullYear()} Barangay Vehicle Management System. All rights reserved.
-      </p>
     </footer>
   );
 }
@@ -3996,11 +4410,16 @@ function options(items, valueKey, labelKey) {
   }));
 }
 
+// Inactive (archived) vehicles are excluded from every "pick a vehicle"
+// dropdown app-wide — you can't schedule/report/record work against a
+// vehicle that's been taken out of service.
 function vehicleOptions(lookups) {
-  return lookups.vehicles.map((vehicle) => ({
-    value: vehicle.vehicle_id,
-    label: vehicleLabel(vehicle),
-  }));
+  return lookups.vehicles
+    .filter((vehicle) => vehicle.status !== 'Inactive')
+    .map((vehicle) => ({
+      value: vehicle.vehicle_id,
+      label: vehicleLabel(vehicle),
+    }));
 }
 
 function vehicleLabel(vehicle) {
@@ -4062,6 +4481,38 @@ function formatTime(value) {
   }
 
   return new Intl.DateTimeFormat('en-PH', { timeStyle: 'short' }).format(date);
+}
+
+// Mechanic repair logs are stored as plain text, one entry per submission in
+// the form "[YYYY-MM-DD HH:MM] message", separated by a blank line. Parse
+// that back out so each entry can show a proper DateBadge instead of a raw
+// bracketed timestamp buried in a wall of text.
+function RepairLogEntries({ text }) {
+  if (!text) {
+    return <p className="empty-state">No logs yet.</p>;
+  }
+
+  const entries = text.split(/\n\s*\n/).map((chunk) => {
+    const match = chunk.match(/^\[(.+?)\]\s*([\s\S]*)$/);
+    if (!match) {
+      return { iso: null, message: chunk.trim() };
+    }
+    return { iso: match[1].trim().replace(' ', 'T'), message: match[2].trim() };
+  }).filter((entry) => entry.message || entry.iso);
+
+  return (
+    <div className="repair-log-entries">
+      {entries.map((entry, i) => (
+        <div className="repair-log-entry" key={i}>
+          <div className="repair-log-entry-date">
+            <DateBadge value={entry.iso} />
+            {entry.iso && <span className="repair-log-entry-time">{formatTime(entry.iso)}</span>}
+          </div>
+          <p className="repair-log-entry-message">{entry.message}</p>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 // Builds a CSV file from `columns` (each { label, value(row) }) and `rows`,
@@ -4163,7 +4614,7 @@ function showError(error, setNotice) {
 
 function ticketCreateFields(lookups) {
   return [
-    { label: 'Vehicle', name: 'vehicle_id', options: (lookups.vehicles ?? []).map((v) => ({ value: v.vehicle_id, label: `${v.vehicle_name} (${v.plate_number})` })), required: true, type: 'select' },
+    { label: 'Vehicle', name: 'vehicle_id', options: (lookups.vehicles ?? []).filter((v) => v.status !== 'Inactive').map((v) => ({ value: v.vehicle_id, label: `${v.vehicle_name} (${v.plate_number})` })), required: true, type: 'select' },
     { label: 'Assign to Custodian', name: 'assigned_custodian_id', options: (lookups.custodians ?? []).map((c) => ({ value: c.id, label: c.name })), required: true, type: 'select' },
     { label: 'Ticket Title', name: 'ticket_title', required: true, type: 'text' },
     { label: 'Description / Details', name: 'ticket_description', required: true, type: 'textarea' },
@@ -4271,7 +4722,7 @@ function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm,
             </div>
           </div>
           {asPage ? (
-            <button className="ghost-button" onClick={onClose} type="button"><Icon name="undo" size={14} /> Back</button>
+            <button className="ghost-button btn-exit-action" onClick={onClose} type="button"><Icon name="undo" size={14} /> Back</button>
           ) : (
             <button className="icon-btn" onClick={onClose} type="button" title="Close" aria-label="Close"><Icon name="close" size={18} /></button>
           )}
@@ -4292,7 +4743,14 @@ function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm,
                     <span className="ticket-progress-dot" />
                   )}
                 </span>
-                <span className="ticket-progress-label">{s}</span>
+                <span className="ticket-progress-label">
+                  <Icon
+                    name={PHASE_STEP_ICONS[s]}
+                    size={13}
+                    style={state !== 'upcoming' ? { color: PHASE_STEP_COLORS[s] } : undefined}
+                  />
+                  {s}
+                </span>
                 <span className="ticket-progress-stage">Stage {i + 1}</span>
               </div>
             );
@@ -4324,7 +4782,7 @@ function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm,
                 <div className="ticket-detail-vehicle-layout">
                   {ticket.vehicle?.photo_url && (
                     <div className="ticket-detail-vehicle-photo">
-                      <img src={ticket.vehicle.photo_url} alt={ticket.vehicle.vehicle_name} />
+                      <img src={resolvePhotoUrl(ticket.vehicle.photo_url)} alt={ticket.vehicle.vehicle_name} />
                     </div>
                   )}
                   <div className="ticket-detail-vehicle-info">
@@ -4361,7 +4819,7 @@ function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm,
               {ticket.work_order_notes && <p className="muted">{ticket.work_order_notes}</p>}
               {ticket.repair_logs && <>
                 <h5>Repair Logs</h5>
-                <pre className="ticket-repair-log">{ticket.repair_logs}</pre>
+                <RepairLogEntries text={ticket.repair_logs} />
               </>}
               {ticket.parts_used && (
                 <div style={{ marginTop: '8px' }}>
@@ -4470,10 +4928,8 @@ function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm,
                 </div>
               </div>
               <div style={{ marginBottom: '8px' }}>
-                <span className="muted" style={{ display: 'block', fontSize: '0.72rem', fontWeight: 600, color: '#64748b' }}>REPAIR LOGS</span>
-                <p style={{ margin: '2px 0 0 0', whiteSpace: 'pre-wrap', background: '#ffffff', padding: '8px', borderRadius: '4px', border: '1px solid #f1f5f9', color: '#334155' }}>
-                  {ticket.repair_logs ?? 'No logs provided.'}
-                </p>
+                <span className="muted" style={{ display: 'block', fontSize: '0.72rem', fontWeight: 600, color: '#64748b', marginBottom: 4 }}>REPAIR LOGS</span>
+                <RepairLogEntries text={ticket.repair_logs} />
               </div>
               <div>
                 <span className="muted" style={{ display: 'block', fontSize: '0.72rem', fontWeight: 600, color: '#64748b', marginBottom: '4px' }}>PARTS USED</span>
@@ -4541,7 +4997,7 @@ function TicketProfilePage({ ticketId, role, ticketLookups, onBack, onDeleteTick
   if (notFound || !ticket) {
     return (
       <ModulePanel description="This ticket could not be found — it may have been deleted or archived.">
-        <button className="ghost-button" type="button" onClick={onBack}><Icon name="undo" size={14} /> Back</button>
+        <button className="ghost-button btn-exit-action" type="button" onClick={onBack}><Icon name="undo" size={14} /> Back</button>
       </ModulePanel>
     );
   }
@@ -4567,7 +5023,7 @@ function NewTicketPage({ onBack, ticketLookups, prefilledTicketData, onCreateTic
   return (
     <ModulePanel description="Create a new maintenance ticket and assign it to a custodian for inspection (Phase 1).">
       <div className="vehicle-profile-header">
-        <button className="ghost-button" type="button" onClick={onBack}><Icon name="undo" size={14} /> Back</button>
+        <button className="ghost-button btn-exit-action" type="button" onClick={onBack}><Icon name="undo" size={14} /> Back</button>
         <h3 className="ticket-detail-title" style={{ margin: 0 }}>Create Ticket</h3>
       </div>
       {prefilledTicketData && (
@@ -4628,18 +5084,33 @@ function TicketModule({
   const forMaintCount = tickets.filter((t) => t.status === 'For Maintenance').length;
   const forConfirmCount = tickets.filter((t) => t.status === 'For Confirmation').length;
 
+  const ticketStats = useMemo(() => {
+    const counts = { total: tickets.length };
+    ['Open', 'Under Repair', 'For Confirmation', 'Done', 'Cancelled'].forEach((s) => {
+      counts[s] = tickets.filter((t) => t.status === s).length;
+    });
+    return counts;
+  }, [tickets]);
+
   return (
     <div className="module-grid">
+      <div className="info-callout">
+        <svg className="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="10"></circle>
+          <line x1="12" y1="16" x2="12" y2="12"></line>
+          <line x1="12" y1="8" x2="12.01" y2="8"></line>
+        </svg>
+        <p className="module-description">Central Ticket Ledger — create tickets, assign custodians for inspection, dispatch mechanics, and confirm closures through the 5-phase workflow.</p>
+      </div>
+      <ModuleStatCards
+        totalLabel="Total Tickets"
+        total={ticketStats.total}
+        cards={TICKET_STAT_CARDS}
+        counts={ticketStats}
+        activeFilter={filterStatus}
+        onFilterChange={setFilterStatus}
+      />
       <section className="panel">
-        <div className="info-callout">
-          <svg className="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="10"></circle>
-            <line x1="12" y1="16" x2="12" y2="12"></line>
-            <line x1="12" y1="8" x2="12.01" y2="8"></line>
-          </svg>
-          <p className="module-description">Central Ticket Ledger — create tickets, assign custodians for inspection, dispatch mechanics, and confirm closures through the 5-phase workflow.</p>
-        </div>
-
         {/* Alert banners */}
         {forMaintCount > 0 && (
           <div className="ticket-alert-banner formaint">
@@ -4652,12 +5123,9 @@ function TicketModule({
           </div>
         )}
 
-        <div className="module-action-bar" style={{ marginBottom: '8px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-            <h3>All Tickets <span className="count-badge">{tickets.length}</span></h3>
-            <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search tickets..." />
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: '0 0 auto' }}>
+        <div className="panel-header-bar" style={{ marginBottom: '8px' }}>
+          <h3>All Tickets <span className="count-badge">{tickets.length}</span></h3>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <div className="view-mode-toggle" role="group" aria-label="Ticket view mode">
               <button
                 type="button"
@@ -4678,7 +5146,13 @@ function TicketModule({
                 <Icon name="list" size={15} />
               </button>
             </div>
-            <button className="primary-button" type="button" onClick={onCreateNew}>+ Create Ticket</button>
+            <LocalSearchInput
+              value={searchQuery}
+              onChange={setSearchQuery}
+              placeholder="Search tickets..."
+              onAdd={onCreateNew}
+              addLabel="Create Ticket"
+            />
           </div>
         </div>
 
@@ -4772,7 +5246,7 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, onBack, setNotice, on
   if (!vehicle) {
     return (
       <ModulePanel description="This vehicle could not be found — it may have been archived.">
-        <button className="ghost-button" type="button" onClick={onBack}><Icon name="undo" size={14} /> Back</button>
+        <button className="ghost-button btn-exit-action" type="button" onClick={onBack}><Icon name="undo" size={14} /> Back</button>
       </ModulePanel>
     );
   }
@@ -4796,7 +5270,7 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, onBack, setNotice, on
   return (
     <ModulePanel description="Full profile, location history, maintenance, tickets, and activity for this vehicle.">
       <div className="vehicle-profile-header">
-        <button className="ghost-button" type="button" onClick={onBack}><Icon name="undo" size={14} /> Back</button>
+        <button className="ghost-button btn-exit-action" type="button" onClick={onBack}><Icon name="undo" size={14} /> Back</button>
         {vehicle.photo_url && (
           <div className="vehicle-profile-photo">
             <PhotoCell alt={vehicle.vehicle_name} url={vehicle.photo_url} />
@@ -4856,15 +5330,17 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, onBack, setNotice, on
       )}
 
       {tab === 'edit' && (
-        <SmartForm
-          fields={vehicleFields(lookups, allHubs, vehicle.category?.domain ?? 'Land')}
-          initialValues={vehicle}
-          key={vehicle.vehicle_id}
-          onCancel={() => setTab('overview')}
-          onSubmit={handleSave}
-          submitLabel="Save Changes"
-          title=""
-        />
+        <div className="form-grid-2col">
+          <SmartForm
+            fields={vehicleFields(lookups, allHubs, vehicle.category?.domain ?? 'Land')}
+            initialValues={vehicle}
+            key={vehicle.vehicle_id}
+            onCancel={() => setTab('overview')}
+            onSubmit={handleSave}
+            submitLabel="Save Changes"
+            title=""
+          />
+        </div>
       )}
 
       {tab === 'location' && (
@@ -4951,7 +5427,7 @@ function TicketCard({ ticket, onClick }) {
         </div>
         {ticket.vehicle?.photo_url && (
           <div className="ticket-card-photo">
-            <img src={ticket.vehicle.photo_url} alt={ticket.vehicle.vehicle_name} />
+            <img src={resolvePhotoUrl(ticket.vehicle.photo_url)} alt={ticket.vehicle.vehicle_name} />
           </div>
         )}
       </div>
@@ -4969,31 +5445,41 @@ function TicketCard({ ticket, onClick }) {
 
 function CustodianInspectionModule({
   tickets,
-  editTarget,
-  setEditTarget,
-  onInspect,
-  onCancelEdit,
+  onOpenInspect,
   categories,
   vehicles,
   filterCategory,
   setFilterCategory,
   filterCapacity,
   setFilterCapacity,
-  onViewVehicle
+  onViewVehicle,
+  stats,
+  activeFilter,
+  onFilterChange
 }) {
+  const isPendingView = activeFilter !== 'Inspected';
+
   return (
     <div className="module-grid">
+      <div className="info-callout">
+        <svg className="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="10"></circle>
+          <line x1="12" y1="16" x2="12" y2="12"></line>
+          <line x1="12" y1="8" x2="12.01" y2="8"></line>
+        </svg>
+        <p className="module-description">Phase 2 — Vehicle Evaluation. Review tickets assigned to you, submit physical inspection findings, and check back here to see what you've already inspected.</p>
+      </div>
+      <ModuleStatCards
+        totalLabel="Total Assigned"
+        total={stats.total}
+        cards={TICKET_INSPECTION_STAT_CARDS}
+        counts={stats}
+        activeFilter={activeFilter}
+        onFilterChange={onFilterChange}
+      />
       <section className="panel">
-        <div className="info-callout">
-          <svg className="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="10"></circle>
-            <line x1="12" y1="16" x2="12" y2="12"></line>
-            <line x1="12" y1="8" x2="12.01" y2="8"></line>
-          </svg>
-          <p className="module-description">Phase 2 — Vehicle Evaluation. Review tickets assigned to you and submit your physical inspection findings.</p>
-        </div>
-        <div className="module-action-bar">
-          <h3>Assigned Inspections <span className="count-badge">{tickets.length}</span></h3>
+        <div className="panel-header-bar">
+          <h3>{isPendingView ? 'Pending Inspections' : 'Already Inspected'} <span className="count-badge">{tickets.length}</span></h3>
         </div>
         <FilterBar
           categories={categories}
@@ -5005,7 +5491,7 @@ function CustodianInspectionModule({
         />
         <div style={{ height: '16px' }} />
         {tickets.length === 0
-          ? <p className="empty-state">No inspection assignments pending.</p>
+          ? <p className="empty-state">{isPendingView ? 'No inspection assignments pending.' : 'No inspections submitted yet.'}</p>
           : (
             <DataTable
               columns={[
@@ -5014,9 +5500,15 @@ function CustodianInspectionModule({
                 { label: 'Title', render: (r) => r.ticket_title },
                 { label: 'Priority', render: (r) => <TicketStatusBadge value={r.priority} /> },
                 { label: 'Description', className: 'cell-text', render: (r) => <ExpandableText text={r.ticket_description} /> },
+                { label: 'Result', render: (r) => r.inspection_result ? <TicketStatusBadge value={r.inspection_result} /> : <span className="muted">—</span> },
                 { label: 'Assigned', render: (r) => <DateBadge value={r.assigned_at} /> },
                 { label: 'Time', render: (r) => formatTime(r.assigned_at) },
-                { label: 'Action', render: (r) => <button className="btn-edit-action" type="button" onClick={() => setEditTarget(r)} title="Inspect" aria-label="Inspect"><Icon name="search" size={14} /> Inspect</button> },
+                {
+                  label: 'Action',
+                  render: (r) => r.status === 'Open'
+                    ? <button className="btn-edit-action" type="button" onClick={() => onOpenInspect(r)} title="Inspect" aria-label="Inspect"><Icon name="search" size={14} /> Inspect</button>
+                    : <span className="muted">Submitted</span>
+                },
               ]}
               rows={tickets}
               onRowClick={(row) => row.vehicle && onViewVehicle(row.vehicle)}
@@ -5024,21 +5516,38 @@ function CustodianInspectionModule({
           )
         }
       </section>
-      <FormModal open={!!editTarget} title={`Inspect Ticket #${editTarget?.ticket_id}`} onClose={onCancelEdit} confirmClose>
-        <SmartForm
-          fields={inspectionFields}
-          key={editTarget?.ticket_id}
-          onCancel={onCancelEdit}
-          onSubmit={(payload) => onInspect(editTarget, payload)}
-          submitLabel="Submit Inspection"
-          title=""
-        />
-        <div style={{marginTop: '16px', paddingTop: '12px', borderTop: '1px solid var(--border-subtle)'}}>
-          <p className="muted"><strong>Vehicle:</strong> {editTarget?.vehicle?.vehicle_name}</p>
-          <p className="muted"><strong>Issue:</strong> {editTarget?.ticket_description}</p>
-        </div>
-      </FormModal>
     </div>
+  );
+}
+
+function InspectTicketPage({ ticket, onBack, onSubmit }) {
+  if (!ticket) {
+    return (
+      <ModulePanel description="This inspection assignment could not be found — it may no longer be assigned to you.">
+        <button className="ghost-button btn-exit-action" type="button" onClick={onBack}><Icon name="undo" size={14} /> Back</button>
+      </ModulePanel>
+    );
+  }
+
+  return (
+    <ModulePanel description="Review the vehicle in person and submit your physical inspection findings.">
+      <div className="vehicle-profile-header">
+        <button className="ghost-button btn-exit-action" type="button" onClick={onBack}><Icon name="undo" size={14} /> Back</button>
+        <h3 className="ticket-detail-title" style={{ margin: 0 }}>Inspect Ticket #{ticket.ticket_id}</h3>
+      </div>
+      <SmartForm
+        fields={inspectionFields}
+        key={ticket.ticket_id}
+        onCancel={onBack}
+        onSubmit={(payload) => onSubmit(ticket, payload)}
+        submitLabel="Submit Inspection"
+        title=""
+      />
+      <div style={{marginTop: '16px', paddingTop: '12px', borderTop: '1px solid var(--border-subtle)'}}>
+        <p className="muted"><strong>Vehicle:</strong> {ticket.vehicle?.vehicle_name}</p>
+        <p className="muted"><strong>Issue:</strong> {ticket.ticket_description}</p>
+      </div>
+    </ModulePanel>
   );
 }
 
@@ -5058,22 +5567,34 @@ function CustodianVerificationModule({
   setFilterCategory,
   filterCapacity,
   setFilterCapacity,
-  onViewVehicle
+  onViewVehicle,
+  stats,
+  activeFilter,
+  onFilterChange
 }) {
   const [viewLogsTarget, setViewLogsTarget] = useState(null);
+  const isPendingView = activeFilter !== 'Verified';
   return (
     <div className="module-grid">
+      <div className="info-callout">
+        <svg className="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="10"></circle>
+          <line x1="12" y1="16" x2="12" y2="12"></line>
+          <line x1="12" y1="8" x2="12.01" y2="8"></line>
+        </svg>
+        <p className="module-description">Phase 4 Tier 1 — Repair Integrity Verification. Review mechanic work, issue your inspection verdict before Admin confirmation, and check back here to see what you've already verified.</p>
+      </div>
+      <ModuleStatCards
+        totalLabel="Total Assigned"
+        total={stats.total}
+        cards={TICKET_VERIFICATION_STAT_CARDS}
+        counts={stats}
+        activeFilter={activeFilter}
+        onFilterChange={onFilterChange}
+      />
       <section className="panel">
-        <div className="info-callout">
-          <svg className="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="10"></circle>
-            <line x1="12" y1="16" x2="12" y2="12"></line>
-            <line x1="12" y1="8" x2="12.01" y2="8"></line>
-          </svg>
-          <p className="module-description">Phase 4 Tier 1 — Repair Integrity Verification. Review mechanic work and issue your inspection verdict before Admin confirmation.</p>
-        </div>
-        <div className="module-action-bar">
-          <h3>Repair Verifications <span className="count-badge">{tickets.length}</span></h3>
+        <div className="panel-header-bar">
+          <h3>{isPendingView ? 'Pending Verifications' : 'Verified Repairs'} <span className="count-badge">{tickets.length}</span></h3>
         </div>
         <FilterBar
           categories={categories}
@@ -5085,7 +5606,7 @@ function CustodianVerificationModule({
         />
         <div style={{ height: '16px' }} />
         {tickets.length === 0
-          ? <p className="empty-state">No repairs pending your verification.</p>
+          ? <p className="empty-state">{isPendingView ? 'No repairs pending your verification.' : 'No repairs verified yet.'}</p>
           : (
             <DataTable
               columns={[
@@ -5107,7 +5628,13 @@ function CustodianVerificationModule({
                   ) : '—'
                 },
                 { label: 'Parts Used', render: (r) => <PartsTags value={r.parts_used} /> },
-                { label: 'Action', render: (r) => <button className="btn-edit-action" type="button" onClick={() => setEditTarget(r)} title="Verify Repair" aria-label="Verify Repair"><Icon name="checkCircle" size={14} /> Verify</button> },
+                { label: 'Verdict', render: (r) => r.verification_verdict ? <TicketStatusBadge value={r.verification_verdict} /> : <span className="muted">—</span> },
+                {
+                  label: 'Action',
+                  render: (r) => r.status === 'For Inspection'
+                    ? <button className="btn-edit-action" type="button" onClick={() => setEditTarget(r)} title="Verify Repair" aria-label="Verify Repair"><Icon name="checkCircle" size={14} /> Verify</button>
+                    : <span className="muted">Submitted</span>
+                },
               ]}
               rows={tickets}
               onRowClick={(row) => row.vehicle && onViewVehicle(row.vehicle)}
@@ -5126,7 +5653,7 @@ function CustodianVerificationModule({
         />
         <div style={{marginTop: '16px', paddingTop: '12px', borderTop: '1px solid var(--border-subtle)'}}>
           <p className="muted"><strong>Repair Log:</strong></p>
-          <pre className="ticket-repair-log" style={{fontSize: '0.78rem', marginTop: '6px'}}>{editTarget?.repair_logs ?? 'No logs yet.'}</pre>
+          <RepairLogEntries text={editTarget?.repair_logs} />
         </div>
       </FormModal>
 
@@ -5204,21 +5731,34 @@ function MechanicWorkOrderModule({
   setFilterCapacity,
   onViewVehicle,
   searchQuery,
-  setSearchQuery
+  setSearchQuery,
+  stats,
+  activeFilter,
+  onFilterChange
 }) {
+  const isPendingView = activeFilter !== 'Submitted';
+
   return (
     <div className="module-grid">
+      <div className="info-callout">
+        <svg className="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="10"></circle>
+          <line x1="12" y1="16" x2="12" y2="12"></line>
+          <line x1="12" y1="8" x2="12.01" y2="8"></line>
+        </svg>
+        <p className="module-description">Phase 3 — Work Orders assigned to you. Execute vehicle repairs, submit your repair logs to send the ticket for Custodian inspection, and check back here to see what you've already logged.</p>
+      </div>
+      <ModuleStatCards
+        totalLabel="Total Assigned"
+        total={stats.total}
+        cards={TICKET_WORK_ORDER_STAT_CARDS}
+        counts={stats}
+        activeFilter={activeFilter}
+        onFilterChange={onFilterChange}
+      />
       <section className="panel">
-        <div className="info-callout">
-          <svg className="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="10"></circle>
-            <line x1="12" y1="16" x2="12" y2="12"></line>
-            <line x1="12" y1="8" x2="12.01" y2="8"></line>
-          </svg>
-          <p className="module-description">Phase 3 — Work Orders assigned to you. Execute vehicle repairs and submit your repair logs to send the ticket for Custodian inspection.</p>
-        </div>
-        <div className="module-action-bar">
-          <h3>Work Orders <span className="count-badge">{tickets.length}</span></h3>
+        <div className="panel-header-bar">
+          <h3>{isPendingView ? 'Pending Work Orders' : 'Submitted Work Orders'} <span className="count-badge">{tickets.length}</span></h3>
           <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search work orders..." />
         </div>
         <FilterBar
@@ -5231,7 +5771,7 @@ function MechanicWorkOrderModule({
         />
         <div style={{ height: '16px' }} />
         {tickets.length === 0
-          ? <p className="empty-state">No active work orders assigned to you.</p>
+          ? <p className="empty-state">{isPendingView ? 'No active work orders assigned to you.' : 'No repair logs submitted yet.'}</p>
           : (
             <DataTable
               columns={[
@@ -5256,9 +5796,17 @@ function MechanicWorkOrderModule({
                 },
                 { label: 'Type', render: (r) => r.maintenance_type ?? '—' },
                 { label: 'Instructions', className: 'cell-text', render: (r) => <ExpandableText text={r.work_order_notes ?? r.ticket_description} /> },
+                ...(isPendingView ? [] : [
+                  { label: 'Repair Log', className: 'cell-text', render: (r) => <ExpandableText text={r.repair_logs ?? '—'} /> },
+                ]),
                 { label: 'Dispatched', render: (r) => <DateBadge value={r.mechanic_assigned_at} /> },
                 { label: 'Time', render: (r) => formatTime(r.mechanic_assigned_at) },
-                { label: 'Action', render: (r) => <button className="btn-edit-action" type="button" onClick={() => onOpenLogRepairs(r)} title="Log Repairs" aria-label="Log Repairs"><Icon name="wrench" size={14} /> Log Repairs</button> },
+                {
+                  label: 'Action',
+                  render: (r) => r.status === 'Under Repair'
+                    ? <button className="btn-edit-action" type="button" onClick={() => onOpenLogRepairs(r)} title="Log Repairs" aria-label="Log Repairs"><Icon name="wrench" size={14} /> Log Repairs</button>
+                    : <span className="muted">Submitted</span>
+                },
               ]}
               rows={tickets}
               onRowClick={(row) => row.vehicle && onViewVehicle(row.vehicle)}
@@ -5274,7 +5822,7 @@ function LogRepairsPage({ ticket, onBack, onSubmit }) {
   if (!ticket) {
     return (
       <ModulePanel description="This work order could not be found — it may no longer be assigned to you.">
-        <button className="ghost-button" type="button" onClick={onBack}><Icon name="undo" size={14} /> Back</button>
+        <button className="ghost-button btn-exit-action" type="button" onClick={onBack}><Icon name="undo" size={14} /> Back</button>
       </ModulePanel>
     );
   }
@@ -5282,7 +5830,7 @@ function LogRepairsPage({ ticket, onBack, onSubmit }) {
   return (
     <ModulePanel description="Execute the repair and submit your logs to send this ticket for Custodian inspection.">
       <div className="vehicle-profile-header">
-        <button className="ghost-button" type="button" onClick={onBack}><Icon name="undo" size={14} /> Back</button>
+        <button className="ghost-button btn-exit-action" type="button" onClick={onBack}><Icon name="undo" size={14} /> Back</button>
         <h3 className="ticket-detail-title" style={{ margin: 0 }}>Log Repairs — Ticket #{ticket.ticket_id}</h3>
       </div>
       {ticket.confirmation_verdict === 'Reopened' && (
@@ -5310,7 +5858,7 @@ function LogRepairsPage({ ticket, onBack, onSubmit }) {
         {ticket.repair_logs && (
           <>
             <p className="muted" style={{marginTop: '8px'}}><strong>Previous Logs:</strong></p>
-            <pre className="ticket-repair-log" style={{fontSize: '0.78rem', marginTop: '6px'}}>{ticket.repair_logs}</pre>
+            <RepairLogEntries text={ticket.repair_logs} />
           </>
         )}
       </div>
@@ -5356,6 +5904,24 @@ const ticketArchiveColumns = [
 
 const phaseOrder = ['Open', 'For Maintenance', 'Under Repair', 'For Inspection', 'For Confirmation', 'Done'];
 
+const PHASE_STEP_ICONS = {
+  'Open': 'clipboard',
+  'For Maintenance': 'flag',
+  'Under Repair': 'wrench',
+  'For Inspection': 'search',
+  'For Confirmation': 'eye',
+  'Done': 'checkCircle',
+};
+
+const PHASE_STEP_COLORS = {
+  'Open': '#2563eb',
+  'For Maintenance': '#f59e0b',
+  'Under Repair': '#ea580c',
+  'For Inspection': '#7c3aed',
+  'For Confirmation': '#db2777',
+  'Done': '#16a34a',
+};
+
 function phaseIsPast(currentStatus, checkStatus) {
   const cur = phaseOrder.indexOf(currentStatus);
   const chk = phaseOrder.indexOf(checkStatus);
@@ -5389,7 +5955,8 @@ function FilterBar({
   statusOptions = [],
   priorityOptions = [],
   priorityLabel = "Priority",
-  statusLabel = "Status"
+  statusLabel = "Status",
+  trailing
 }) {
   // Extract unique capacities dynamically
   const capacities = useMemo(() => {
@@ -5528,11 +6095,13 @@ function FilterBar({
           Clear Filters
         </button>
       )}
+
+      {trailing && <div className="filter-bar-trailing">{trailing}</div>}
     </div>
   );
 }
 
-function LocalSearchInput({ value, onChange, placeholder = "Search...", onExport }) {
+function LocalSearchInput({ value, onChange, placeholder = "Search...", onExport, onAdd, addLabel = "Add" }) {
   return (
     <div className="local-search-bar">
       <div className="local-search-container">
@@ -5553,6 +6122,11 @@ function LocalSearchInput({ value, onChange, placeholder = "Search...", onExport
           </button>
         )}
       </div>
+      {onAdd && (
+        <button className="icon-add-btn" onClick={onAdd} type="button" title={addLabel} aria-label={addLabel}>
+          <Icon name="plus" size={18} />
+        </button>
+      )}
       {onExport && (
         <button className="export-btn" onClick={onExport} type="button" title="Export to CSV" aria-label="Export to CSV">
           <Icon name="download" size={15} />

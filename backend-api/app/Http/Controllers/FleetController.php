@@ -112,20 +112,22 @@ class FleetController extends Controller
         }
 
         if ($role === 'Maintenance Personnel') {
-            $metrics = [
-                ['label' => 'Reported Vehicle Issues', 'value' => $activeIssues],
-                ['label' => 'Maintenance Records', 'value' => VehicleMaintenanceRecord::count()],
-                ['label' => 'Upcoming Maintenance', 'value' => $upcomingMaintenance],
-                [
-                    'label' => 'Recently Completed Maintenance',
-                    'value' => VehicleMaintenanceRecord::where('progress_status', 'Completed')
-                        ->whereDate('updated_at', '>=', now()->subDays(30)->toDateString())
-                        ->count(),
-                ],
-                [
-                    'label' => 'Vehicles Needing Attention',
-                    'value' => Vehicle::whereIn('condition', ['Needs Inspection', 'Needs Repair', 'Damaged'])->count(),
-                ],
+            // Append to (not replace) the base $metrics array — it already carries
+            // Total/Available/Under Maintenance vehicle counts, which the Fleet
+            // Status donut and Operations Queue panels below rely on regardless
+            // of role. Replacing the array here was zeroing those panels out.
+            $metrics[] = ['label' => 'Reported Issues', 'value' => $activeIssues];
+            $metrics[] = ['label' => 'Maintenance Records', 'value' => VehicleMaintenanceRecord::count()];
+            $metrics[] = ['label' => 'Upcoming Maintenance', 'value' => $upcomingMaintenance];
+            $metrics[] = [
+                'label' => 'Recently Completed Maintenance',
+                'value' => VehicleMaintenanceRecord::where('progress_status', 'Completed')
+                    ->whereDate('updated_at', '>=', now()->subDays(30)->toDateString())
+                    ->count(),
+            ];
+            $metrics[] = [
+                'label' => 'Vehicles Needing Attention',
+                'value' => Vehicle::whereIn('condition', ['Needs Inspection', 'Needs Repair', 'Damaged'])->count(),
             ];
         }
 
@@ -141,6 +143,9 @@ class FleetController extends Controller
                     ->count(),
                 'ticketVerifications' => MaintenanceTicket::where('assigned_custodian_id', $request->user()->id)
                     ->where('status', 'For Inspection')
+                    ->count(),
+                'ticketWorkOrders' => MaintenanceTicket::where('assigned_mechanic_id', $request->user()->id)
+                    ->where('status', 'Under Repair')
                     ->count(),
             ],
             'vehicles_by_type' => Vehicle::query()
@@ -170,19 +175,33 @@ class FleetController extends Controller
     {
         $start = now()->subDays($days - 1)->startOfDay();
 
-        $counts = VehicleHistory::query()
+        $rows = VehicleHistory::query()
             ->where('created_at', '>=', $start)
-            ->selectRaw('DATE(created_at) as day, COUNT(*) as total')
-            ->groupBy('day')
-            ->pluck('total', 'day');
+            ->selectRaw('DATE(created_at) as day, related_table, COUNT(*) as total')
+            ->groupBy('day', 'related_table')
+            ->get();
+
+        // Split events into "fleet" (vehicle/location/condition/issue activity) vs
+        // "maintenance" (maintenance records + schedules) so the dashboard chart can
+        // show them as two distinct bar series, same shape as the reference chart.
+        $byDay = [];
+        foreach ($rows as $row) {
+            $isMaintenance = str_starts_with((string) $row->related_table, 'vehicle_maintenance');
+            $bucket = $isMaintenance ? 'maintenance' : 'fleet';
+            $byDay[$row->day][$bucket] = ($byDay[$row->day][$bucket] ?? 0) + (int) $row->total;
+        }
 
         $series = [];
         for ($i = 0; $i < $days; $i++) {
             $date = $start->copy()->addDays($i);
             $key = $date->toDateString();
+            $fleet = $byDay[$key]['fleet'] ?? 0;
+            $maintenance = $byDay[$key]['maintenance'] ?? 0;
             $series[] = [
                 'label' => $date->format('M j'),
-                'value' => (int) ($counts[$key] ?? 0),
+                'fleet_value' => $fleet,
+                'maintenance_value' => $maintenance,
+                'value' => $fleet + $maintenance,
             ];
         }
 
@@ -1069,6 +1088,11 @@ class FleetController extends Controller
                 'required',
                 'string',
                 'max:255',
+                // Real-world plate shape: a letter block, then a digit block, with an
+                // optional space/dash between and an optional trailing letter — covers
+                // standard, older, motorcycle, and government PH plate series without
+                // being so strict it rejects legitimate variants.
+                'regex:/^[A-Za-z]{2,6}[\s-]?\d{2,6}[A-Za-z]?$/',
                 Rule::unique('vehicles', 'plate_number')->ignore($vehicle?->vehicle_id, 'vehicle_id'),
             ],
             'category_id' => ['required', 'exists:vehicle_categories,category_id'],
@@ -1083,6 +1107,8 @@ class FleetController extends Controller
             'current_location' => ['required', 'string', 'max:255', Rule::in(VehicleHub::pluck('name'))],
             'photo' => ['nullable', 'image', 'max:4096'],
             'remarks' => ['nullable', 'string'],
+        ], [
+            'plate_number.regex' => 'Enter a valid plate number, e.g. ABC 1234 or ABC-1234.',
         ]);
     }
 
