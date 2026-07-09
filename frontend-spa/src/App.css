@@ -453,6 +453,8 @@
 }
 .workspace-footer-gear-icon {
   color: #ffffff;
+  /* White gear on the blue footer — draw the center ring in the footer blue so it stays visible */
+  --gear-ring: #2563eb;
 }
 .workspace-footer-wordmark .vms-wordmark {
   color: #ffffff;

@@ -1,25 +1,17 @@
-import { useId } from 'react';
-
 // Lightweight inline SVG icon set (stroke = currentColor so icons inherit text
 // color). Replaces emoji usage across the app with professional line icons.
 const GEAR_TEETH_ANGLES = [0, 45, 90, 135, 180, 225, 270, 315];
 
-// The gear's center hole is punched out via mask rather than stroked, so it
-// stays a true see-through hole no matter what color the gear itself is.
+// Rendered identically to the favicon (src/assets/gear-favicon.svg): a solid
+// body + teeth with a thin white ring outline in the center.
 function GearGlyph() {
-  const maskId = useId();
   return (
     <>
-      <mask id={maskId}>
-        <rect x="0" y="0" width="24" height="24" fill="#fff" />
-        <circle cx="12" cy="12" r="4.3" fill="#000" />
-      </mask>
-      <g mask={`url(#${maskId})`}>
-        <circle cx="12" cy="12" r="7.6" />
-        {GEAR_TEETH_ANGLES.map((angle) => (
-          <rect key={angle} x="9.5" y="0.4" width="5" height="6.6" rx="2" transform={`rotate(${angle} 12 12)`} />
-        ))}
-      </g>
+      <circle cx="12" cy="12" r="7.6" />
+      {GEAR_TEETH_ANGLES.map((angle) => (
+        <rect key={angle} x="9.5" y="0.4" width="5" height="6.6" rx="2" transform={`rotate(${angle} 12 12)`} />
+      ))}
+      <circle cx="12" cy="12" r="4.3" fill="none" stroke="var(--gear-ring, #ffffff)" strokeWidth="1.8" />
     </>
   );
 }
