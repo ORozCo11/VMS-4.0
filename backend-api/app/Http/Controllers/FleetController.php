@@ -68,7 +68,9 @@ class FleetController extends Controller
             'issue_types' => $this->issueTypes,
             'maintenance_types' => $this->maintenanceTypes,
             'severity_levels' => ['Low', 'Medium', 'High', 'Critical'],
-            'vehicle_statuses' => ['Available', 'In Use', 'Under Maintenance', 'Inactive'],
+            // 'In Use' exists in the DB enum but is intentionally not offered —
+            // this system tracks availability only; nothing ever sets In Use.
+            'vehicle_statuses' => ['Available', 'Under Maintenance', 'Inactive'],
             'condition_results' => ['Good', 'Needs Inspection', 'Needs Repair', 'Damaged'],
             'issue_statuses' => ['Pending', 'Under Review', 'In Maintenance', 'Resolved'],
             'maintenance_statuses' => ['Assigned', 'Under Repair', 'For Verification', 'Completed'],
@@ -80,9 +82,14 @@ class FleetController extends Controller
     {
         $this->syncVehicleStatuses();
         $role = $request->user()->role;
-        $activeIssues = VehicleIssueReport::whereNot('status', 'Resolved')->count();
+        $activeIssues = VehicleIssueReport::whereNot('status', 'Resolved')
+            ->whereHas('vehicle', fn ($q) => $q->where('status', '!=', 'Inactive'))
+            ->count();
         $upcomingMaintenance = VehicleMaintenanceSchedule::where('status', 'Scheduled')
             ->whereDate('scheduled_date', '>=', now()->toDateString())
+            ->count();
+        $overdueMaintenance = VehicleMaintenanceSchedule::where('status', 'Scheduled')
+            ->whereDate('scheduled_date', '<', now()->toDateString())
             ->count();
 
         $metrics = [
@@ -95,8 +102,13 @@ class FleetController extends Controller
             $metrics[] = ['label' => 'Inactive Vehicles', 'value' => Vehicle::where('status', 'Inactive')->count()];
             $metrics[] = ['label' => 'Reported Issues', 'value' => $activeIssues];
             $metrics[] = ['label' => 'Upcoming Maintenance', 'value' => $upcomingMaintenance];
-            
-            $totalExpenses = \App\Models\TicketArchiveLog::sum('maintenance_cost');
+            $metrics[] = ['label' => 'Overdue Maintenance', 'value' => $overdueMaintenance];
+
+            // Maintenance Records already include every confirmed ticket's cost
+            // (auto-copied on ticket confirmation), so records + still-active
+            // tickets covers all expenses exactly once — direct logs included.
+            $totalExpenses = VehicleMaintenanceRecord::sum('maintenance_cost')
+                + MaintenanceTicket::whereNotIn('status', ['Done', 'Cancelled'])->sum('maintenance_cost');
             $metrics[] = [
                 'label' => 'Total Maintenance Expenses',
                 'value' => '₱' . number_format($totalExpenses, 2)
@@ -119,6 +131,7 @@ class FleetController extends Controller
             $metrics[] = ['label' => 'Reported Issues', 'value' => $activeIssues];
             $metrics[] = ['label' => 'Maintenance Records', 'value' => VehicleMaintenanceRecord::count()];
             $metrics[] = ['label' => 'Upcoming Maintenance', 'value' => $upcomingMaintenance];
+            $metrics[] = ['label' => 'Overdue Maintenance', 'value' => $overdueMaintenance];
             $metrics[] = [
                 'label' => 'Recently Completed Maintenance',
                 'value' => VehicleMaintenanceRecord::where('progress_status', 'Completed')
@@ -164,6 +177,22 @@ class FleetController extends Controller
                 ->limit(8)
                 ->get(),
             'activity_by_day' => $this->activityByDay(14),
+            // Availability Forecast — which vehicles are out and when they are
+            // expected back, so availability can be read as a forecast, not just
+            // a "right now" snapshot.
+            'availability_forecast' => [
+                'available_now' => Vehicle::where('status', 'Available')->count(),
+                'under_maintenance' => Vehicle::where('status', 'Under Maintenance')
+                    // Vehicles with a known return date first (soonest first),
+                    // then the ones still awaiting an estimate.
+                    ->orderByRaw('estimated_return_date IS NULL, estimated_return_date ASC')
+                    ->get(['vehicle_id', 'vehicle_name', 'plate_number', 'estimated_return_date']),
+            ],
+            'overdue_schedules' => VehicleMaintenanceSchedule::with('vehicle:vehicle_id,vehicle_name,plate_number')
+                ->where('status', 'Scheduled')
+                ->whereDate('scheduled_date', '<', now()->toDateString())
+                ->orderBy('scheduled_date')
+                ->get(['schedule_id', 'vehicle_id', 'maintenance_type', 'scheduled_date']),
         ]);
     }
 
@@ -342,7 +371,7 @@ class FleetController extends Controller
             'archived_by' => $request->user()->id,
         ]);
         $this->history($vehicle, 'Vehicle Archived', "{$vehicle->vehicle_name} was marked inactive.", 'vehicles', $vehicle->vehicle_id, $request);
-        $this->log($request, 'Delete', 'Vehicle Management', $vehicle->vehicle_id, "Archived vehicle {$vehicle->vehicle_name}");
+        $this->log($request, 'Archive', 'Vehicle Management', $vehicle->vehicle_id, "Archived vehicle {$vehicle->vehicle_name}");
 
         return response()->json(['message' => 'Vehicle archived.']);
     }
@@ -357,9 +386,10 @@ class FleetController extends Controller
             'status' => 'Available',
             'archived_at' => null,
             'archived_by' => null,
+            'estimated_return_date' => null,
         ]);
         $this->history($vehicle, 'Vehicle Restored', "{$vehicle->vehicle_name} was restored to active service.", 'vehicles', $vehicle->vehicle_id, $request);
-        $this->log($request, 'Edit', 'Vehicle Management', $vehicle->vehicle_id, "Restored vehicle {$vehicle->vehicle_name}");
+        $this->log($request, 'Restore', 'Vehicle Management', $vehicle->vehicle_id, "Restored vehicle {$vehicle->vehicle_name}");
 
         return response()->json($vehicle->fresh(['category', 'archivedBy']));
     }
@@ -517,7 +547,10 @@ class FleetController extends Controller
 
     public function issues(Request $request)
     {
-        $query = VehicleIssueReport::with(['vehicle.category', 'reportedBy']);
+        // Issues on archived (Inactive) vehicles are excluded — an inactive
+        // vehicle is out of the fleet, so its reports shouldn't clutter the list.
+        $query = VehicleIssueReport::with(['vehicle.category', 'reportedBy'])
+            ->whereHas('vehicle', fn ($q) => $q->where('status', '!=', 'Inactive'));
 
         if ($request->boolean('mine')) {
             $query->where('reported_by', $request->user()->id);
@@ -874,6 +907,7 @@ class FleetController extends Controller
                 $record->vehicle->update([
                     'status' => 'Available',
                     'condition' => 'Good',
+                    'estimated_return_date' => null, // back in service — clear the forecast estimate
                 ]);
 
                 if ($record->issueReport) {
@@ -940,6 +974,14 @@ class FleetController extends Controller
             'status' => ['nullable', Rule::in(['Scheduled', 'Completed', 'Cancelled'])],
         ]);
 
+        // Guard against double-booking: one active (Scheduled) entry per
+        // vehicle per date is enough — a second one is almost always a mistake.
+        $alreadyBooked = VehicleMaintenanceSchedule::where('vehicle_id', $data['vehicle_id'])
+            ->whereDate('scheduled_date', $data['scheduled_date'])
+            ->where('status', 'Scheduled')
+            ->exists();
+        abort_if($alreadyBooked, 422, 'This vehicle already has a maintenance schedule on that date.');
+
         $schedule = DB::transaction(function () use ($data, $request) {
             $vehicle = Vehicle::findOrFail($data['vehicle_id']);
             $schedule = VehicleMaintenanceSchedule::create($data + [
@@ -970,6 +1012,16 @@ class FleetController extends Controller
             'assigned_to' => ['nullable', 'exists:users,id'],
             'status' => ['nullable', Rule::in(['Scheduled', 'Completed', 'Cancelled'])],
         ]);
+
+        // Same double-booking guard as create (ignoring this schedule itself).
+        $targetVehicle = $data['vehicle_id'] ?? $schedule->vehicle_id;
+        $targetDate = $data['scheduled_date'] ?? $schedule->scheduled_date;
+        $alreadyBooked = VehicleMaintenanceSchedule::where('vehicle_id', $targetVehicle)
+            ->whereDate('scheduled_date', $targetDate)
+            ->where('status', 'Scheduled')
+            ->where('schedule_id', '!=', $schedule->schedule_id)
+            ->exists();
+        abort_if($alreadyBooked, 422, 'This vehicle already has a maintenance schedule on that date.');
 
         $schedule->update($data);
         $this->history($schedule->vehicle, 'Maintenance Schedule Updated', "Maintenance schedule #{$schedule->schedule_id} was updated.", 'vehicle_maintenance_schedules', $schedule->schedule_id, $request);
@@ -1105,6 +1157,7 @@ class FleetController extends Controller
             'engine_type' => [$domain === 'Water' ? 'required' : 'nullable', 'string', 'max:255'],
             'vehicle_color' => ['required', 'string', 'max:255', new TextOnly],
             'current_location' => ['required', 'string', 'max:255', Rule::in(VehicleHub::pluck('name'))],
+            'estimated_return_date' => ['nullable', 'date'],
             'photo' => ['nullable', 'image', 'max:4096'],
             'remarks' => ['nullable', 'string'],
         ], [
@@ -1149,19 +1202,36 @@ class FleetController extends Controller
     private function syncVehicleStatuses()
     {
         $vehicles = Vehicle::where('status', '!=', 'Inactive')->get();
+        if ($vehicles->isEmpty()) {
+            return;
+        }
+
+        // Batch everything up front (3 queries total) instead of 3 queries per
+        // vehicle — this runs on every dashboard/vehicle-list request.
+        $vehicleIds = $vehicles->pluck('vehicle_id');
+        $maintenanceTicketVehicleIds = \App\Models\MaintenanceTicket::whereIn('vehicle_id', $vehicleIds)
+            ->whereIn('status', ['For Maintenance', 'Under Repair', 'For Inspection', 'For Confirmation'])
+            ->pluck('vehicle_id')
+            ->flip();
+        $activeRecordVehicleIds = VehicleMaintenanceRecord::whereIn('vehicle_id', $vehicleIds)
+            ->whereNotIn('progress_status', ['Completed'])
+            ->pluck('vehicle_id')
+            ->flip();
+        $latestIssues = VehicleIssueReport::whereIn('vehicle_id', $vehicleIds)
+            ->orderByDesc('issue_report_id')
+            ->get()
+            ->unique('vehicle_id')
+            ->keyBy('vehicle_id');
+        $unresolvedIssueVehicleIds = VehicleIssueReport::whereIn('vehicle_id', $vehicleIds)
+            ->whereNot('status', 'Resolved')
+            ->pluck('vehicle_id')
+            ->flip();
+
         foreach ($vehicles as $vehicle) {
-            $activeTicket = \App\Models\MaintenanceTicket::where('vehicle_id', $vehicle->vehicle_id)
-                ->whereNotIn('status', ['Done', 'Cancelled'])
-                ->first();
-            $hasActiveTicketMaintenance = $activeTicket && in_array($activeTicket->status, ['For Maintenance', 'Under Repair', 'For Inspection', 'For Confirmation'], true);
+            $hasActiveMaintenance = $activeRecordVehicleIds->has($vehicle->vehicle_id)
+                || $maintenanceTicketVehicleIds->has($vehicle->vehicle_id);
 
-            $hasActiveMaintenance = VehicleMaintenanceRecord::where('vehicle_id', $vehicle->vehicle_id)
-                ->whereNotIn('progress_status', ['Completed'])
-                ->exists() || $hasActiveTicketMaintenance;
-
-            $latestIssue = VehicleIssueReport::where('vehicle_id', $vehicle->vehicle_id)
-                ->orderByDesc('issue_report_id')
-                ->first();
+            $latestIssue = $latestIssues->get($vehicle->vehicle_id);
 
             if ($latestIssue) {
                 if ($latestIssue->status === 'In Maintenance') {
@@ -1177,19 +1247,19 @@ class FleetController extends Controller
                             $vehicle->update([
                                 'status' => 'Available',
                                 'condition' => 'Needs Inspection',
+                                'estimated_return_date' => null,
                             ]);
                         }
                     }
                 } elseif ($latestIssue->status === 'Resolved') {
-                    $hasOtherActiveIssues = VehicleIssueReport::where('vehicle_id', $vehicle->vehicle_id)
-                        ->whereNot('status', 'Resolved')
-                        ->exists();
+                    $hasOtherActiveIssues = $unresolvedIssueVehicleIds->has($vehicle->vehicle_id);
 
                     if (!$hasOtherActiveIssues && !$hasActiveMaintenance) {
                         if ($vehicle->status === 'Under Maintenance' || $vehicle->condition !== 'Good') {
                             $vehicle->update([
                                 'status' => 'Available',
                                 'condition' => 'Good',
+                                'estimated_return_date' => null,
                             ]);
                         }
                     }

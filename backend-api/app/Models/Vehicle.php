@@ -25,12 +25,16 @@ class Vehicle extends Model
         'remarks',
         'status',
         'condition',
+        'estimated_return_date',
         'archived_at',
         'archived_by',
     ];
 
     protected $casts = [
         'archived_at' => 'datetime',
+        // Serialize as a plain Y-m-d string so it binds directly to a
+        // native <input type="date"> on the frontend.
+        'estimated_return_date' => 'date:Y-m-d',
     ];
 
     public function category()
