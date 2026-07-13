@@ -470,11 +470,12 @@ class TicketController extends Controller
         );
 
         $data = $request->validate([
-            'repair_logs'         => ['required', 'string'],
-            'parts_used'          => ['nullable', 'string'],
-            'repair_started_at'   => ['nullable', 'date'],
-            'repair_completed_at' => ['nullable', 'date'],
-            'maintenance_cost'    => ['nullable', 'numeric', 'min:0'],
+            'repair_logs'           => ['required', 'string'],
+            'parts_used'            => ['nullable', 'string'],
+            'repair_started_at'     => ['nullable', 'date'],
+            'repair_completed_at'   => ['nullable', 'date'],
+            'maintenance_cost'      => ['nullable', 'numeric', 'min:0'],
+            'estimated_return_date' => ['nullable', 'date'],
         ]);
 
         DB::transaction(function () use ($ticket, $data, $request) {
@@ -489,6 +490,11 @@ class TicketController extends Controller
                 'repair_completed_at' => $data['repair_completed_at'] ?? null,
                 'maintenance_cost'    => $data['maintenance_cost'] ?? $ticket->maintenance_cost,
             ]);
+
+            // Mechanic's estimated return date feeds the Availability Forecast.
+            if (array_key_exists('estimated_return_date', $data) && $data['estimated_return_date']) {
+                $ticket->vehicle->update(['estimated_return_date' => $data['estimated_return_date']]);
+            }
 
             $this->log($request, 'Repairs Logged', "Ticket #{$ticket->ticket_id} — repair logs submitted. Status → For Inspection.");
 
@@ -618,8 +624,9 @@ class TicketController extends Controller
 
                 // Vehicle returns to service
                 $ticket->vehicle->update([
-                    'status'    => 'Available',
-                    'condition' => 'Good',
+                    'status'                => 'Available',
+                    'condition'             => 'Good',
+                    'estimated_return_date' => null, // back in service — clear the forecast estimate
                 ]);
 
                 if ($ticket->issue_report_id) {
