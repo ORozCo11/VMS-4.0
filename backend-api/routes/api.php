@@ -89,7 +89,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
     /*
     |--------------------------------------------------------------------------
-    | Maintenance Ticket Workflow Routes (5-Phase DFD)
+    | Maintenance Ticket Workflow Routes (Main Issue / Sub-Issue model)
     |--------------------------------------------------------------------------
     */
 
@@ -98,32 +98,40 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/tickets', [TicketController::class, 'index']);
     Route::get('/tickets/{ticket}', [TicketController::class, 'show']);
 
-    // Phase 1 — Admin: Create ticket & assign to Custodian
+    // Phase 1 — Admin: Create ticket (Main Issue) & assign to Custodian
     Route::post('/tickets', [TicketController::class, 'createTicket']);
 
-    // Phase 2 — Custodian: Submit inspection results
+    // Phase 2 — Custodian: Submit inspection, populate the sub-issue list
     Route::put('/tickets/{ticket}/inspect', [TicketController::class, 'submitInspection']);
 
-    // Phase 3 — Admin: Dispatch work order to mechanic
-    Route::put('/tickets/{ticket}/assign-mechanic', [TicketController::class, 'assignMechanic']);
+    // Append a newly discovered root cause while the ticket is still Active
+    Route::post('/tickets/{ticket}/sub-issues', [TicketController::class, 'addSubIssue']);
 
-    // Phase 3 — Mechanic: Log physical repairs
-    Route::put('/tickets/{ticket}/log-repairs', [TicketController::class, 'logRepairs']);
+    // Phase 3 — Admin: Dispatch work order to a mechanic, per sub-issue
+    Route::put('/tickets/{ticket}/sub-issues/{subIssue}/assign-mechanic', [TicketController::class, 'assignMechanic']);
 
-    // Phase 4 Tier 1 — Custodian: Verify repair integrity
-    Route::put('/tickets/{ticket}/verify', [TicketController::class, 'verifyRepair']);
+    // Phase 3 — Mechanic: Log physical repairs on a sub-issue
+    Route::put('/tickets/{ticket}/sub-issues/{subIssue}/log-repairs', [TicketController::class, 'logRepairs']);
 
-    // Phase 4 Tier 2 — Admin: Confirm or reopen ticket
-    Route::put('/tickets/{ticket}/confirm', [TicketController::class, 'confirmTicket']);
+    // Phase 4 Tier 1 — Custodian: Verify a sub-issue's repair
+    Route::put('/tickets/{ticket}/sub-issues/{subIssue}/verify', [TicketController::class, 'verifyRepair']);
 
-    // Admin: Cancel ticket at any stage
+    // Phase 4 Tier 2 — Admin: Confirm or rework a sub-issue
+    Route::put('/tickets/{ticket}/sub-issues/{subIssue}/confirm', [TicketController::class, 'confirmSubIssue']);
+
+    // Phase 5 — Admin: Explicit ticket closure (only once every sub-issue is Done)
+    Route::put('/tickets/{ticket}/close', [TicketController::class, 'closeTicket']);
+
+    // Admin: Cancel ticket at any stage before Closed
     Route::put('/tickets/{ticket}/cancel', [TicketController::class, 'cancelTicket']);
     Route::put('/tickets/{ticket}/uncancel', [TicketController::class, 'uncancelTicket']);
 
     // Admin: Delete ticket completely (in case of mistakes)
     Route::delete('/tickets/{ticket}', [TicketController::class, 'deleteTicket']);
 
-    // Phase 5 — Admin: Read-only archived ticket audit log
+    // Archived ticket audit log — a "Closed" entry is permanently locked, but
+    // a "Deleted" entry (an accidental delete that had real progress on it)
+    // can be reopened.
     Route::get('/ticket-archives', [TicketController::class, 'archives']);
     Route::put('/ticket-archives/{archive}/reopen', [TicketController::class, 'reopenArchive']);
 

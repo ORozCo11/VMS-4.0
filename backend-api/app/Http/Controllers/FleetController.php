@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Http\Controllers\Concerns\UploadsImages;
 use App\Models\ActivityLog;
 use App\Models\MaintenanceTicket;
+use App\Models\TicketSubIssue;
 use App\Models\User;
 use App\Models\Vehicle;
 use App\Models\VehicleCategory;
@@ -24,6 +25,8 @@ use Illuminate\Validation\Rule;
 class FleetController extends Controller
 {
     use UploadsImages;
+
+    private const HULL_MATERIAL_OPTIONS = ['Fiberglass', 'Aluminum', 'Steel', 'Wood', 'Rubber/Inflatable'];
 
     private array $issueTypes = [
         'Engine Problem',
@@ -104,11 +107,11 @@ class FleetController extends Controller
             $metrics[] = ['label' => 'Upcoming Maintenance', 'value' => $upcomingMaintenance];
             $metrics[] = ['label' => 'Overdue Maintenance', 'value' => $overdueMaintenance];
 
-            // Maintenance Records already include every confirmed ticket's cost
-            // (auto-copied on ticket confirmation), so records + still-active
-            // tickets covers all expenses exactly once — direct logs included.
+            // Maintenance Records already include every confirmed sub-issue's cost
+            // (auto-copied the moment Admin confirms it Done), so records + still
+            // not-yet-Done sub-issues covers all expenses exactly once.
             $totalExpenses = VehicleMaintenanceRecord::sum('maintenance_cost')
-                + MaintenanceTicket::whereNotIn('status', ['Done', 'Cancelled'])->sum('maintenance_cost');
+                + TicketSubIssue::where('status', '!=', 'Done')->sum('maintenance_cost');
             $metrics[] = [
                 'label' => 'Total Maintenance Expenses',
                 'value' => '₱' . number_format($totalExpenses, 2)
@@ -148,16 +151,18 @@ class FleetController extends Controller
             'metrics' => $metrics,
             'badge_counts' => [
                 'issues' => $activeIssues,
-                'tickets' => MaintenanceTicket::whereNotIn('status', ['Done', 'Cancelled'])->count(),
+                'tickets' => MaintenanceTicket::whereNotIn('status', ['Closed', 'Cancelled'])->count(),
                 'conditions' => Vehicle::whereIn('condition', ['Needs Inspection', 'Needs Repair', 'Damaged'])->count(),
                 'schedules' => $upcomingMaintenance,
                 'ticketInspections' => MaintenanceTicket::where('assigned_custodian_id', $request->user()->id)
                     ->where('status', 'Open')
                     ->count(),
-                'ticketVerifications' => MaintenanceTicket::where('assigned_custodian_id', $request->user()->id)
-                    ->where('status', 'For Inspection')
+                // Verification/work-order badges now count SUB-ISSUES, not
+                // tickets — assignment and verification happen per line item.
+                'ticketVerifications' => TicketSubIssue::where('status', 'For Inspection')
+                    ->whereHas('ticket', fn ($q) => $q->where('assigned_custodian_id', $request->user()->id))
                     ->count(),
-                'ticketWorkOrders' => MaintenanceTicket::where('assigned_mechanic_id', $request->user()->id)
+                'ticketWorkOrders' => TicketSubIssue::where('assigned_mechanic_id', $request->user()->id)
                     ->where('status', 'Under Repair')
                     ->count(),
             ],
@@ -1152,8 +1157,8 @@ class FleetController extends Controller
             'model' => ['required', 'string', 'max:255'],
             'year_model' => ['required', new NumberOnly, 'integer', 'min:1900', 'max:' . now()->addYear()->year],
             'capacity' => ['required', 'string', 'max:255'],
-            'fuel_type' => [$domain === 'Land' ? 'required' : 'nullable', 'string', 'max:255'],
-            'hull_material' => [$domain === 'Water' ? 'required' : 'nullable', 'string', 'max:255'],
+            'fuel_type' => ['required', 'string', 'max:255'],
+            'hull_material' => [$domain === 'Water' ? 'required' : 'nullable', Rule::in(self::HULL_MATERIAL_OPTIONS)],
             'engine_type' => [$domain === 'Water' ? 'required' : 'nullable', 'string', 'max:255'],
             'vehicle_color' => ['required', 'string', 'max:255', new TextOnly],
             'current_location' => ['required', 'string', 'max:255', Rule::in(VehicleHub::pluck('name'))],
@@ -1210,7 +1215,7 @@ class FleetController extends Controller
         // vehicle — this runs on every dashboard/vehicle-list request.
         $vehicleIds = $vehicles->pluck('vehicle_id');
         $maintenanceTicketVehicleIds = \App\Models\MaintenanceTicket::whereIn('vehicle_id', $vehicleIds)
-            ->whereIn('status', ['For Maintenance', 'Under Repair', 'For Inspection', 'For Confirmation'])
+            ->whereNotIn('status', ['Closed', 'Cancelled'])
             ->pluck('vehicle_id')
             ->flip();
         $activeRecordVehicleIds = VehicleMaintenanceRecord::whereIn('vehicle_id', $vehicleIds)

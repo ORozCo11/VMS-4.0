@@ -241,7 +241,9 @@ function Workspace() {
   const isNewUserPage = /\/users\/new$/.test(location.pathname);
   const editUserId = location.pathname.match(/\/users\/(\d+)\/edit$/)?.[1] ?? null;
   const viewUserId = location.pathname.match(/\/users\/(\d+)$/)?.[1] ?? null;
-  const logRepairsTicketId = location.pathname.match(/\/work-orders\/(\d+)\/log-repairs$/)?.[1] ?? null;
+  const logRepairsMatch = location.pathname.match(/\/work-orders\/(\d+)\/(\d+)\/log-repairs$/);
+  const logRepairsTicketId = logRepairsMatch?.[1] ?? null;
+  const logRepairsSubIssueId = logRepairsMatch?.[2] ?? null;
   const inspectTicketId = location.pathname.match(/\/inspections\/(\d+)\/inspect$/)?.[1] ?? null;
   const isOnSpecialPage = Boolean(
     isNewVehiclePage || vehicleProfileId || isNewTicketPage || ticketProfileId
@@ -509,10 +511,10 @@ function Workspace() {
 
   // ── Ticket workflow action dispatchers ──────────────────────────────
 
-  const ticketAction = async (path, payload, successMsg) => {
+  const ticketAction = async (path, payload, successMsg, method = 'put') => {
     setNotice(null);
     try {
-      await api.put(path, cleanPayload(payload));
+      await sendPayload(method, path, payload);
       setEditTarget(null);
       setNotice({ type: 'success', text: successMsg });
       await refreshCurrent();
@@ -665,6 +667,18 @@ function Workspace() {
     }
   }, [navigate, user.role]);
 
+  // Regular sidebar modules never get their own URL — switching between them
+  // only flips `activeModule` in local state, so browser history never has a
+  // real entry for e.g. "/vehicles". That makes navigate(-1) unreliable after
+  // an Add/Edit page: it pops back to whatever real URL happened to precede
+  // it (usually just the bare dashboard route), not "the module the user was
+  // on". This is the deterministic replacement — go to the base route AND
+  // explicitly set the module, instead of trusting history.
+  const returnToModule = useCallback((moduleKey) => {
+    navigate(roleRoutes[user.role]);
+    setActiveModule(moduleKey);
+  }, [navigate, user.role]);
+
   const handleCreateVehicle = async (payload) => {
     setNotice(null);
     try {
@@ -672,7 +686,7 @@ function Workspace() {
       await sendPayload(request.method, request.path, payload);
       await refreshCurrent();
       setNotice({ type: 'success', text: 'Vehicle added.' });
-      navigate(-1);
+      returnToModule('vehicles');
     } catch (error) {
       showError(error, setNotice);
     }
@@ -688,13 +702,20 @@ function Workspace() {
       await sendPayload(request.method, request.path, payload);
       await refreshCurrent();
       setNotice({ type: 'success', text: request.success });
-      navigate(-1);
+      returnToModule(moduleKey);
     } catch (error) {
       showError(error, setNotice);
     }
   };
 
-  const rawRows = records[activeModule] ?? [];
+  // Work Orders and Verifications now act per sub-issue, not per ticket —
+  // flatten each ticket's sub_issues into standalone rows so the existing
+  // status filters below (which check row.status) keep working unchanged.
+  const rawRows = activeModule === 'ticketWorkOrders'
+    ? flattenSubIssueRows(records[activeModule], user.id)
+    : activeModule === 'ticketVerifications'
+      ? flattenSubIssueRows(records[activeModule])
+      : records[activeModule] ?? [];
   const visibleRows = useMemo(() => {
     let result = rawRows;
 
@@ -902,13 +923,13 @@ function Workspace() {
   }, [records.ticketInspections]);
 
   const workOrderStats = useMemo(() => {
-    const rows = records.ticketWorkOrders ?? [];
+    const rows = flattenSubIssueRows(records.ticketWorkOrders, user.id);
     const pending = rows.filter((r) => r.status === 'Under Repair').length;
     return { total: rows.length, Pending: pending, Submitted: rows.length - pending };
-  }, [records.ticketWorkOrders]);
+  }, [records.ticketWorkOrders, user.id]);
 
   const verificationStats = useMemo(() => {
-    const rows = records.ticketVerifications ?? [];
+    const rows = flattenSubIssueRows(records.ticketVerifications);
     const pending = rows.filter((r) => r.status === 'For Inspection').length;
     return { total: rows.length, Pending: pending, Verified: rows.length - pending };
   }, [records.ticketVerifications]);
@@ -1142,14 +1163,14 @@ function Workspace() {
         <div className="content-body">
           {isNewVehiclePage ? (
             <NewVehiclePage
-              onBack={() => navigate(-1)}
+              onBack={() => returnToModule('vehicles')}
               lookups={lookups}
               allHubs={allHubs}
               onSubmit={handleCreateVehicle}
             />
           ) : isNewTicketPage ? (
             <NewTicketPage
-              onBack={() => { setPrefilledTicketData(null); navigate(-1); }}
+              onBack={() => { setPrefilledTicketData(null); returnToModule('tickets'); }}
               ticketLookups={ticketLookups}
               prefilledTicketData={prefilledTicketData}
               onCreateTicket={createTicket}
@@ -1159,7 +1180,7 @@ function Workspace() {
               vehicleId={vehicleProfileId}
               lookups={lookups}
               allHubs={allHubs}
-              onBack={() => navigate(-1)}
+              onBack={() => returnToModule('vehicles')}
               setNotice={setNotice}
               onSaved={loadLookups}
               onViewTicket={openTicketProfile}
@@ -1169,7 +1190,7 @@ function Workspace() {
               ticketId={ticketProfileId}
               role={user.role}
               ticketLookups={ticketLookups}
-              onBack={() => navigate(-1)}
+              onBack={() => returnToModule('tickets')}
               onDeleteTicket={deleteTicket}
               onRequestConfirmation={setConfirmDialog}
               ticketAction={ticketAction}
@@ -1178,7 +1199,7 @@ function Workspace() {
             <FormPage
               title={editCategoryId ? 'Edit Vehicle Type' : 'Add Vehicle Type'}
               description="Maintain standard vehicle type choices used across dropdowns."
-              onBack={() => navigate(-1)}
+              onBack={() => returnToModule('categories')}
               fields={categoryFields}
               initialValues={editCategoryId ? (records.categories ?? []).find((c) => String(c.category_id) === String(editCategoryId)) : EMPTY_OBJ}
               onSubmit={(payload) => submitFormPage('categories', editCategoryId ? { category_id: editCategoryId } : null, payload)}
@@ -1188,7 +1209,7 @@ function Workspace() {
             <FormPage
               title={editScheduleId ? 'Update Schedule' : 'Add Maintenance Schedule'}
               description="Plan preventative maintenance and track schedule status."
-              onBack={() => navigate(-1)}
+              onBack={() => returnToModule('schedules')}
               fields={scheduleFields(lookups)}
               initialValues={editScheduleId ? (records.schedules ?? []).find((s) => String(s.schedule_id) === String(editScheduleId)) : EMPTY_OBJ}
               onSubmit={(payload) => submitFormPage('schedules', editScheduleId ? { schedule_id: editScheduleId } : null, payload)}
@@ -1199,13 +1220,13 @@ function Workspace() {
           ) : viewIssueId ? (
             <IssueViewPage
               issue={(records.issues ?? []).find((i) => String(i.issue_report_id) === String(viewIssueId))}
-              onBack={() => navigate(-1)}
+              onBack={() => returnToModule('issues')}
             />
           ) : (isNewIssuePage || editIssueId) ? (
             <FormPage
               title={editIssueId ? 'Update Issue Status' : 'Report Vehicle Issue'}
               description={issueDescription(user.role)}
-              onBack={() => navigate(-1)}
+              onBack={() => returnToModule('issues')}
               fields={issueFields(lookups, editIssueId ? { issue_report_id: editIssueId } : null, user.role)}
               initialValues={editIssueId ? (records.issues ?? []).find((i) => String(i.issue_report_id) === String(editIssueId)) : EMPTY_OBJ}
               onSubmit={(payload) => submitFormPage('issues', editIssueId ? { issue_report_id: editIssueId } : null, payload)}
@@ -1217,7 +1238,7 @@ function Workspace() {
             <FormPage
               title={editConditionId ? 'Edit Condition Check' : 'Add Condition Check'}
               description="Periodic inspection log — a Custodian's routine check-in on a vehicle's physical condition."
-              onBack={() => navigate(-1)}
+              onBack={() => returnToModule('conditions')}
               fields={conditionFields(lookups)}
               initialValues={editConditionId ? (records.conditions ?? []).find((c) => String(c.condition_check_id) === String(editConditionId)) : EMPTY_OBJ}
               onSubmit={(payload) => submitFormPage('conditions', editConditionId ? { condition_check_id: editConditionId } : null, payload)}
@@ -1229,7 +1250,7 @@ function Workspace() {
             <FormPage
               title={editMaintenanceId ? 'Update Maintenance Record' : 'Add Maintenance Record'}
               description="Directly log external, historical, or third-party vehicle maintenance records and expenses without running the 5-phase ticket workflow."
-              onBack={() => navigate(-1)}
+              onBack={() => returnToModule('maintenance')}
               fields={maintenanceFields(lookups, user.role)}
               initialValues={editMaintenanceId ? (records.maintenance ?? []).find((m) => String(m.maintenance_id) === String(editMaintenanceId)) : EMPTY_OBJ}
               onSubmit={(payload) => submitFormPage('maintenance', editMaintenanceId ? { maintenance_id: editMaintenanceId } : null, payload)}
@@ -1242,14 +1263,14 @@ function Workspace() {
               userId={viewUserId}
               users={records.users}
               role={user.role}
-              onBack={() => navigate(-1)}
+              onBack={() => returnToModule('users')}
               onEdit={() => navigate(`${roleRoutes[user.role]}/users/${viewUserId}/edit`)}
             />
           ) : (isNewUserPage || editUserId) ? (
             <FormPage
               title={editUserId ? 'Update User' : 'Add User'}
               description="Create and manage user accounts — Admin, Custodian, and Maintenance Personnel."
-              onBack={() => navigate(-1)}
+              onBack={() => returnToModule('users')}
               fields={userFields(Boolean(editUserId))}
               initialValues={editUserId ? (records.users ?? []).find((u) => String(u.id) === String(editUserId)) : EMPTY_OBJ}
               onSubmit={(payload) => submitFormPage('users', editUserId ? { id: editUserId } : null, payload)}
@@ -1257,15 +1278,16 @@ function Workspace() {
             />
           ) : logRepairsTicketId ? (
             <LogRepairsPage
-              ticket={(records.ticketWorkOrders ?? []).find((t) => String(t.ticket_id) === String(logRepairsTicketId))}
-              onBack={() => navigate(-1)}
-              onSubmit={(ticket, payload) => ticketAction(`/tickets/${ticket.ticket_id}/log-repairs`, payload, 'Repair logs submitted. Ticket sent for inspection.').then(() => navigate(-1))}
+              ticket={flattenSubIssueRows(records.ticketWorkOrders).find((r) => String(r.ticket_id) === String(logRepairsTicketId) && String(r.sub_issue_id) === String(logRepairsSubIssueId))}
+              onBack={() => returnToModule('ticketWorkOrders')}
+              onSubmit={(subIssueRow, payload) => ticketAction(`/tickets/${subIssueRow.ticket_id}/sub-issues/${subIssueRow.sub_issue_id}/log-repairs`, payload, 'Repair logs submitted. Sent for Custodian verification.').then(() => returnToModule('ticketWorkOrders'))}
             />
           ) : inspectTicketId ? (
             <InspectTicketPage
               ticket={(records.ticketInspections ?? []).find((t) => String(t.ticket_id) === String(inspectTicketId))}
-              onBack={() => navigate(-1)}
-              onSubmit={(ticket, payload) => ticketAction(`/tickets/${ticket.ticket_id}/inspect`, payload, 'Inspection submitted successfully.').then(() => navigate(-1))}
+              ticketLookups={ticketLookups}
+              onBack={() => returnToModule('ticketInspections')}
+              onSubmit={(ticket, payload) => ticketAction(`/tickets/${ticket.ticket_id}/inspect`, payload, 'Inspection submitted successfully.').then(() => returnToModule('ticketInspections'))}
             />
           ) : (loading ? <ModuleLoader /> : renderModule())}
         </div>
@@ -1843,6 +1865,7 @@ function Workspace() {
         <TicketModule
           tickets={visibleRows}
           ticketLookups={ticketLookups}
+          notifications={notifications}
           onViewTicket={openTicketProfile}
           onCreateNew={() => navigate(`${roleRoutes[user.role]}/tickets/new`)}
           notice={notice}
@@ -1927,11 +1950,16 @@ function Workspace() {
       const hasActiveFilter = archiveStart || archiveEnd || archiveStatusFilter ||
         archiveDraft.start || archiveDraft.end || archiveDraft.status || archiveDraft.quick;
 
+      // A Closed ticket is permanently locked — no reopen action, ever (a
+      // recurring problem opens a brand-new ticket instead, see Workflow 10).
+      // A "Deleted" entry is different: it means real progress existed
+      // (at least one sub-issue was Done) when it got accidentally deleted,
+      // so it's recoverable — same safety net Cancel/Uncancel already has.
       const archiveColumnsWithAction = [
         ...ticketArchiveColumns,
         {
           label: 'Actions',
-          render: (row) => (
+          render: (row) => row.final_status === 'Deleted' ? (
             <button
               className="btn-reopen-action"
               type="button"
@@ -1939,17 +1967,17 @@ function Workspace() {
               aria-label="Reopen Ticket"
               onClick={() => {
                 setConfirmDialog({
-                  title: 'Reopen Archived Ticket',
-                  message: `Are you sure you want to reopen Ticket #${row.ticket_id} for ${row.vehicle_name}?`,
+                  title: 'Reopen Deleted Ticket',
+                  message: `Are you sure you want to reopen Ticket #${row.ticket_id} for ${row.vehicle_name}? It will be restored with all its sub-issues to how they were before it was deleted.`,
                   confirmLabel: 'Reopen Ticket',
                   variant: 'primary',
-                  onConfirm: () => ticketAction(`/ticket-archives/${row.archive_id}/reopen`, {}, 'Ticket successfully reopened and returned to active ledger.'),
+                  onConfirm: () => ticketAction(`/ticket-archives/${row.archive_id}/reopen`, {}, 'Ticket successfully reopened.'),
                 });
               }}
             >
               <Icon name="undo" size={14} /> Reopen
             </button>
-          ),
+          ) : <span className="muted">—</span>,
         },
       ];
 
@@ -2120,7 +2148,7 @@ function Workspace() {
           tickets={visibleRows}
           editTarget={editTarget}
           setEditTarget={setEditTarget}
-          onVerify={(ticket, payload) => ticketAction(`/tickets/${ticket.ticket_id}/verify`, payload, 'Repair verification submitted.')}
+          onVerify={(subIssueRow, payload) => ticketAction(`/tickets/${subIssueRow.ticket_id}/sub-issues/${subIssueRow.sub_issue_id}/verify`, payload, 'Repair verification submitted.')}
           onCancelEdit={() => setEditTarget(null)}
           categories={lookups.categories}
           vehicles={lookups.vehicles}
@@ -2141,7 +2169,7 @@ function Workspace() {
       return (
         <MechanicWorkOrderModule
           tickets={visibleRows}
-          onOpenLogRepairs={(ticket) => navigate(`${roleRoutes[user.role]}/work-orders/${ticket.ticket_id}/log-repairs`)}
+          onOpenLogRepairs={(row) => navigate(`${roleRoutes[user.role]}/work-orders/${row.ticket_id}/${row.sub_issue_id}/log-repairs`)}
           categories={lookups.categories}
           vehicles={lookups.vehicles}
           filterCategory={filterCategory}
@@ -3254,7 +3282,7 @@ function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, onSubmit, subm
               name={field.name}
               onChange={handleChange}
               required={field.required}
-              rows={3}
+              rows={field.rows ?? 3}
               value={values[field.name] ?? ''}
             />
           ) : null}
@@ -3438,6 +3466,7 @@ const emptyTicketLookups = {
   priorities: [],
   maintenance_types: [],
   ticket_statuses: [],
+  sub_issue_statuses: [],
 };
 
 const categoryFields = [
@@ -3475,16 +3504,20 @@ const passwordFields = [
 ];
 
 const FUEL_TYPE_OPTIONS = ['Diesel', 'Gasoline', 'Electric', 'Hybrid', 'CNG', 'LPG'];
+const HULL_MATERIAL_OPTIONS = ['Fiberglass', 'Aluminum', 'Steel', 'Wood', 'Rubber/Inflatable'];
 
 function capacityUnits(domain) {
-  return domain === 'Water' ? ['L', 'gal', 'm³'] : ['kg', 'tons', 'L', 'pax'];
+  // 'pax' matters for a Water vehicle too — a rescue boat's key spec is how
+  // many people it can carry, same reason it matters for an Ambulance.
+  return domain === 'Water' ? ['L', 'gal', 'm³', 'pax'] : ['kg', 'tons', 'L', 'pax'];
 }
 
 function vehicleDomainFields(domain) {
   return domain === 'Water'
     ? [
-        { label: 'Hull Material', name: 'hull_material', required: true, type: 'text' },
+        { label: 'Hull Material', name: 'hull_material', options: HULL_MATERIAL_OPTIONS, required: true, type: 'select' },
         { label: 'Engine Type', name: 'engine_type', required: true, type: 'text' },
+        { label: 'Fuel Type', name: 'fuel_type', options: FUEL_TYPE_OPTIONS, required: true, type: 'select' },
       ]
     : [{ label: 'Fuel Type', name: 'fuel_type', options: FUEL_TYPE_OPTIONS, required: true, type: 'select' }];
 }
@@ -3982,9 +4015,8 @@ const MAINTENANCE_RECORD_STAT_CARDS = [
 
 const TICKET_STAT_CARDS = [
   { key: 'Open', label: 'Open', icon: 'alert', bg: '#e0f2fe', color: '#0284c7' },
-  { key: 'Under Repair', label: 'Under Repair', icon: 'wrench', bg: '#fef3c7', color: '#d97706' },
-  { key: 'For Confirmation', label: 'For Confirmation', icon: 'search', bg: '#ede9fe', color: '#7c3aed' },
-  { key: 'Done', label: 'Done', icon: 'checkCircle', bg: '#dcfce7', color: '#16a34a' },
+  { key: 'Active', label: 'Active', icon: 'wrench', bg: '#fef3c7', color: '#d97706' },
+  { key: 'Closed', label: 'Closed', icon: 'checkCircle', bg: '#dcfce7', color: '#16a34a' },
   { key: 'Cancelled', label: 'Cancelled', icon: 'close', bg: '#fee2e2', color: '#dc2626' },
 ];
 
@@ -4210,7 +4242,7 @@ function issueColumns(role, onEdit, onCreateTicketFromIssue, setUserInfoTarget, 
   const columns = [
     {
       label: 'Issue',
-      width: '28%',
+      width: '24%',
       render: (row) => (
         <div className="issue-cell">
           <div className="issue-cell-top">
@@ -4223,13 +4255,13 @@ function issueColumns(role, onEdit, onCreateTicketFromIssue, setUserInfoTarget, 
         </div>
       ),
     },
-    { label: 'Vehicle', width: '16%', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
-    { label: 'Plate', width: '9%', render: (row) => row.vehicle?.plate_number ?? '-' },
-    { label: 'Severity', width: '11%', render: (row) => <TicketStatusBadge value={row.severity_level} /> },
-    { label: 'Status', width: '11%', render: (row) => <StatusBadge value={row.status} /> },
+    { label: 'Vehicle', width: '13%', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
+    { label: 'Plate', width: '7%', render: (row) => row.vehicle?.plate_number ?? '-' },
+    { label: 'Severity', width: '9%', render: (row) => <TicketStatusBadge value={row.severity_level} /> },
+    { label: 'Status', width: '9%', render: (row) => <StatusBadge value={row.status} /> },
     {
       label: 'Reported By',
-      width: '15%',
+      width: '12%',
       render: (row) => (
         row.reported_by
           ? <UserAvatarName user={row.reported_by} />
@@ -4241,8 +4273,9 @@ function issueColumns(role, onEdit, onCreateTicketFromIssue, setUserInfoTarget, 
   if (['Admin', 'Maintenance Personnel'].includes(role)) {
     columns.push({
       label: 'Action',
+      width: '26%',
       render: (row) => (
-        <div className="row-actions">
+        <div className="row-actions" style={{ flexWrap: 'nowrap' }}>
           <button className="btn-view-action" onClick={() => onView(row)} type="button" title="View" aria-label="View"><Icon name="eye" size={14} /> View</button>
           <button className="btn-edit-action" onClick={() => onEdit(row)} type="button" title="Update" aria-label="Update"><Icon name="edit" size={14} /> Update</button>
           {role === 'Admin' && (
@@ -4256,8 +4289,9 @@ function issueColumns(role, onEdit, onCreateTicketFromIssue, setUserInfoTarget, 
   if (role === 'Custodian') {
     columns.push({
       label: 'Action',
+      width: '26%',
       render: (row) => (
-        <div className="row-actions">
+        <div className="row-actions" style={{ flexWrap: 'nowrap' }}>
           <button className="btn-view-action" onClick={() => onView(row)} type="button" title="View" aria-label="View"><Icon name="eye" size={14} /> View</button>
           {row.status === 'Pending' && (
             <>
@@ -4275,21 +4309,21 @@ function issueColumns(role, onEdit, onCreateTicketFromIssue, setUserInfoTarget, 
 
 function maintenanceColumns(role, setEditTarget, updateRecord) {
   const columns = [
-    { label: 'ID', width: '4%', render: (row) => row.maintenance_id },
-    { label: 'Vehicle', width: '13%', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
-    { label: 'Plate', width: '8%', render: (row) => row.vehicle?.plate_number ?? '-' },
-    { label: 'Type', width: '9%', render: (row) => row.maintenance_type },
-    { label: 'Problem / Reason', width: '15%', className: 'cell-text', render: (row) => <ExpandableText text={row.problem_reason} /> },
-    { label: 'Personnel', width: '10%', render: (row) => <UserAvatarName user={row.maintenance_personnel} /> },
-    { label: 'Progress', width: '8%', render: (row) => <StatusBadge value={row.progress_status} /> },
-    { label: 'Verification', width: '8%', render: (row) => row.verification_result ? <StatusBadge value={row.verification_result} /> : '-' },
-    { label: 'Date Started', width: '7%', render: (row) => <DateBadge value={row.date_started} /> },
-    { label: 'Date Completed', width: '7%', render: (row) => <DateBadge value={row.date_completed} /> },
+    { label: 'ID', width: '3%', render: (row) => row.maintenance_id },
+    { label: 'Vehicle', width: '11%', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
+    { label: 'Plate', width: '6%', render: (row) => row.vehicle?.plate_number ?? '-' },
+    { label: 'Type', width: '7%', render: (row) => row.maintenance_type },
+    { label: 'Problem / Reason', width: '12%', className: 'cell-text', render: (row) => <ExpandableText text={row.problem_reason} /> },
+    { label: 'Personnel', width: '8%', render: (row) => <UserAvatarName user={row.maintenance_personnel} /> },
+    { label: 'Progress', width: '7%', render: (row) => <StatusBadge value={row.progress_status} /> },
+    { label: 'Verification', width: '7%', render: (row) => row.verification_result ? <StatusBadge value={row.verification_result} /> : '-' },
+    { label: 'Date Started', width: '6%', render: (row) => <DateBadge value={row.date_started} /> },
+    { label: 'Date Completed', width: '6%', render: (row) => <DateBadge value={row.date_completed} /> },
     {
       label: 'Action',
-      width: '11%',
+      width: '27%',
       render: (row) => (
-        <div className="row-actions">
+        <div className="row-actions" style={{ flexWrap: 'nowrap' }}>
           <button className="btn-edit-action" onClick={() => setEditTarget(row)} type="button" title="Edit" aria-label="Edit"><Icon name="edit" size={14} /> Edit</button>
           {role === 'Admin' && row.verification_result === 'Passed' && row.progress_status !== 'Completed' ? (
             <>
@@ -4838,7 +4872,7 @@ function formatTime(value) {
 // the form "[YYYY-MM-DD HH:MM] message", separated by a blank line. Parse
 // that back out so each entry can show a proper DateBadge instead of a raw
 // bracketed timestamp buried in a wall of text.
-function RepairLogEntries({ text }) {
+function RepairLogEntries({ text, compact = false }) {
   if (!text) {
     return <p className="empty-state">No logs yet.</p>;
   }
@@ -4850,6 +4884,19 @@ function RepairLogEntries({ text }) {
     }
     return { iso: match[1].trim().replace(' ', 'T'), message: match[2].trim() };
   }).filter((entry) => entry.message || entry.iso);
+
+  if (compact) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {entries.map((entry, i) => (
+          <p key={i} style={{ margin: 0, fontSize: '0.82rem', color: '#334155' }}>
+            {entry.iso && <span className="muted" style={{ fontSize: '0.7rem', marginRight: 6 }}>{formatDate(entry.iso)} {formatTime(entry.iso)}</span>}
+            {entry.message}
+          </p>
+        ))}
+      </div>
+    );
+  }
 
   return (
     <div className="repair-log-entries">
@@ -4965,6 +5012,33 @@ function showError(error, setNotice) {
 // TICKET WORKFLOW FIELD FACTORIES
 // =========================================================================
 
+// Flattens a ticket's sub_issues into standalone rows carrying their parent
+// ticket's context (vehicle, priority, custodian, etc.) — used by the
+// Mechanic Work Order queue and the Custodian Verification queue, which now
+// act on one sub-issue at a time instead of a whole ticket. Pass
+// `mechanicId` to further restrict to that mechanic's own assigned lines
+// (a ticket can carry sub-issues split across several mechanics).
+function flattenSubIssueRows(tickets, mechanicId = null) {
+  const rows = [];
+  (tickets ?? []).forEach((ticket) => {
+    (ticket.sub_issues ?? []).forEach((subIssue) => {
+      if (mechanicId && subIssue.assigned_mechanic_id !== mechanicId) return;
+      rows.push({
+        ...subIssue,
+        ticket_id: ticket.ticket_id,
+        ticket_title: ticket.ticket_title,
+        ticket_description: ticket.ticket_description,
+        ticket_status: ticket.status,
+        vehicle: ticket.vehicle,
+        priority: ticket.priority,
+        assigned_custodian: ticket.assigned_custodian,
+        created_at: ticket.created_at,
+      });
+    });
+  });
+  return rows;
+}
+
 function ticketCreateFields(lookups) {
   return [
     { label: 'Vehicle', name: 'vehicle_id', options: (lookups.vehicles ?? []).filter((v) => v.status !== 'Inactive').map((v) => ({ value: v.vehicle_id, label: `${v.vehicle_name} (${v.plate_number})` })), required: true, type: 'select' },
@@ -4979,7 +5053,7 @@ function mechanicAssignFields(lookups) {
   return [
     { label: 'Assign Mechanic', name: 'assigned_mechanic_id', options: (lookups.maintenance_personnel ?? []).map((m) => ({ value: m.id, label: m.name })), required: true, type: 'select' },
     { label: 'Maintenance Type', name: 'maintenance_type', options: lookups.maintenance_types ?? [], required: true, type: 'select' },
-    { label: 'Work Order Notes', name: 'work_order_notes', type: 'textarea' },
+    { label: 'Work Order Notes', name: 'work_order_notes', type: 'textarea', rows: 2 },
   ];
 }
 
@@ -4988,23 +5062,14 @@ const inspectionFields = [
   { label: 'Inspection Notes', name: 'inspection_notes', required: true, type: 'textarea' },
 ];
 
-const repairLogFields = [
-  { label: 'Repair Log Entry', name: 'repair_logs', required: true, type: 'textarea' },
-  { label: 'Parts / Materials Used', name: 'parts_used', type: 'textarea' },
-  { label: 'Repair Cost / Expenses (₱)', name: 'maintenance_cost', type: 'number', placeholder: 'Enter total cost (optional)' },
-  { label: 'Repair Start Date', name: 'repair_started_at', type: 'date' },
-  { label: 'Repair Completion Date', name: 'repair_completed_at', type: 'date' },
-  { label: 'Estimated Return Date (when available again)', name: 'estimated_return_date', type: 'date' },
-];
-
 const verifyRepairFields = [
   { label: 'Verification Verdict', name: 'verification_verdict', options: ['Approved', 'Rejected'], required: true, type: 'select' },
-  { label: 'Verification Notes', name: 'verification_notes', type: 'textarea' },
+  { label: 'Verification Notes', name: 'verification_notes', type: 'textarea', rows: 2 },
 ];
 
 const confirmTicketFields = [
   { label: 'Confirmation Verdict', name: 'confirmation_verdict', options: ['Confirmed', 'Reopened'], required: true, type: 'select' },
-  { label: 'Notes / Remarks', name: 'confirmation_notes', type: 'textarea' },
+  { label: 'Notes / Remarks', name: 'confirmation_notes', type: 'textarea', rows: 2 },
 ];
 
 // =========================================================================
@@ -5014,11 +5079,14 @@ const confirmTicketFields = [
 function TicketStatusBadge({ value, size = 'normal' }) {
   const colorMap = {
     'Open': 'ticket-open',
+    'Active': 'ticket-repair',
     'For Maintenance': 'ticket-formaint',
     'Under Repair': 'ticket-repair',
     'For Inspection': 'ticket-forinspect',
     'For Confirmation': 'ticket-forconfirm',
     'Done': 'ticket-done',
+    'Closed': 'ticket-done',
+    'Deleted': 'ticket-cancelled',
     'Cancelled': 'ticket-cancelled',
     'Low': 'priority-low',
     'Medium': 'priority-medium',
@@ -5039,13 +5107,18 @@ function TicketStatusBadge({ value, size = 'normal' }) {
 // TICKET DETAIL PANEL — shown when admin clicks a ticket row
 // =========================================================================
 
-function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm, onCancel, onUncancel, onDelete, onRequestConfirmation, onClose, asPage = false }) {
-  const [mechanicForm, setMechanicForm] = useState(false);
-  const [confirmForm, setConfirmForm] = useState(false);
+function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm, onAddSubIssue, onCloseTicket, onCancel, onUncancel, onDelete, onRequestConfirmation, onClose, asPage = false }) {
+  const [assigningId, setAssigningId] = useState(null);
+  const [confirmingId, setConfirmingId] = useState(null);
+  const [addingSubIssue, setAddingSubIssue] = useState(false);
 
   if (!ticket) return null;
 
-  const phase = ticketPhaseLabel(ticket.status);
+  const subIssues = ticket.sub_issues ?? [];
+  const progress = ticket.progress ?? { done: subIssues.filter((s) => s.status === 'Done').length, total: subIssues.length };
+  const canClose = ticket.status === 'Active' && (progress.total === 0 || progress.done === progress.total);
+  const isAdmin = role === 'Admin';
+
   const requestDelete = () => {
     onRequestConfirmation({
       title: 'Delete Ticket',
@@ -5065,7 +5138,12 @@ function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm,
             <div className="ticket-detail-meta">
               <TicketStatusBadge value={ticket.status} size="large" />
               <TicketStatusBadge value={ticket.priority} />
-              <span className="ticket-meta-item"><Icon name="calendar" size={14} /> {formatDate(ticket.created_at)}</span>
+              {progress.total > 0 && (
+                <span className={`status-badge ${progress.done === progress.total ? 'ticket-done' : 'ticket-repair'}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                  <Icon name="checkCircle" size={12} /> {progress.done}/{progress.total} Sub-Issues Done
+                </span>
+              )}
+              <DateBadge value={ticket.created_at} />
             </div>
           </div>
           {asPage ? (
@@ -5075,215 +5153,249 @@ function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm,
           )}
         </div>
 
-        <div className="ticket-progress-tracker" role="list" aria-label="Ticket progress">
-          {phaseOrder.map((s, i) => {
-            const current = phaseOrder.indexOf(ticket.status);
-            const state = i < current ? 'done' : i === current ? 'active' : 'upcoming';
-            return (
-              <div key={s} className={`ticket-progress-step is-${state}`} role="listitem">
-                <span className="ticket-progress-marker">
-                  {state === 'done' ? (
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="20 6 9 17 4 12" />
-                    </svg>
-                  ) : (
-                    <span className="ticket-progress-dot" />
-                  )}
-                </span>
-                <span className="ticket-progress-label">
-                  <Icon
-                    name={PHASE_STEP_ICONS[s]}
-                    size={13}
-                    style={state !== 'upcoming' ? { color: PHASE_STEP_COLORS[s] } : undefined}
-                  />
-                  {s}
-                </span>
-                <span className="ticket-progress-stage">Stage {i + 1}</span>
-              </div>
-            );
-          })}
-        </div>
+        {ticket.status === 'Cancelled' ? (
+          <p className="notice danger" style={{ margin: '12px 20px', display: 'flex', alignItems: 'center', gap: 8 }}><Icon name="alert" size={15} /> This ticket was cancelled.</p>
+        ) : (
+          <div className="ticket-progress-tracker" role="list" aria-label="Ticket progress">
+            {phaseOrder.map((s, i) => {
+              const current = phaseOrder.indexOf(ticket.status);
+              const state = i < current ? 'done' : i === current ? 'active' : 'upcoming';
+              return (
+                <div key={s} className={`ticket-progress-step is-${state}`} role="listitem">
+                  <span className="ticket-progress-marker">
+                    {state === 'done' ? (
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                    ) : (
+                      <span className="ticket-progress-dot" />
+                    )}
+                  </span>
+                  <span className="ticket-progress-label">
+                    <Icon
+                      name={PHASE_STEP_ICONS[s]}
+                      size={13}
+                      style={state !== 'upcoming' ? { color: PHASE_STEP_COLORS[s] } : undefined}
+                    />
+                    {s}
+                  </span>
+                  <span className="ticket-progress-stage">Stage {i + 1}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
 
         <div className="ticket-detail-body">
-          <section className="ticket-section">
-            <h4><Icon name="vehicle" size={16} /> Vehicle</h4>
-            <div className="ticket-detail-vehicle-layout">
+          <section className="ticket-section" style={{ padding: '0 12px 10px' }}>
+            <h4 style={{ margin: '0 -12px 8px', padding: '7px 12px', fontSize: '0.75rem' }}><Icon name="vehicle" size={14} /> Overview</h4>
+            <div className="ticket-detail-vehicle-layout" style={{ marginBottom: 6, padding: 8, gap: 10 }}>
               {ticket.vehicle?.photo_url && (
-                <div className="ticket-detail-vehicle-photo">
+                <div className="ticket-detail-vehicle-photo" style={{ width: 44, height: 44 }}>
                   <img src={resolvePhotoUrl(ticket.vehicle.photo_url)} alt={ticket.vehicle.vehicle_name} />
                 </div>
               )}
               <div className="ticket-detail-vehicle-info">
-                <p><strong>{ticket.vehicle?.vehicle_name}</strong> ({ticket.vehicle?.plate_number})</p>
-                <p className="muted">Status: {ticket.vehicle?.status} · Condition: {ticket.vehicle?.condition}</p>
+                <p style={{ margin: '0 0 4px' }}><strong style={{ color: '#2563eb' }}>{ticket.vehicle?.vehicle_name}</strong> <span className="muted">({ticket.vehicle?.plate_number})</span></p>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  <StatusBadge value={ticket.vehicle?.status} />
+                  <StatusBadge value={ticket.vehicle?.condition} />
+                </div>
               </div>
             </div>
-          </section>
-
-          <section className="ticket-section">
-            <h4><Icon name="clipboard" size={16} /> Description</h4>
-            <p>{ticket.ticket_description}</p>
+            <p className="muted" style={{ margin: 0, fontSize: '0.82rem' }}>{ticket.ticket_description}</p>
           </section>
 
           {ticket.assigned_custodian_id && (
-            <section className="ticket-section">
-              <h4><Icon name="search" size={16} /> Phase 1–2 · Custodian Inspection</h4>
-              <p>Assigned to: <strong>{ticket.assigned_custodian?.name ?? '—'}</strong></p>
-              {ticket.inspection_result && <>
-                <p>Result: <TicketStatusBadge value={ticket.inspection_result} /></p>
-                <p className="muted">{ticket.inspection_notes}</p>
-                <p className="muted">Inspected by {ticket.inspected_by?.name} on {formatDate(ticket.inspected_at)}</p>
-              </>}
+            <section className="ticket-section" style={{ padding: '0 12px 10px' }}>
+              <h4 style={{ margin: '0 -12px 8px', padding: '7px 12px', fontSize: '0.75rem' }}><Icon name="search" size={14} /> Custodian Inspection</h4>
+              <p style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', margin: '0 0 4px' }}>
+                Assigned to <UserAvatarName user={ticket.assigned_custodian} />
+                {ticket.inspection_result && <>· Result: <TicketStatusBadge value={ticket.inspection_result} /></>}
+              </p>
+              {ticket.inspection_notes && <p className="muted" style={{ margin: '0 0 4px' }}>{ticket.inspection_notes}</p>}
+              {ticket.inspected_at && <p className="muted" style={{ margin: 0, fontSize: '0.78rem' }}>Inspected by <span style={{ color: '#7c3aed', fontWeight: 600 }}>{ticket.inspected_by?.name}</span> on {formatDate(ticket.inspected_at)}</p>}
             </section>
           )}
 
-          {ticket.assigned_mechanic_id && (
-            <section className="ticket-section">
-              <h4><Icon name="wrench" size={16} /> Phase 3 · Work Order</h4>
-              <p>Mechanic: <strong>{ticket.assigned_mechanic?.name ?? '—'}</strong></p>
-              <p>Type: {ticket.maintenance_type}</p>
-              {ticket.work_order_notes && <p className="muted">{ticket.work_order_notes}</p>}
-              {ticket.repair_logs && <>
-                <h5>Repair Logs</h5>
-                <RepairLogEntries text={ticket.repair_logs} />
-              </>}
-              {ticket.parts_used && (
-                <div style={{ marginTop: '8px' }}>
-                  <strong style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>Parts Used:</strong>
-                  <div style={{ marginTop: '4px' }}>
-                    <PartsTags value={ticket.parts_used} />
+          {ticket.status !== 'Open' && (
+            <section className="ticket-section" style={{ padding: '0 12px 10px' }}>
+              <h4 style={{ margin: '0 -12px 8px', padding: '7px 12px', fontSize: '0.75rem' }}><Icon name="wrench" size={14} /> Sub-Issues under "{ticket.ticket_title}"</h4>
+              <p className="muted" style={{ marginTop: -4, marginBottom: 8, fontSize: '0.82rem' }}>Keep sub-issues and the mechanic's Maintenance Type scoped to this Main Issue — an unrelated repair belongs on its own ticket instead.</p>
+
+              {progress.total > 0 && (
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', fontWeight: 600, color: '#475569', marginBottom: 4 }}>
+                    <span>Progress</span>
+                    <span>{progress.done}/{progress.total} done · {Math.round((progress.done / progress.total) * 100)}%</span>
+                  </div>
+                  <div style={{ height: 8, borderRadius: 999, background: '#e2e8f0', overflow: 'hidden' }}>
+                    <div style={{
+                      height: '100%',
+                      width: `${(progress.done / progress.total) * 100}%`,
+                      background: progress.done === progress.total ? '#16a34a' : '#d97706',
+                      borderRadius: 999,
+                      transition: 'width 0.3s ease',
+                    }} />
                   </div>
                 </div>
               )}
-              {ticket.maintenance_cost !== null && ticket.maintenance_cost !== undefined && (
-                <p style={{ marginTop: '12px' }}>
-                  <strong>Logged Cost / Expenses:</strong> ₱{Number(ticket.maintenance_cost).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                </p>
-              )}
-            </section>
-          )}
 
-          {ticket.verification_verdict && (
-            <section className="ticket-section">
-              <h4><Icon name="checkCircle" size={16} /> Phase 4T1 · Custodian Verification</h4>
-              <p>Verdict: <TicketStatusBadge value={ticket.verification_verdict} /></p>
-              <p className="muted">{ticket.verification_notes}</p>
-              <p className="muted">By {ticket.verified_by?.name} on {formatDate(ticket.verified_at)}</p>
-            </section>
-          )}
+              {subIssues.length === 0 && <p className="muted">No sub-issues — inspection found nothing to repair.</p>}
+              {subIssues.map((si, index) => {
+                const stageBanner = {
+                  'Under Repair':     { color: '#d97706', bg: '#fffbeb', text: '#92400e', icon: 'wrench', label: `Awaiting ${si.assigned_mechanic?.name ?? 'the mechanic'}'s repair log` },
+                  'For Inspection':   { color: '#7c3aed', bg: '#f5f3ff', text: '#5b21b6', icon: 'search', label: 'Awaiting Custodian verification' },
+                  'For Confirmation': { color: '#db2777', bg: '#fdf2f8', text: '#9d174d', icon: 'flag', label: "Custodian approved — awaiting Admin's final confirmation" },
+                }[si.status];
 
-          {ticket.confirmation_verdict && (
-            <section className="ticket-section">
-              <h4><Icon name="flag" size={16} /> Phase 4T2 · Admin Confirmation</h4>
-              <p>Verdict: <TicketStatusBadge value={ticket.confirmation_verdict} /></p>
-              {ticket.maintenance_cost !== null && ticket.maintenance_cost !== undefined && (
-                <p style={{ marginTop: '4px', marginBottom: '4px' }}>
-                  <strong>Expenses:</strong> ₱{Number(ticket.maintenance_cost).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                </p>
+                return (
+                <div key={si.sub_issue_id} style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 10, marginBottom: 8, background: '#fff', boxShadow: '0 1px 2px rgba(15,23,42,0.04)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                      <span style={{ width: 22, height: 22, borderRadius: '50%', background: '#eff6ff', color: '#2563eb', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.7rem', fontWeight: 700, flexShrink: 0 }}>{index + 1}</span>
+                      <strong style={{ fontSize: '0.9rem' }}>{si.title}</strong>
+                    </div>
+                    <TicketStatusBadge value={si.status} />
+                  </div>
+
+                  {(si.assigned_mechanic || si.maintenance_type || si.verification_verdict || (si.maintenance_cost !== null && si.maintenance_cost !== undefined)) && (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 8, marginTop: 8, padding: '8px 10px', background: '#f8fafc', borderRadius: 8 }}>
+                      {si.assigned_mechanic && (
+                        <div>
+                          <span style={{ display: 'block', fontSize: '0.66rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 2 }}>Mechanic</span>
+                          <UserAvatarName user={si.assigned_mechanic} />
+                        </div>
+                      )}
+                      {si.maintenance_type && (
+                        <div>
+                          <span style={{ display: 'block', fontSize: '0.66rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 2 }}>Category</span>
+                          <strong style={{ fontSize: '0.85rem' }}>{si.maintenance_type}</strong>
+                        </div>
+                      )}
+                      {si.maintenance_cost !== null && si.maintenance_cost !== undefined && (
+                        <div>
+                          <span style={{ display: 'block', fontSize: '0.66rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 2 }}>Cost</span>
+                          <strong style={{ fontSize: '0.85rem', color: '#16a34a' }}>₱{Number(si.maintenance_cost).toLocaleString('en-US', { minimumFractionDigits: 2 })}</strong>
+                        </div>
+                      )}
+                      {si.verification_verdict && (
+                        <div>
+                          <span style={{ display: 'block', fontSize: '0.66rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 2 }}>Custodian Verdict</span>
+                          <TicketStatusBadge value={si.verification_verdict} />
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Makes every handoff visible — in particular, the Custodian's
+                      verification step between the mechanic's repair and the
+                      Admin's final confirmation, so it never looks skipped. */}
+                  {stageBanner && (
+                    <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: stageBanner.bg, borderLeft: `3px solid ${stageBanner.color}`, borderRadius: 6, fontSize: '0.82rem', color: stageBanner.text }}>
+                      <Icon name={stageBanner.icon} size={14} /> {stageBanner.label}
+                    </div>
+                  )}
+
+                  {si.repair_logs && <div style={{ marginTop: 8 }}><RepairLogEntries text={si.repair_logs} compact /></div>}
+                  {si.parts_used && <div style={{ marginTop: 8 }}><PartsTags value={si.parts_used} /></div>}
+                  {si.attachment_url && (
+                    <p style={{ marginTop: 8 }}>
+                      <a href={resolvePhotoUrl(si.attachment_url)} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '0.85rem' }}>
+                        <Icon name="clipboard" size={13} /> View attached photo/document
+                      </a>
+                    </p>
+                  )}
+                  {si.confirmation_verdict && (
+                    <p className="muted" style={{ marginTop: 8 }}>Admin verdict: <TicketStatusBadge value={si.confirmation_verdict} /> {si.confirmation_notes}</p>
+                  )}
+
+                  {isAdmin && si.status === 'Open' && (
+                    assigningId === si.sub_issue_id ? (
+                      <div className="ticket-inline-form" style={{ marginTop: 8, padding: '10px 12px' }}>
+                        {si.maintenance_type && (
+                          <p className="muted" style={{ marginBottom: 8, fontSize: '0.8rem' }}>Category: <strong>{si.maintenance_type}</strong> (fixed from inspection — not changeable here)</p>
+                        )}
+                        <SmartForm
+                          fields={si.maintenance_type ? mechanicAssignFields(lookups).filter((f) => f.name !== 'maintenance_type') : mechanicAssignFields(lookups)}
+                          key={`assign-${si.sub_issue_id}`}
+                          onCancel={() => setAssigningId(null)}
+                          onSubmit={(payload) => onAssignMechanic(ticket, si, { ...payload, maintenance_type: si.maintenance_type || payload.maintenance_type }).then(() => setAssigningId(null))}
+                          submitLabel="Assign & Dispatch"
+                          title=""
+                        />
+                      </div>
+                    ) : (
+                      <button className="btn-edit-action" style={{ marginTop: 10 }} type="button" onClick={() => setAssigningId(si.sub_issue_id)}>Assign Mechanic</button>
+                    )
+                  )}
+
+                  {isAdmin && si.status === 'For Confirmation' && (
+                    confirmingId === si.sub_issue_id ? (
+                      <div className="ticket-inline-form" style={{ marginTop: 8, padding: '10px 12px' }}>
+                        <SmartForm
+                          fields={confirmTicketFields}
+                          key={`confirm-${si.sub_issue_id}`}
+                          onCancel={() => setConfirmingId(null)}
+                          onSubmit={(payload) => onConfirm(ticket, si, payload).then(() => setConfirmingId(null))}
+                          submitLabel="Submit Verdict"
+                          title=""
+                        />
+                      </div>
+                    ) : (
+                      <button className="primary-button" style={{ marginTop: 10 }} type="button" onClick={() => setConfirmingId(si.sub_issue_id)}>Issue Confirmation Verdict</button>
+                    )
+                  )}
+                </div>
+                );
+              })}
+
+              {isAdmin && ticket.status === 'Active' && (
+                addingSubIssue ? (
+                  <div className="ticket-inline-form">
+                    <SmartForm
+                      fields={[
+                        { label: 'Category', name: 'maintenance_type', options: lookups.maintenance_types ?? [], type: 'select' },
+                        { label: 'Sub-Issue Title', name: 'title', required: true, type: 'text' },
+                      ]}
+                      key="add-sub-issue"
+                      onCancel={() => setAddingSubIssue(false)}
+                      onSubmit={(payload) => onAddSubIssue(ticket, payload).then(() => setAddingSubIssue(false))}
+                      submitLabel="Add Sub-Issue"
+                      title=""
+                    />
+                  </div>
+                ) : (
+                  <button className="ghost-button" type="button" onClick={() => setAddingSubIssue(true)}><Icon name="clipboard" size={14} /> Add Sub-Issue</button>
+                )
               )}
-              <p className="muted">{ticket.confirmation_notes}</p>
-              <p className="muted">By {ticket.confirmed_by?.name} on {formatDate(ticket.confirmed_at)}</p>
             </section>
           )}
         </div>
 
-        {/* Phase 3 Action — Admin assigns mechanic when status is For Maintenance */}
-        {ticket.status === 'For Maintenance' && !mechanicForm && (
-          <div className="ticket-detail-actions">
-            <p className="notice warning" style={{marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8}}><Icon name="alert" size={15} /> Maintenance Trigger — This vehicle needs a mechanic assigned.</p>
-            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-              <button className="primary-button" type="button" onClick={() => setMechanicForm(true)}>Assign Mechanic (Work Order)</button>
+        <div className="ticket-detail-actions">
+          {isAdmin && ticket.status === 'Active' && !canClose && (
+            <p className="notice warning" style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}><Icon name="alert" size={15} /> Every sub-issue must be Done before this ticket can be closed ({progress.done}/{progress.total}).</p>
+          )}
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            {ticket.status === 'Cancelled' && onUncancel && (
+              <button className="primary-button" type="button" onClick={() => onUncancel(ticket)}>Restore Ticket</button>
+            )}
+            {isAdmin && canClose && (
+              <button className="primary-button" type="button" onClick={() => onCloseTicket(ticket)}>Close Ticket</button>
+            )}
+            {ticket.status !== 'Closed' && ticket.status !== 'Cancelled' && (
               <button className="ghost-button" type="button" onClick={() => onCancel(ticket)}>Cancel Ticket</button>
+            )}
+            {/* Once every sub-issue is Done (ready to close) or the ticket is
+                already Closed, there's real completed work on record —
+                Delete is only for genuine mistakes, not for discarding
+                finished repairs. */}
+            {ticket.status !== 'Closed' && !canClose && (
               <button className="danger-button" type="button" onClick={requestDelete}>Delete Ticket</button>
-            </div>
+            )}
           </div>
-        )}
-
-        {ticket.status === 'For Maintenance' && mechanicForm && (
-          <div className="ticket-inline-form">
-            <h4>Dispatch Work Order</h4>
-            <SmartForm
-              fields={mechanicAssignFields(lookups)}
-              key="mechanic-assign"
-              onCancel={() => setMechanicForm(false)}
-              onSubmit={(payload) => onAssignMechanic(ticket, payload)}
-              submitLabel="Assign & Dispatch"
-              title=""
-            />
-          </div>
-        )}
-
-        {/* Phase 4T2 Action — Admin confirms or reopens when status is For Confirmation */}
-        {ticket.status === 'For Confirmation' && !confirmForm && (
-          <div className="ticket-detail-actions">
-            <p className="notice success" style={{marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8}}><Icon name="checkCircle" size={15} /> Custodian has approved the repair. Your final confirmation is required.</p>
-            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-              <button className="primary-button" type="button" onClick={() => setConfirmForm(true)}>Issue Confirmation Verdict</button>
-              <button className="danger-button" type="button" onClick={requestDelete}>Delete Ticket</button>
-            </div>
-          </div>
-        )}
-
-        {ticket.status === 'For Confirmation' && confirmForm && (
-          <div className="ticket-inline-form">
-            <h4>Final Confirmation</h4>
-            
-            <div className="repair-summary-card" style={{
-              background: '#f8fafc',
-              border: '1px solid #e2e8f0',
-              borderRadius: '8px',
-              padding: '12px',
-              marginBottom: '16px',
-              fontSize: '0.88rem'
-            }}>
-              <h5 style={{ margin: '0 0 8px 0', fontSize: '0.9rem', color: '#1e293b', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}><Icon name="tools" size={15} /> Repair Summary</h5>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px' }}>
-                <div>
-                  <span className="muted" style={{ display: 'block', fontSize: '0.72rem', fontWeight: 600, color: '#64748b' }}>MECHANIC</span>
-                  <strong>{ticket.assigned_mechanic?.name ?? '—'}</strong>
-                </div>
-                <div>
-                  <span className="muted" style={{ display: 'block', fontSize: '0.72rem', fontWeight: 600, color: '#64748b' }}>EXPENSES</span>
-                  <strong style={{ color: 'var(--text-success)' }}>
-                    {ticket.maintenance_cost ? `₱${Number(ticket.maintenance_cost).toLocaleString('en-US', { minimumFractionDigits: 2 })}` : '₱0.00'}
-                  </strong>
-                </div>
-              </div>
-              <div style={{ marginBottom: '8px' }}>
-                <span className="muted" style={{ display: 'block', fontSize: '0.72rem', fontWeight: 600, color: '#64748b', marginBottom: 4 }}>REPAIR LOGS</span>
-                <RepairLogEntries text={ticket.repair_logs} />
-              </div>
-              <div>
-                <span className="muted" style={{ display: 'block', fontSize: '0.72rem', fontWeight: 600, color: '#64748b', marginBottom: '4px' }}>PARTS USED</span>
-                <PartsTags value={ticket.parts_used} />
-              </div>
-            </div>
-
-            <SmartForm
-              fields={confirmTicketFields}
-              key="confirm-ticket"
-              onCancel={() => setConfirmForm(false)}
-              onSubmit={(payload) => onConfirm(ticket, payload)}
-              submitLabel="Submit Verdict"
-              title=""
-            />
-          </div>
-        )}
-
-        {/* Default Admin Actions if not in status For Maintenance or For Confirmation */}
-        {ticket.status !== 'For Maintenance' && ticket.status !== 'For Confirmation' && (
-          <div className="ticket-detail-actions">
-            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-              {ticket.status === 'Cancelled' && onUncancel && (
-                <button className="primary-button" type="button" onClick={() => onUncancel(ticket)}>Restore Ticket</button>
-              )}
-              {ticket.status !== 'Done' && ticket.status !== 'Cancelled' && (
-                <button className="ghost-button" type="button" onClick={() => onCancel(ticket)}>Cancel Ticket</button>
-              )}
-              <button className="danger-button" type="button" onClick={requestDelete}>Delete Ticket</button>
-            </div>
-          </div>
-        )}
+        </div>
       </div>
   );
 
@@ -5330,8 +5442,10 @@ function TicketProfilePage({ ticketId, role, ticketLookups, onBack, onDeleteTick
       role={role}
       ticket={ticket}
       lookups={ticketLookups}
-      onAssignMechanic={(t, payload) => sendTicketAction(`/tickets/${t.ticket_id}/assign-mechanic`, payload, 'Mechanic assigned — work order dispatched.').then(loadTicket)}
-      onConfirm={(t, payload) => sendTicketAction(`/tickets/${t.ticket_id}/confirm`, payload, 'Confirmation verdict submitted.').then(loadTicket)}
+      onAssignMechanic={(t, subIssue, payload) => sendTicketAction(`/tickets/${t.ticket_id}/sub-issues/${subIssue.sub_issue_id}/assign-mechanic`, payload, 'Mechanic assigned — work order dispatched.').then(loadTicket)}
+      onConfirm={(t, subIssue, payload) => sendTicketAction(`/tickets/${t.ticket_id}/sub-issues/${subIssue.sub_issue_id}/confirm`, payload, 'Confirmation verdict submitted.').then(loadTicket)}
+      onAddSubIssue={(t, payload) => sendTicketAction(`/tickets/${t.ticket_id}/sub-issues`, payload, 'Sub-issue added.', 'post').then(loadTicket)}
+      onCloseTicket={(t) => sendTicketAction(`/tickets/${t.ticket_id}/close`, {}, 'Ticket closed.').then(loadTicket)}
       onCancel={(t) => sendTicketAction(`/tickets/${t.ticket_id}/cancel`, {}, 'Ticket cancelled.').then(loadTicket)}
       onUncancel={(t) => sendTicketAction(`/tickets/${t.ticket_id}/uncancel`, {}, 'Ticket restored.').then(loadTicket)}
       onDelete={(t) => onDeleteTicket(t).then(onBack)}
@@ -5378,6 +5492,7 @@ function NewTicketPage({ onBack, ticketLookups, prefilledTicketData, onCreateTic
 function TicketModule({
   tickets,
   ticketLookups,
+  notifications = [],
   onViewTicket,
   onCreateNew,
   searchQuery,
@@ -5402,13 +5517,29 @@ function TicketModule({
     localStorage.setItem('vms_ticket_view', mode);
   };
 
-  // Count alerts
-  const forMaintCount = tickets.filter((t) => t.status === 'For Maintenance').length;
-  const forConfirmCount = tickets.filter((t) => t.status === 'For Confirmation').length;
+  // Count alerts — now derived from sub-issues nested under each ticket,
+  // since assignment/confirmation happen per sub-issue, not per ticket.
+  const allSubIssues = tickets.flatMap((t) => t.sub_issues ?? []);
+  const openSubIssueCount = allSubIssues.filter((s) => s.status === 'Open').length;
+  const forConfirmSubIssueCount = allSubIssues.filter((s) => s.status === 'For Confirmation').length;
+  const readyToCloseCount = tickets.filter((t) => t.status === 'Active' && (t.progress?.total ?? 0) > 0 && t.progress.done === t.progress.total).length;
+
+  // Unread-updates badge per ticket card — counts this user's unread
+  // notifications tied to that ticket (assignment, verification, etc.)
+  // so an admin can spot which tickets have activity they haven't seen yet.
+  const unreadByTicket = useMemo(() => {
+    const counts = {};
+    notifications.forEach((n) => {
+      if (!n.read_at && n.ticket_id) {
+        counts[n.ticket_id] = (counts[n.ticket_id] ?? 0) + 1;
+      }
+    });
+    return counts;
+  }, [notifications]);
 
   const ticketStats = useMemo(() => {
     const counts = { total: tickets.length };
-    ['Open', 'Under Repair', 'For Confirmation', 'Done', 'Cancelled'].forEach((s) => {
+    ['Open', 'Active', 'Closed', 'Cancelled'].forEach((s) => {
       counts[s] = tickets.filter((t) => t.status === s).length;
     });
     return counts;
@@ -5434,14 +5565,19 @@ function TicketModule({
       />
       <section className="panel">
         {/* Alert banners */}
-        {forMaintCount > 0 && (
+        {openSubIssueCount > 0 && (
           <div className="ticket-alert-banner formaint">
-            <Icon name="alert" size={16} /> <strong>{forMaintCount}</strong> ticket{forMaintCount > 1 ? 's' : ''} waiting for mechanic assignment — Maintenance Trigger active!
+            <Icon name="alert" size={16} /> <strong>{openSubIssueCount}</strong> sub-issue{openSubIssueCount > 1 ? 's' : ''} waiting for mechanic assignment.
           </div>
         )}
-        {forConfirmCount > 0 && (
+        {forConfirmSubIssueCount > 0 && (
           <div className="ticket-alert-banner forconfirm">
-            <Icon name="checkCircle" size={16} /> <strong>{forConfirmCount}</strong> ticket{forConfirmCount > 1 ? 's' : ''} awaiting your final confirmation.
+            <Icon name="checkCircle" size={16} /> <strong>{forConfirmSubIssueCount}</strong> sub-issue{forConfirmSubIssueCount > 1 ? 's' : ''} awaiting your final confirmation.
+          </div>
+        )}
+        {readyToCloseCount > 0 && (
+          <div className="ticket-alert-banner forconfirm">
+            <Icon name="checkCircle" size={16} /> <strong>{readyToCloseCount}</strong> ticket{readyToCloseCount > 1 ? 's' : ''} fully done and ready to close.
           </div>
         )}
 
@@ -5484,7 +5620,7 @@ function TicketModule({
             : (
               <div className="ticket-card-grid">
                 {tickets.map((t) => (
-                  <TicketCard key={t.ticket_id} ticket={t} onClick={() => onViewTicket(t)} />
+                  <TicketCard key={t.ticket_id} ticket={t} unreadCount={unreadByTicket[t.ticket_id] ?? 0} onClick={() => onViewTicket(t)} />
                 ))}
               </div>
             )
@@ -5623,14 +5759,13 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, onBack, setNotice, on
                 <div><dt>Year Model</dt><dd>{vehicle.year_model ?? '-'}</dd></div>
                 <div><dt>Capacity</dt><dd>{vehicle.capacity ?? '-'}</dd></div>
                 <div><dt>Color</dt><dd>{vehicle.vehicle_color ?? '-'}</dd></div>
-                {isWater ? (
+                {isWater && (
                   <>
                     <div><dt>Hull Material</dt><dd>{vehicle.hull_material ?? '-'}</dd></div>
                     <div><dt>Engine Type</dt><dd>{vehicle.engine_type ?? '-'}</dd></div>
                   </>
-                ) : (
-                  <div><dt>Fuel Type</dt><dd>{vehicle.fuel_type ?? '-'}</dd></div>
                 )}
+                <div><dt>Fuel Type</dt><dd>{vehicle.fuel_type ?? '-'}</dd></div>
               </dl>
             </div>
             {vehicle.remarks && (
@@ -5777,9 +5912,23 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, onBack, setNotice, on
 // TICKET CARD
 // =========================================================================
 
-function TicketCard({ ticket, onClick }) {
+function TicketCard({ ticket, unreadCount = 0, onClick }) {
+  const progress = ticket.progress;
+
   return (
-    <div className="ticket-card" onClick={onClick} role="button" tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && onClick()}>
+    <div className="ticket-card" style={{ position: 'relative' }} onClick={onClick} role="button" tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && onClick()}>
+      {unreadCount > 0 && (
+        <span
+          title={`${unreadCount} unread update${unreadCount > 1 ? 's' : ''} on this ticket`}
+          style={{
+            position: 'absolute', top: -8, right: -8, minWidth: 20, height: 20, padding: '0 5px',
+            borderRadius: 999, background: '#dc2626', color: '#fff', fontSize: '0.7rem', fontWeight: 700,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 1px 3px rgba(0,0,0,0.25)', zIndex: 1,
+          }}
+        >
+          {unreadCount > 9 ? '9+' : unreadCount}
+        </span>
+      )}
       <div className="ticket-card-content-wrapper">
         <div className="ticket-card-info">
           <div className="ticket-card-top">
@@ -5795,6 +5944,19 @@ function TicketCard({ ticket, onClick }) {
           </div>
         )}
       </div>
+      {progress?.total > 0 && (
+        <div style={{ margin: '8px 0 2px' }}>
+          <div style={{ height: 6, borderRadius: 999, background: '#e2e8f0', overflow: 'hidden' }}>
+            <div style={{
+              height: '100%',
+              width: `${(progress.done / progress.total) * 100}%`,
+              background: progress.done === progress.total ? '#16a34a' : '#d97706',
+              borderRadius: 999,
+            }} />
+          </div>
+          <span className="muted" style={{ fontSize: '0.72rem' }}>{progress.done}/{progress.total} sub-issues done</span>
+        </div>
+      )}
       <div className="ticket-card-bottom">
         <TicketStatusBadge value={ticket.status} />
         <span className="ticket-card-date">{formatDate(ticket.created_at)}</span>
@@ -5884,7 +6046,12 @@ function CustodianInspectionModule({
   );
 }
 
-function InspectTicketPage({ ticket, onBack, onSubmit }) {
+function InspectTicketPage({ ticket, onBack, onSubmit, ticketLookups }) {
+  const [resultValue, setResultValue] = useState(ticket?.inspection_result ?? '');
+  const [notes, setNotes] = useState(ticket?.inspection_notes ?? '');
+  const [category, setCategory] = useState('');
+  const [subIssueTitles, setSubIssueTitles] = useState(['']);
+
   if (!ticket) {
     return (
       <ModulePanel description="This inspection assignment could not be found — it may no longer be assigned to you.">
@@ -5893,20 +6060,89 @@ function InspectTicketPage({ ticket, onBack, onSubmit }) {
     );
   }
 
+  const updateTitle = (index, value) => setSubIssueTitles((rows) => rows.map((row, i) => (i === index ? value : row)));
+  const addRow = () => setSubIssueTitles((rows) => [...rows, '']);
+  const removeRow = (index) => setSubIssueTitles((rows) => rows.filter((_, i) => i !== index));
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    const payload = { inspection_result: resultValue, inspection_notes: notes };
+    if (resultValue === 'Needs Maintenance') {
+      payload.sub_issues = subIssueTitles
+        .filter((title) => title.trim())
+        .map((title) => ({ title: title.trim(), maintenance_type: category || undefined }));
+    }
+    return onSubmit(ticket, payload);
+  };
+
   return (
     <ModulePanel description="Review the vehicle in person and submit your physical inspection findings.">
       <div className="vehicle-profile-header">
         <button className="ghost-button btn-exit-action" type="button" onClick={onBack}><Icon name="arrowLeft" size={18} /></button>
         <h3 className="ticket-detail-title" style={{ margin: 0 }}>Inspect Ticket #{ticket.ticket_id}</h3>
       </div>
-      <SmartForm
-        fields={inspectionFields}
-        key={ticket.ticket_id}
-        onCancel={onBack}
-        onSubmit={(payload) => onSubmit(ticket, payload)}
-        submitLabel="Submit Inspection"
-        title=""
-      />
+      {/* One continuous form — Cancel/Submit sit at the very end, after every
+          field (including Category/Root Causes), never in the middle. */}
+      <form className="smart-form" onSubmit={handleSubmit}>
+        <label>
+          <span>Inspection Result</span>
+          <select required value={resultValue} onChange={(e) => setResultValue(e.target.value)}>
+            <option value="">Select</option>
+            <option value="Needs Maintenance">Needs Maintenance</option>
+            <option value="No Issues">No Issues</option>
+          </select>
+        </label>
+        <label>
+          <span>Inspection Notes</span>
+          <textarea required rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} />
+        </label>
+
+        {resultValue === 'Needs Maintenance' && (
+          <div className="repair-summary-card" style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: 16, marginTop: 4, marginBottom: 16 }}>
+            <h4 style={{ margin: '0 0 4px 0', display: 'flex', alignItems: 'center', gap: 7 }}><Icon name="wrench" size={16} /> Root Causes Found</h4>
+            <p className="muted" style={{ marginTop: 0, marginBottom: 14 }}>All root causes here belong to the same ticket, so they share one category.</p>
+
+            <label style={{ display: 'block', marginBottom: 16 }}>
+              <span style={{ display: 'block', fontSize: '0.72rem', fontWeight: 600, color: '#64748b', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.02em' }}>Category</span>
+              <select value={category} onChange={(e) => setCategory(e.target.value)} style={{ width: '100%' }}>
+                <option value="">Select a category</option>
+                {(ticketLookups?.maintenance_types ?? []).map((t) => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </label>
+
+            <span style={{ display: 'block', fontSize: '0.72rem', fontWeight: 600, color: '#64748b', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.02em' }}>Root Causes</span>
+            {subIssueTitles.map((title, index) => (
+              <div key={index} style={{ display: 'flex', gap: 8, marginBottom: 10, alignItems: 'center' }}>
+                <span className="muted" style={{ flex: '0 0 20px', textAlign: 'right' }}>{index + 1}.</span>
+                <input
+                  type="text"
+                  placeholder="Describe the root cause (e.g. low coolant level)"
+                  value={title}
+                  onChange={(e) => updateTitle(index, e.target.value)}
+                  style={{ flex: 1 }}
+                />
+                <button
+                  type="button"
+                  className="danger-button"
+                  onClick={() => removeRow(index)}
+                  disabled={subIssueTitles.length === 1}
+                  title="Remove root cause"
+                  aria-label="Remove root cause"
+                  style={{ padding: '8px 12px' }}
+                >
+                  <Icon name="close" size={14} />
+                </button>
+              </div>
+            ))}
+            <button type="button" className="ghost-button" onClick={addRow} style={{ marginTop: 4 }}><Icon name="clipboard" size={14} /> Add Another Root Cause</button>
+          </div>
+        )}
+
+        <div className="form-actions">
+          <button className="ghost-button btn-exit-action" onClick={onBack} type="button">Cancel</button>
+          <button className="primary-button" type="submit">Submit Inspection</button>
+        </div>
+      </form>
       <div style={{marginTop: '16px', paddingTop: '12px', borderTop: '1px solid var(--border-subtle)'}}>
         <p className="muted"><strong>Vehicle:</strong> {ticket.vehicle?.vehicle_name}</p>
         <p className="muted"><strong>Issue:</strong> {ticket.ticket_description}</p>
@@ -5974,9 +6210,9 @@ function CustodianVerificationModule({
           : (
             <DataTable
               columns={[
-                { label: 'Ticket ID', render: (r) => r.ticket_id },
+                { label: 'Ticket', render: (r) => `#${r.ticket_id} — ${r.ticket_title}` },
                 { label: 'Vehicle', render: (r) => <VehicleCell vehicle={r.vehicle} /> }, { label: 'Plate', render: (r) => r.vehicle?.plate_number ?? '-' },
-                { label: 'Title', render: (r) => r.ticket_title },
+                { label: 'Sub-Issue', render: (r) => r.title },
                 { label: 'Mechanic', render: (r) => r.assigned_mechanic?.name ?? '—' },
                 {
                   label: 'Repair Log',
@@ -6006,7 +6242,7 @@ function CustodianVerificationModule({
           )
         }
       </section>
-      <FormModal open={!!editTarget} title={`Verify Repair — Ticket #${editTarget?.ticket_id}`} onClose={onCancelEdit} confirmClose>
+      <FormModal open={!!editTarget} title={`Verify Repair — ${editTarget?.ticket_title ? `${editTarget.ticket_title}: ` : ''}${editTarget?.title ?? `Ticket #${editTarget?.ticket_id}`}`} onClose={onCancelEdit} confirmClose>
         <SmartForm
           fields={verifyRepairFields}
           key={editTarget?.ticket_id}
@@ -6139,13 +6375,13 @@ function MechanicWorkOrderModule({
           : (
             <DataTable
               columns={[
-                { label: 'Ticket ID', render: (r) => r.ticket_id },
+                { label: 'Ticket', render: (r) => `#${r.ticket_id} — ${r.ticket_title}` },
                 { label: 'Vehicle', render: (r) => <VehicleCell vehicle={r.vehicle} /> }, { label: 'Plate', render: (r) => r.vehicle?.plate_number ?? '-' },
                 {
                   label: 'Work Order',
                   render: (r) => (
                     <div>
-                      <div style={{ fontWeight: 600 }}>{r.ticket_title}</div>
+                      <div style={{ fontWeight: 600 }}>{r.title}</div>
                       {r.confirmation_verdict === 'Reopened' ? (
                         <span className="status-badge rework-danger" style={{ fontSize: '0.75rem', padding: '3px 8px', marginTop: 4, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
                           <Icon name="alert" size={13} /> Admin Reopened Rework
@@ -6183,6 +6419,13 @@ function MechanicWorkOrderModule({
 }
 
 function LogRepairsPage({ ticket, onBack, onSubmit }) {
+  const [repairLogs, setRepairLogs] = useState('');
+  const [parts, setParts] = useState([{ name: '', cost: '' }]);
+  const [attachment, setAttachment] = useState(null);
+  const [repairStartedAt, setRepairStartedAt] = useState('');
+  const [repairCompletedAt, setRepairCompletedAt] = useState('');
+  const [estimatedReturnDate, setEstimatedReturnDate] = useState('');
+
   if (!ticket) {
     return (
       <ModulePanel description="This work order could not be found — it may no longer be assigned to you.">
@@ -6191,12 +6434,36 @@ function LogRepairsPage({ ticket, onBack, onSubmit }) {
     );
   }
 
+  const updatePart = (index, field, value) => setParts((rows) => rows.map((row, i) => (i === index ? { ...row, [field]: value } : row)));
+  const addPart = () => setParts((rows) => [...rows, { name: '', cost: '' }]);
+  const removePart = (index) => setParts((rows) => rows.filter((_, i) => i !== index));
+
+  // Live-running total instead of a manual "Generate" click — a click-based
+  // total would go stale the moment another row is added or edited after
+  // pressing it. This always reflects exactly what's in the rows right now.
+  const totalCost = parts.reduce((sum, p) => sum + (parseFloat(p.cost) || 0), 0);
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    const namedParts = parts.filter((p) => p.name.trim());
+    onSubmit(ticket, {
+      repair_logs: repairLogs,
+      parts_used: namedParts.map((p) => p.name.trim()).join(', ') || undefined,
+      photo: attachment || undefined,
+      maintenance_cost: totalCost > 0 ? totalCost : undefined,
+      repair_started_at: repairStartedAt || undefined,
+      repair_completed_at: repairCompletedAt || undefined,
+      estimated_return_date: estimatedReturnDate || undefined,
+    });
+  };
+
   return (
     <ModulePanel description="Execute the repair and submit your logs to send this ticket for Custodian inspection.">
       <div className="vehicle-profile-header">
         <button className="ghost-button btn-exit-action" type="button" onClick={onBack}><Icon name="arrowLeft" size={18} /></button>
-        <h3 className="ticket-detail-title" style={{ margin: 0 }}>Log Repairs — Ticket #{ticket.ticket_id}</h3>
+        <h3 className="ticket-detail-title" style={{ margin: 0 }}>Log Repairs — {ticket.title}</h3>
       </div>
+      <p className="muted" style={{ marginTop: -8, marginBottom: 16 }}>Main Issue: <strong>{ticket.ticket_title}</strong> (Ticket #{ticket.ticket_id}) — {ticket.maintenance_type}</p>
       {ticket.confirmation_verdict === 'Reopened' && (
         <div className="notice danger" style={{ marginBottom: 16 }}>
           <h4 style={{ display: 'flex', alignItems: 'center', gap: 7 }}><Icon name="alert" size={16} /> Reopened by Admin ({ticket.confirmed_by?.name ?? 'Admin'})</h4>
@@ -6209,14 +6476,102 @@ function LogRepairsPage({ ticket, onBack, onSubmit }) {
           <p><strong>Feedback/Reason:</strong> {ticket.verification_notes ?? 'No feedback notes provided.'}</p>
         </div>
       )}
-      <SmartForm
-        fields={repairLogFields}
-        key={ticket.ticket_id}
-        onCancel={onBack}
-        onSubmit={(payload) => onSubmit(ticket, payload)}
-        submitLabel="Submit Repair Log"
-        title=""
-      />
+
+      <form className="smart-form" onSubmit={handleSubmit}>
+        <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: 10, marginBottom: 8 }}>
+          <h4 style={{ margin: '0 0 6px 0', display: 'flex', alignItems: 'center', gap: 6, color: '#0f172a', fontSize: '0.85rem' }}><Icon name="clipboard" size={14} /> Repair Log Entry</h4>
+          <textarea required rows={2} value={repairLogs} onChange={(e) => setRepairLogs(e.target.value)} style={{ width: '100%' }} />
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 190px', gap: 8, marginBottom: 12, alignItems: 'start' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: 10 }}>
+              <h4 style={{ margin: '0 0 6px 0', display: 'flex', alignItems: 'center', gap: 6, color: '#0f172a', fontSize: '0.85rem' }}><Icon name="tools" size={14} /> Parts & Materials Used</h4>
+              {parts.map((part, index) => (
+                <div key={index} style={{ display: 'flex', gap: 6, marginBottom: 6, alignItems: 'center' }}>
+                  <input
+                    type="text"
+                    placeholder="Part name"
+                    value={part.name}
+                    onChange={(e) => updatePart(index, 'name', e.target.value)}
+                    style={{ flex: 2 }}
+                  />
+                  <input
+                    type="number"
+                    placeholder="Cost (₱)"
+                    min="0"
+                    step="0.01"
+                    value={part.cost}
+                    onChange={(e) => updatePart(index, 'cost', e.target.value)}
+                    style={{ flex: 1 }}
+                  />
+                  <button
+                    type="button"
+                    className="danger-button"
+                    onClick={() => removePart(index)}
+                    disabled={parts.length === 1}
+                    title="Remove part"
+                    aria-label="Remove part"
+                    style={{ padding: '6px 9px' }}
+                  >
+                    <Icon name="close" size={13} />
+                  </button>
+                </div>
+              ))}
+              <button type="button" className="ghost-button" onClick={addPart}><Icon name="clipboard" size={14} /> Add Another Part</button>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8, paddingTop: 8, borderTop: '1px solid #e2e8f0' }}>
+                <span style={{ fontSize: '0.8rem', fontWeight: 600, color: '#475569' }}>Total Cost</span>
+                <strong style={{ fontSize: '1rem', color: '#16a34a' }}>₱{totalCost.toLocaleString('en-US', { minimumFractionDigits: 2 })}</strong>
+              </div>
+            </div>
+
+            <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: 10 }}>
+              {attachment ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  {attachment.type.startsWith('image/') ? (
+                    <img src={URL.createObjectURL(attachment)} alt="Attachment preview" style={{ width: 34, height: 34, objectFit: 'cover', borderRadius: 6, border: '1px solid #e2e8f0', flexShrink: 0 }} />
+                  ) : (
+                    <span style={{ width: 34, height: 34, borderRadius: 6, background: '#eff6ff', color: '#2563eb', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                      <Icon name="clipboard" size={16} />
+                    </span>
+                  )}
+                  <span style={{ flex: 1, fontSize: '0.82rem', color: '#334155', wordBreak: 'break-all' }}>{attachment.name}</span>
+                  <button type="button" className="danger-button" onClick={() => setAttachment(null)} title="Remove attachment" aria-label="Remove attachment" style={{ padding: '6px 9px' }}>
+                    <Icon name="close" size={13} />
+                  </button>
+                </div>
+              ) : (
+                <label style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ color: '#0f172a', fontSize: '0.85rem', fontWeight: 600, whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 6 }}><Icon name="clipboard" size={14} /> Photo/Doc</span>
+                  <input type="file" accept="image/*,.pdf,.doc,.docx" onChange={(e) => setAttachment(e.target.files[0] ?? null)} style={{ flex: 1 }} />
+                </label>
+              )}
+            </div>
+          </div>
+
+          <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '10px 8px' }}>
+            <h4 style={{ margin: '0 0 6px 0', display: 'flex', alignItems: 'center', gap: 6, color: '#0f172a', fontSize: '0.85rem' }}><Icon name="calendar" size={14} /> Schedule</h4>
+            <label style={{ marginBottom: 6 }}>
+              <span style={{ fontSize: '0.68rem' }}>Start Date</span>
+              <input type="date" value={repairStartedAt} onChange={(e) => setRepairStartedAt(e.target.value)} style={{ width: '100%', padding: '6px 5px', fontSize: '0.75rem' }} />
+            </label>
+            <label style={{ marginBottom: 6 }}>
+              <span style={{ fontSize: '0.68rem' }}>Completion Date</span>
+              <input type="date" value={repairCompletedAt} onChange={(e) => setRepairCompletedAt(e.target.value)} style={{ width: '100%', padding: '6px 5px', fontSize: '0.75rem' }} />
+            </label>
+            <label>
+              <span style={{ fontSize: '0.68rem' }}>Est. Return Date</span>
+              <input type="date" value={estimatedReturnDate} onChange={(e) => setEstimatedReturnDate(e.target.value)} style={{ width: '100%', padding: '6px 5px', fontSize: '0.75rem' }} />
+            </label>
+          </div>
+        </div>
+
+        <div className="form-actions">
+          <button className="ghost-button btn-exit-action" onClick={onBack} type="button">Cancel</button>
+          <button className="primary-button" type="submit">Submit Repair Log</button>
+        </div>
+      </form>
+
       <div style={{marginTop: '16px', paddingTop: '12px', borderTop: '1px solid var(--border-subtle)'}}>
         <p className="muted"><strong>Work Order Instructions:</strong> {ticket.work_order_notes ?? ticket.ticket_description}</p>
         {ticket.repair_logs && (
@@ -6267,24 +6622,21 @@ const ticketArchiveColumns = [
 // TICKET PHASE HELPERS
 // =========================================================================
 
-const phaseOrder = ['Open', 'For Maintenance', 'Under Repair', 'For Inspection', 'For Confirmation', 'Done'];
+// A ticket now only moves through 3 stages at the ticket level — the real
+// work happens per sub-issue (see TicketDetailPanel's sub-issue checklist,
+// which uses this same TicketStatusBadge for each line's own status).
+const phaseOrder = ['Open', 'Active', 'Closed'];
 
 const PHASE_STEP_ICONS = {
   'Open': 'clipboard',
-  'For Maintenance': 'flag',
-  'Under Repair': 'wrench',
-  'For Inspection': 'search',
-  'For Confirmation': 'eye',
-  'Done': 'checkCircle',
+  'Active': 'wrench',
+  'Closed': 'checkCircle',
 };
 
 const PHASE_STEP_COLORS = {
   'Open': '#2563eb',
-  'For Maintenance': '#f59e0b',
-  'Under Repair': '#ea580c',
-  'For Inspection': '#7c3aed',
-  'For Confirmation': '#db2777',
-  'Done': '#16a34a',
+  'Active': '#d97706',
+  'Closed': '#16a34a',
 };
 
 function phaseIsPast(currentStatus, checkStatus) {
@@ -6295,12 +6647,9 @@ function phaseIsPast(currentStatus, checkStatus) {
 
 function ticketPhaseLabel(status) {
   const labels = {
-    'Open': 'Phase 1 — Awaiting Custodian Inspection',
-    'For Maintenance': 'Phase 2→3 — Maintenance Trigger Active',
-    'Under Repair': 'Phase 3 — Mechanic Working',
-    'For Inspection': 'Phase 4T1 — Awaiting Custodian Verification',
-    'For Confirmation': 'Phase 4T2 — Awaiting Admin Confirmation',
-    'Done': 'Phase 5 — Ticket Closed & Archived',
+    'Open': 'Awaiting Custodian Inspection',
+    'Active': 'In Progress — sub-issues being worked',
+    'Closed': 'Closed & Archived',
     'Cancelled': 'Cancelled',
   };
   return labels[status] ?? status;

@@ -15,10 +15,10 @@ class FleetReferenceSeeder extends Seeder
     {
         $categories = [
             'Ambulance' => 'Land',
+            'Fire Truck' => 'Land',
             'Truck' => 'Land',
             'Van' => 'Land',
             'Patrol Vehicle' => 'Land',
-            'Motorcycle' => 'Land',
             'Service Vehicle' => 'Land',
             'Rescue Boat' => 'Water',
         ];
