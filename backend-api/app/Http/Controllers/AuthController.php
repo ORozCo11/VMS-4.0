@@ -36,8 +36,9 @@ class AuthController extends Controller
             ], 403);
         }
 
-        // 4. Issue a secure, unique Sanctum token string and tag it with the user's system role
-        $token = $user->createToken('auth_token', [$user->role])->plainTextToken;
+        // 4. Issue a secure, unique Sanctum token, tagged with every role
+        //    (hat) the account may wear so token abilities match its access.
+        $token = $user->createToken('auth_token', $user->allRoles())->plainTextToken;
 
         // 5. Send data bundle back to the React client application
         return response()->json([
@@ -48,9 +49,62 @@ class AuthController extends Controller
                 'id' => $user->id,
                 'name' => $user->name,
                 'email' => $user->email,
-                'role' => $user->role // Shared so React can trigger the correct portal layout views
+                'role' => $user->role, // Primary role — drives the portal layout
+                'roles' => $user->allRoles(), // Every hat this account may wear
             ]
         ], 200);
+    }
+
+    /**
+     * DEV-ONLY. Returns 404 outside local/testing, so it does not exist in a
+     * deployed app and can never become a privilege-escalation hole.
+     */
+    private function assertImpersonationEnabled(): void
+    {
+        abort_unless(app()->environment(['local', 'testing']), 404);
+    }
+
+    /**
+     * DEV-ONLY: list accounts an authenticated user can jump into for testing.
+     */
+    public function impersonationCandidates(Request $request)
+    {
+        $this->assertImpersonationEnabled();
+
+        return User::orderBy('name')->get(['id', 'name', 'email', 'role', 'roles', 'is_active']);
+    }
+
+    /**
+     * DEV-ONLY: issue a token for another account so a developer can switch
+     * roles without logging out and back in. Guarded by environment (404 in
+     * production) AND, on the client, by import.meta.env.DEV — both must hold.
+     */
+    public function impersonate(Request $request, User $user)
+    {
+        $this->assertImpersonationEnabled();
+        abort_if(!$user->is_active, 422, 'That account is deactivated.');
+
+        $token = $user->createToken('impersonation_token', $user->allRoles())->plainTextToken;
+
+        ActivityLog::create([
+            'user_id' => $request->user()?->id,
+            'role'    => $request->user()?->role,
+            'action'  => 'Impersonate',
+            'module'  => 'Dev Tools',
+            'details' => ($request->user()?->name ?? 'A developer') . " impersonated {$user->name} (dev only).",
+        ]);
+
+        return response()->json([
+            'access_token' => $token,
+            'token_type'   => 'Bearer',
+            'user' => [
+                'id'    => $user->id,
+                'name'  => $user->name,
+                'email' => $user->email,
+                'role'  => $user->role,
+                'roles' => $user->allRoles(),
+            ],
+        ]);
     }
 
     /**

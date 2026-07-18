@@ -14,7 +14,8 @@ use App\Http\Controllers\UserController;
 | Public Routes (No Bearer Token Required)
 |--------------------------------------------------------------------------
 */
-Route::post('/login', [AuthController::class, 'login']);
+// Rate-limited to blunt credential brute-forcing: 10 attempts/min per IP.
+Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:10,1');
 
 /*
 |--------------------------------------------------------------------------
@@ -31,8 +32,14 @@ Route::middleware('auth:sanctum')->group(function () {
         return $request->user();
     });
 
+    // DEV-ONLY impersonation (fast role-switching for testing). These handlers
+    // return 404 unless APP_ENV is local/testing, so they don't exist in prod.
+    Route::get('/impersonate/candidates', [AuthController::class, 'impersonationCandidates']);
+    Route::post('/impersonate/{user}', [AuthController::class, 'impersonate']);
+
     Route::get('/greeting', [AuthController::class, 'greeting']);
-    Route::put('/profile/password', [AuthController::class, 'updatePassword']);
+    // Verifies the current password, so rate-limit it against guessing too.
+    Route::put('/profile/password', [AuthController::class, 'updatePassword'])->middleware('throttle:10,1');
 
     Route::get('/lookups', [FleetController::class, 'lookups']);
     Route::get('/dashboard', [FleetController::class, 'dashboard']);
@@ -47,6 +54,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/vehicles/{vehicle}', [FleetController::class, 'updateVehicle']);
     Route::delete('/vehicles/{vehicle}', [FleetController::class, 'archiveVehicle']);
     Route::post('/vehicles/{vehicle}/restore', [FleetController::class, 'restoreVehicle']);
+    Route::put('/vehicles/{vehicle}/decommission', [FleetController::class, 'decommissionVehicle']);
+    Route::get('/vehicles/{vehicle}/reliability', [FleetController::class, 'vehicleReliability']);
+    Route::get('/vehicles/{vehicle}/readiness', [FleetController::class, 'vehicleReadiness']);
+    Route::post('/vehicles/{vehicle}/readiness-check', [FleetController::class, 'storeReadinessCheck']);
 
     Route::get('/locations', [FleetController::class, 'locations']);
     Route::post('/locations', [FleetController::class, 'storeLocation']);
@@ -118,6 +129,10 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Phase 4 Tier 2 — Admin: Confirm or rework a sub-issue
     Route::put('/tickets/{ticket}/sub-issues/{subIssue}/confirm', [TicketController::class, 'confirmSubIssue']);
+
+    // Admin: Defer a sub-issue that can't be finished now (records the
+    // decision + opens a breadcrumb Issue Report so it isn't forgotten)
+    Route::put('/tickets/{ticket}/sub-issues/{subIssue}/defer', [TicketController::class, 'deferSubIssue']);
 
     // Phase 5 — Admin: Explicit ticket closure (only once every sub-issue is Done)
     Route::put('/tickets/{ticket}/close', [TicketController::class, 'closeTicket']);

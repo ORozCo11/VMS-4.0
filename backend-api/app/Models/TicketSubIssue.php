@@ -35,17 +35,28 @@ class TicketSubIssue extends Model
         'verification_notes',
         'verified_by',
         'verified_at',
+        // Problem 2 — functional test ("UAT") recorded at the verify gate
+        'functional_test',
+        'test_attested',
         'confirmation_verdict',
         'confirmation_notes',
         'confirmed_by',
         'confirmed_at',
+        // Problem 1 — "Deferred" outcome (a recorded decision not to fix now)
+        'deferred_reason',
+        'deferred_by',
+        'deferred_at',
+        'deferred_issue_report_id',
     ];
 
     protected $casts = [
         'mechanic_assigned_at' => 'datetime',
         'verified_at'          => 'datetime',
         'confirmed_at'         => 'datetime',
+        'deferred_at'          => 'datetime',
         'maintenance_cost'     => 'decimal:2',
+        'functional_test'      => 'array',
+        'test_attested'        => 'boolean',
     ];
 
     public function ticket()
@@ -81,5 +92,20 @@ class TicketSubIssue extends Model
     public function confirmedBy()
     {
         return $this->belongsTo(User::class, 'confirmed_by');
+    }
+
+    public function deferredBy()
+    {
+        return $this->belongsTo(User::class, 'deferred_by');
+    }
+
+    /**
+     * A sub-issue is "resolved" when it has reached a terminal state —
+     * either genuinely fixed (Done) or a recorded decision not to fix it
+     * now (Deferred). Ticket closing keys off this, not off Done alone.
+     */
+    public function isResolved(): bool
+    {
+        return in_array($this->status, ['Done', 'Deferred'], true);
     }
 }

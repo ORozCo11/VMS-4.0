@@ -72,7 +72,10 @@ function createVehicleDotIcon(count) {
       </span>
     `,
     iconSize: [18, 18],
-    iconAnchor: [9, 9],
+    // Shifted up-right of center so this renders as a corner badge on the
+    // hub pin (both markers share the same lat/lng) instead of stacking
+    // directly on top of it — was iconAnchor: [9, 9] (dead center).
+    iconAnchor: [-7, 25],
     popupAnchor: [0, -10],
   });
 }
@@ -603,13 +606,16 @@ function LocationDensityMap({
       >
         <MapClickHandler addMode={addMode} onPickLocation={handlePickLocation} />
         <TileLayer attribution={CARTO_ATTRIBUTION} crossOrigin="anonymous" maxZoom={19} url={CARTO_LIGHT_TILE_URL} />
+        {/* Softened from weight:5/opacity:0.95 (a heavy, dominant outline)
+            and a purple fill — now a thinner, calmer blue line with a subtle
+            single-hue wash instead of two competing accent colors. */}
         <Polygon
           pathOptions={{
             color: '#2563eb',
-            fillColor: '#7C3DFF',
-            fillOpacity: 0.08,
-            opacity: 0.95,
-            weight: 5,
+            fillColor: '#2563eb',
+            fillOpacity: 0.04,
+            opacity: 0.55,
+            weight: 2.5,
           }}
           positions={PAKNAAN_POLYGON}
         />
@@ -620,11 +626,14 @@ function LocationDensityMap({
             position={[hub.lat, hub.lng]}
             zIndexOffset={1050}
           >
+            {/* Hover-only, not permanent — each hub pin already shows its
+                short code baked into the icon; several always-on full-name
+                labels on closely-spaced hubs were overlapping and cutting
+                each other off. */}
             <Tooltip
               className="location-density-hub-tooltip"
               direction="top"
               offset={[0, -24]}
-              permanent
             >
               {hub.name}
             </Tooltip>

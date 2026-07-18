@@ -8,6 +8,7 @@ use App\Models\TicketSubIssue;
 use App\Models\User;
 use App\Models\Vehicle;
 use App\Models\VehicleCategory;
+use App\Models\VehicleIssueReport;
 use App\Models\VehicleMaintenanceRecord;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
@@ -110,12 +111,105 @@ class TicketWorkflowTest extends TestCase
         Sanctum::actingAs($this->custodian, ['*']);
         $this->putJson("/api/tickets/{$ticket->ticket_id}/sub-issues/{$subIssue->sub_issue_id}/verify", [
             'verification_verdict' => 'Approved',
+            'test_attested'        => true,
+            'functional_test'      => [
+                ['item' => 'Engine starts / powers on', 'passed' => true],
+                ['item' => 'Reported issue no longer reproduces', 'passed' => true],
+            ],
         ])->assertOk();
 
         Sanctum::actingAs($this->admin, ['*']);
         $this->putJson("/api/tickets/{$ticket->ticket_id}/sub-issues/{$subIssue->sub_issue_id}/confirm", [
             'confirmation_verdict' => 'Confirmed',
         ])->assertOk();
+    }
+
+    /** Assign a mechanic and log repairs so a sub-issue sits at For Inspection. */
+    private function driveSubIssueToInspection(MaintenanceTicket $ticket, TicketSubIssue $subIssue, ?User $mechanic = null): void
+    {
+        $mechanic ??= $this->mechanic;
+
+        Sanctum::actingAs($this->admin, ['*']);
+        $this->putJson("/api/tickets/{$ticket->ticket_id}/sub-issues/{$subIssue->sub_issue_id}/assign-mechanic", [
+            'assigned_mechanic_id' => $mechanic->id,
+            'maintenance_type' => 'Engine Repair',
+        ])->assertOk();
+
+        Sanctum::actingAs($mechanic, ['*']);
+        $this->putJson("/api/tickets/{$ticket->ticket_id}/sub-issues/{$subIssue->sub_issue_id}/log-repairs", [
+            'repair_logs' => 'Fixed it.',
+        ])->assertOk();
+    }
+
+    #[Test]
+    public function verification_requires_a_recorded_functional_test(): void
+    {
+        $vehicle = $this->vehicle();
+        $ticket = $this->createTicket($vehicle);
+        $ticket = $this->inspectWithSubIssues($ticket, ['Low coolant level']);
+        $subIssue = $ticket->subIssues->first();
+        $this->driveSubIssueToInspection($ticket, $subIssue);
+
+        // Approving with no functional test at all is rejected — the whole
+        // point is that a repair is proven, not rubber-stamped.
+        Sanctum::actingAs($this->custodian, ['*']);
+        $this->putJson("/api/tickets/{$ticket->ticket_id}/sub-issues/{$subIssue->sub_issue_id}/verify", [
+            'verification_verdict' => 'Approved',
+        ])->assertUnprocessable();
+    }
+
+    #[Test]
+    public function approving_requires_attestation_and_a_clean_test(): void
+    {
+        $vehicle = $this->vehicle();
+        $ticket = $this->createTicket($vehicle);
+        $ticket = $this->inspectWithSubIssues($ticket, ['Low coolant level']);
+        $subIssue = $ticket->subIssues->first();
+        $this->driveSubIssueToInspection($ticket, $subIssue);
+
+        Sanctum::actingAs($this->custodian, ['*']);
+
+        // A failed check cannot be Approved.
+        $this->putJson("/api/tickets/{$ticket->ticket_id}/sub-issues/{$subIssue->sub_issue_id}/verify", [
+            'verification_verdict' => 'Approved',
+            'test_attested'        => true,
+            'functional_test'      => [['item' => 'Brakes respond', 'passed' => false]],
+        ])->assertUnprocessable();
+
+        // A clean test but no attestation cannot be Approved.
+        $this->putJson("/api/tickets/{$ticket->ticket_id}/sub-issues/{$subIssue->sub_issue_id}/verify", [
+            'verification_verdict' => 'Approved',
+            'test_attested'        => false,
+            'functional_test'      => [['item' => 'Brakes respond', 'passed' => true]],
+        ])->assertUnprocessable();
+
+        $this->assertSame('For Inspection', $subIssue->fresh()->status);
+    }
+
+    #[Test]
+    public function a_passing_functional_test_is_recorded_and_advances_the_sub_issue(): void
+    {
+        $vehicle = $this->vehicle();
+        $ticket = $this->createTicket($vehicle);
+        $ticket = $this->inspectWithSubIssues($ticket, ['Low coolant level']);
+        $subIssue = $ticket->subIssues->first();
+        $this->driveSubIssueToInspection($ticket, $subIssue);
+
+        Sanctum::actingAs($this->custodian, ['*']);
+        $this->putJson("/api/tickets/{$ticket->ticket_id}/sub-issues/{$subIssue->sub_issue_id}/verify", [
+            'verification_verdict' => 'Approved',
+            'test_attested'        => true,
+            'functional_test'      => [
+                ['item' => 'Engine starts / powers on', 'passed' => true],
+                ['item' => 'Reported issue no longer reproduces', 'passed' => true],
+            ],
+        ])->assertOk();
+
+        $fresh = $subIssue->fresh();
+        $this->assertSame('For Confirmation', $fresh->status);
+        $this->assertTrue($fresh->test_attested);
+        $this->assertCount(2, $fresh->functional_test);
+        $this->assertSame('Engine starts / powers on', $fresh->functional_test[0]['item']);
     }
 
     #[Test]
@@ -251,15 +345,15 @@ class TicketWorkflowTest extends TestCase
         $ticket = $this->createTicket($vehicle);
         $ticket = $this->inspectWithSubIssues($ticket, ['Low coolant level', 'Faulty radiator']);
 
-        $this->assertSame(['done' => 0, 'total' => 2], $ticket->progress);
+        $this->assertSame(['done' => 0, 'deferred' => 0, 'total' => 2], $ticket->progress);
 
         [$coolant, $radiator] = $ticket->subIssues;
 
         $this->driveSubIssueToDone($ticket, $coolant, $this->mechanic);
-        $this->assertSame(['done' => 1, 'total' => 2], $ticket->fresh()->progress);
+        $this->assertSame(['done' => 1, 'deferred' => 0, 'total' => 2], $ticket->fresh()->progress);
 
         $this->driveSubIssueToDone($ticket, $radiator, $this->mechanic2);
-        $this->assertSame(['done' => 2, 'total' => 2], $ticket->fresh()->progress);
+        $this->assertSame(['done' => 2, 'deferred' => 0, 'total' => 2], $ticket->fresh()->progress);
 
         $this->assertSame($this->mechanic->id, $coolant->fresh()->assigned_mechanic_id);
         $this->assertSame($this->mechanic2->id, $radiator->fresh()->assigned_mechanic_id);
@@ -272,12 +366,60 @@ class TicketWorkflowTest extends TestCase
         $ticket = $this->createTicket($vehicle);
         $ticket = $this->inspectWithSubIssues($ticket, ['Low coolant level', 'Faulty radiator']);
 
-        Sanctum::actingAs($this->admin, ['*']);
+        // The assigned Custodian — not Admin — appends the newly found issue.
+        Sanctum::actingAs($this->custodian, ['*']);
         $this->postJson("/api/tickets/{$ticket->ticket_id}/sub-issues", [
             'title' => 'Broken water pump',
         ])->assertCreated();
 
-        $this->assertSame(['done' => 0, 'total' => 3], $ticket->fresh()->progress);
+        $this->assertSame(['done' => 0, 'deferred' => 0, 'total' => 3], $ticket->fresh()->progress);
+    }
+
+    #[Test]
+    public function a_mechanic_already_working_the_ticket_can_also_append_a_sub_issue(): void
+    {
+        $vehicle = $this->vehicle();
+        $ticket = $this->createTicket($vehicle);
+        $ticket = $this->inspectWithSubIssues($ticket, ['Low coolant level']);
+        $this->driveSubIssueToInspection($ticket, $ticket->subIssues->first(), $this->mechanic);
+
+        // The mechanic found something else while repairing the first issue.
+        Sanctum::actingAs($this->mechanic, ['*']);
+        $this->postJson("/api/tickets/{$ticket->ticket_id}/sub-issues", [
+            'title' => 'Cracked brake fluid line',
+        ])->assertCreated();
+
+        $this->assertSame(2, $ticket->fresh()->progress['total']);
+    }
+
+    #[Test]
+    public function admin_cannot_add_a_sub_issue(): void
+    {
+        // Admin never has firsthand contact with the vehicle — only the
+        // assigned Custodian or a mechanic already on this ticket may
+        // declare a newly discovered problem.
+        $vehicle = $this->vehicle();
+        $ticket = $this->createTicket($vehicle);
+        $ticket = $this->inspectWithSubIssues($ticket, ['Low coolant level']);
+
+        Sanctum::actingAs($this->admin, ['*']);
+        $this->postJson("/api/tickets/{$ticket->ticket_id}/sub-issues", [
+            'title' => 'Reported by phone call',
+        ])->assertForbidden();
+    }
+
+    #[Test]
+    public function a_mechanic_not_assigned_to_this_ticket_cannot_add_a_sub_issue(): void
+    {
+        $vehicle = $this->vehicle();
+        $ticket = $this->createTicket($vehicle);
+        $ticket = $this->inspectWithSubIssues($ticket, ['Low coolant level']);
+        // mechanic2 has no work order on this ticket at all.
+
+        Sanctum::actingAs($this->mechanic2, ['*']);
+        $this->postJson("/api/tickets/{$ticket->ticket_id}/sub-issues", [
+            'title' => 'Unrelated finding',
+        ])->assertForbidden();
     }
 
     #[Test]
@@ -303,6 +445,9 @@ class TicketWorkflowTest extends TestCase
         $this->putJson("/api/tickets/{$ticket->ticket_id}/sub-issues/{$subIssue->sub_issue_id}/verify", [
             'verification_verdict' => 'Rejected',
             'verification_notes' => 'Still overheating.',
+            'functional_test' => [
+                ['item' => 'Reported issue no longer reproduces', 'passed' => false],
+            ],
         ])->assertOk();
 
         $this->assertSame('Under Repair', $subIssue->fresh()->status);
@@ -329,6 +474,139 @@ class TicketWorkflowTest extends TestCase
     }
 
     #[Test]
+    public function a_stuck_sub_issue_can_be_deferred_so_the_ticket_can_close(): void
+    {
+        // The scenario the whole feature exists for: one item is fixed, the
+        // other genuinely cannot be finished (no budget). Deferring the stuck
+        // one lets the ticket reach a closeable state instead of rotting.
+        $vehicle = $this->vehicle();
+        $ticket = $this->createTicket($vehicle);
+        $ticket = $this->inspectWithSubIssues($ticket, ['Brake pads', 'Water pump seal']);
+        [$brakes, $pump] = $ticket->subIssues;
+
+        $this->driveSubIssueToDone($ticket, $brakes);
+
+        Sanctum::actingAs($this->admin, ['*']);
+        // Can't close yet — the pump is still unresolved and no reason given.
+        $this->putJson("/api/tickets/{$ticket->ticket_id}/close", [])->assertUnprocessable();
+
+        // Defer the pump with a reason.
+        $this->putJson("/api/tickets/{$ticket->ticket_id}/sub-issues/{$pump->sub_issue_id}/defer", [
+            'deferred_reason' => 'Seal on back-order, no budget until Q4.',
+        ])->assertOk();
+
+        $this->assertSame('Deferred', $pump->fresh()->status);
+
+        // Now every sub-issue is resolved (1 Done, 1 Deferred) — it closes cleanly.
+        $this->putJson("/api/tickets/{$ticket->ticket_id}/close", [])->assertOk();
+        $this->assertSame('Closed', $ticket->fresh()->status);
+        $this->assertSame(['done' => 1, 'deferred' => 1, 'total' => 2], $ticket->fresh()->progress);
+    }
+
+    #[Test]
+    public function deferring_a_sub_issue_opens_a_breadcrumb_issue_report(): void
+    {
+        // A deferred defect must not vanish — an inspection-found item with no
+        // formal report gets a fresh Pending Issue Report so it stays visible.
+        $vehicle = $this->vehicle();
+        $ticket = $this->createTicket($vehicle);
+        $ticket = $this->inspectWithSubIssues($ticket, ['Water pump seal']);
+        $pump = $ticket->subIssues->first();
+
+        $this->assertSame(0, VehicleIssueReport::where('vehicle_id', $vehicle->vehicle_id)->count());
+
+        Sanctum::actingAs($this->admin, ['*']);
+        $this->putJson("/api/tickets/{$ticket->ticket_id}/sub-issues/{$pump->sub_issue_id}/defer", [
+            'deferred_reason' => 'No budget until Q4.',
+        ])->assertOk();
+
+        $breadcrumb = VehicleIssueReport::where('vehicle_id', $vehicle->vehicle_id)->first();
+        $this->assertNotNull($breadcrumb, 'A breadcrumb issue report should have been created.');
+        $this->assertSame('Pending', $breadcrumb->status);
+        $this->assertSame($breadcrumb->issue_report_id, $pump->fresh()->deferred_issue_report_id);
+    }
+
+    #[Test]
+    public function a_decision_close_defers_leftovers_and_requires_a_reason_and_a_fitness_call(): void
+    {
+        $vehicle = $this->vehicle();
+        $ticket = $this->createTicket($vehicle);
+        $ticket = $this->inspectWithSubIssues($ticket, ['Brake pads', 'Water pump seal']);
+        [$brakes, $pump] = $ticket->subIssues;
+        $this->driveSubIssueToDone($ticket, $brakes);
+
+        Sanctum::actingAs($this->admin, ['*']);
+        // Reason given, but no fit-for-service answer -> rejected.
+        $this->putJson("/api/tickets/{$ticket->ticket_id}/close", [
+            'deferral_reason' => 'No budget for the pump.',
+        ])->assertUnprocessable();
+
+        // Both provided -> closes, and the leftover pump is auto-deferred.
+        $this->putJson("/api/tickets/{$ticket->ticket_id}/close", [
+            'deferral_reason'     => 'No budget for the pump.',
+            'returned_to_service' => true,
+        ])->assertOk();
+
+        $this->assertSame('Closed', $ticket->fresh()->status);
+        $this->assertSame('Deferred', $pump->fresh()->status);
+        $this->assertSame('No budget for the pump.', $pump->fresh()->deferred_reason);
+    }
+
+    #[Test]
+    public function a_decision_close_that_is_not_fit_for_service_keeps_the_vehicle_out(): void
+    {
+        // Deferring a *safety* item and declaring the vehicle unfit must NOT
+        // return an emergency vehicle to Available just because the ticket closed.
+        $vehicle = $this->vehicle();
+        $ticket = $this->createTicket($vehicle);
+        $ticket = $this->inspectWithSubIssues($ticket, ['Brakes still spongy']);
+        $brakes = $ticket->subIssues->first();
+
+        Sanctum::actingAs($this->admin, ['*']);
+        $this->putJson("/api/tickets/{$ticket->ticket_id}/close", [
+            'deferral_reason'     => 'Brake parts unavailable — unsafe to dispatch.',
+            'returned_to_service' => false,
+        ])->assertOk();
+
+        $vehicle->refresh();
+        $this->assertSame('Closed', $ticket->fresh()->status);
+        $this->assertFalse($ticket->fresh()->returned_to_service);
+        $this->assertSame('Under Maintenance', $vehicle->status);
+        $this->assertSame('Needs Repair', $vehicle->condition);
+    }
+
+    #[Test]
+    public function only_admin_can_defer_a_sub_issue(): void
+    {
+        $vehicle = $this->vehicle();
+        $ticket = $this->createTicket($vehicle);
+        $ticket = $this->inspectWithSubIssues($ticket, ['Water pump seal']);
+        $pump = $ticket->subIssues->first();
+
+        foreach ([$this->custodian, $this->mechanic] as $user) {
+            Sanctum::actingAs($user, ['*']);
+            $this->putJson("/api/tickets/{$ticket->ticket_id}/sub-issues/{$pump->sub_issue_id}/defer", [
+                'deferred_reason' => 'trying to defer',
+            ])->assertForbidden();
+        }
+
+        // And a reason is mandatory even for the Admin.
+        Sanctum::actingAs($this->admin, ['*']);
+        $this->putJson("/api/tickets/{$ticket->ticket_id}/sub-issues/{$pump->sub_issue_id}/defer", [])
+            ->assertUnprocessable();
+    }
+
+    #[Test]
+    public function a_ticket_exposes_its_age_in_days(): void
+    {
+        $vehicle = $this->vehicle();
+        $ticket = $this->createTicket($vehicle);
+
+        // Freshly created -> 0 whole days old, and the attribute is exposed.
+        $this->assertSame(0, $ticket->fresh()->days_open);
+    }
+
+    #[Test]
     public function closed_tickets_are_permanently_locked(): void
     {
         $vehicle = $this->vehicle();
@@ -339,12 +617,15 @@ class TicketWorkflowTest extends TestCase
         Sanctum::actingAs($this->admin, ['*']);
         $this->putJson("/api/tickets/{$ticket->ticket_id}/close", [])->assertOk();
 
-        // No new sub-issue can ever be appended to a Closed ticket...
+        // No new sub-issue can ever be appended to a Closed ticket — checked
+        // as the assigned Custodian, who otherwise has standing to add one.
+        Sanctum::actingAs($this->custodian, ['*']);
         $this->postJson("/api/tickets/{$ticket->ticket_id}/sub-issues", [
             'title' => 'New problem found later',
         ])->assertUnprocessable();
 
         // ...and it cannot be cancelled/uncancelled either — Closed is final.
+        Sanctum::actingAs($this->admin, ['*']);
         $this->putJson("/api/tickets/{$ticket->ticket_id}/cancel", [])->assertUnprocessable();
     }
 

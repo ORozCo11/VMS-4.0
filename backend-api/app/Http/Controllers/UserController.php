@@ -12,9 +12,29 @@ class UserController extends Controller
 {
     use UploadsImages;
 
+    private const ROLES = ['Admin', 'Custodian', 'Maintenance Personnel'];
+
     private function requireAdmin(Request $request): void
     {
-        abort_unless($request->user()->role === 'Admin', 403, 'Only Admins can manage users.');
+        abort_unless($request->user()->hasRole('Admin'), 403, 'Only Admins can manage users.');
+    }
+
+    /**
+     * Normalize role input into a {role: primary, roles: [...]} pair.
+     * Prefers the multi-select `roles[]`; falls back to a single `role`.
+     * The first role in the list is the primary (drives portal/routing).
+     */
+    private function normalizeRoles(Request $request, array $data): array
+    {
+        $roles = $data['roles'] ?? ($request->filled('role') ? [$data['role']] : null);
+
+        if (!empty($roles)) {
+            $roles = array_values(array_unique($roles));
+            $data['roles'] = $roles;
+            $data['role']  = $roles[0];
+        }
+
+        return $data;
     }
 
     public function index(Request $request)
@@ -32,7 +52,7 @@ class UserController extends Controller
             });
         }
 
-        $query->when($request->filled('role'), fn ($q) => $q->where('role', $request->role));
+        $query->when($request->filled('role'), fn ($q) => $q->havingRole($request->role));
 
         return $query->latest('id')->get();
     }
@@ -45,12 +65,15 @@ class UserController extends Controller
             'name' => ['required', 'string', 'max:255'],
             'email' => ['required', 'email', 'unique:users,email'],
             'password' => ['required', 'string', 'min:8'],
-            'role' => ['required', Rule::in(['Admin', 'Custodian', 'Maintenance Personnel'])],
+            'role' => ['required_without:roles', Rule::in(self::ROLES)],
+            'roles' => ['required_without:role', 'array', 'min:1'],
+            'roles.*' => [Rule::in(self::ROLES)],
             'phone' => ['nullable', 'string', 'max:30'],
             'address' => ['nullable', 'string', 'max:255'],
             'photo' => ['nullable', 'image', 'max:4096'],
         ]);
 
+        $data = $this->normalizeRoles($request, $data);
         $data['password'] = Hash::make($data['password']);
         $data['is_active'] = true;
 
@@ -72,11 +95,15 @@ class UserController extends Controller
             'name' => ['sometimes', 'required', 'string', 'max:255'],
             'email' => ['sometimes', 'required', 'email', Rule::unique('users', 'email')->ignore($user->id)],
             'password' => ['nullable', 'string', 'min:8'],
-            'role' => ['sometimes', 'required', Rule::in(['Admin', 'Custodian', 'Maintenance Personnel'])],
+            'role' => ['sometimes', 'required', Rule::in(self::ROLES)],
+            'roles' => ['sometimes', 'required', 'array', 'min:1'],
+            'roles.*' => [Rule::in(self::ROLES)],
             'phone' => ['nullable', 'string', 'max:30'],
             'address' => ['nullable', 'string', 'max:255'],
             'photo' => ['nullable', 'image', 'max:4096'],
         ]);
+
+        $data = $this->normalizeRoles($request, $data);
 
         if (!empty($data['password'])) {
             $data['password'] = Hash::make($data['password']);

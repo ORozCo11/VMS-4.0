@@ -66,12 +66,18 @@ class TicketController extends Controller
         $user  = $request->user();
         $query = MaintenanceTicket::with($this->eagerLoads());
 
-        if ($user->role === 'Custodian') {
-            $query->where('assigned_custodian_id', $user->id);
-        }
-
-        if ($user->role === 'Maintenance Personnel') {
-            $query->whereHas('subIssues', fn ($q) => $q->where('assigned_mechanic_id', $user->id));
+        // Non-admins see only what's relevant to a hat they wear. A person
+        // holding BOTH Custodian and Maintenance sees tickets assigned to
+        // them as custodian OR any with a sub-issue assigned to them.
+        if (!$user->hasRole('Admin')) {
+            $query->where(function ($scoped) use ($user) {
+                if ($user->hasRole('Custodian')) {
+                    $scoped->orWhere('assigned_custodian_id', $user->id);
+                }
+                if ($user->hasRole('Maintenance Personnel')) {
+                    $scoped->orWhereHas('subIssues', fn ($q) => $q->where('assigned_mechanic_id', $user->id));
+                }
+            });
         }
 
         $query
@@ -101,15 +107,15 @@ class TicketController extends Controller
     public function lookups(Request $request)
     {
         return response()->json([
-            'vehicles'              => Vehicle::where('status', '!=', 'Inactive')
+            'vehicles'              => Vehicle::whereNotIn('status', ['Inactive', 'Decommissioned'])
                 ->orderBy('vehicle_name')
                 ->get(['vehicle_id', 'vehicle_name', 'plate_number', 'status', 'condition']),
-            'custodians'            => User::where('role', 'Custodian')->orderBy('name')->get(['id', 'name', 'email']),
-            'maintenance_personnel' => User::where('role', 'Maintenance Personnel')->orderBy('name')->get(['id', 'name', 'email']),
+            'custodians'            => User::havingRole('Custodian')->orderBy('name')->get(['id', 'name', 'email']),
+            'maintenance_personnel' => User::havingRole('Maintenance Personnel')->orderBy('name')->get(['id', 'name', 'email']),
             'priorities'            => $this->priorities,
             'maintenance_types'     => $this->maintenanceTypes,
             'ticket_statuses'       => ['Open', 'Active', 'Closed', 'Cancelled'],
-            'sub_issue_statuses'    => ['Open', 'Under Repair', 'For Inspection', 'For Confirmation', 'Done'],
+            'sub_issue_statuses'    => ['Open', 'Under Repair', 'For Inspection', 'For Confirmation', 'Done', 'Deferred'],
         ]);
     }
 
@@ -149,6 +155,14 @@ class TicketController extends Controller
             'assigned_custodian_id' => ['required', 'exists:users,id'],
         ]);
 
+        // A retired/archived vehicle is out of the fleet — no new work on it.
+        $vehicle = Vehicle::findOrFail($data['vehicle_id']);
+        abort_if(
+            in_array($vehicle->status, ['Inactive', 'Decommissioned'], true),
+            422,
+            'Cannot open a ticket on an archived or decommissioned vehicle.'
+        );
+
         // A brand-new ticket is only blocked when an open ticket for the
         // SAME Main Issue already exists on this vehicle — a different
         // Main Issue (or a Closed/Cancelled ticket for the same one) is
@@ -165,9 +179,18 @@ class TicketController extends Controller
         }
 
         $custodian = User::findOrFail($data['assigned_custodian_id']);
-        abort_unless($custodian->role === 'Custodian', 422, 'The selected user is not a Custodian.');
+        abort_unless($custodian->hasRole('Custodian'), 422, 'The selected user is not a Custodian.');
 
-        $ticket = DB::transaction(function () use ($data, $request) {
+        // Gap 3 — recurrence: how many times this same Main Issue was already
+        // fixed-and-closed on this vehicle in the last 90 days. Stamped now so
+        // a chronic unit surfaces as "Nth time" instead of hiding.
+        $recurrence = MaintenanceTicket::where('vehicle_id', $data['vehicle_id'])
+            ->where('status', 'Closed')
+            ->whereRaw('LOWER(TRIM(ticket_title)) = ?', [mb_strtolower(trim($data['ticket_title']))])
+            ->where('created_at', '>=', now()->subDays(90))
+            ->count();
+
+        $ticket = DB::transaction(function () use ($data, $request, $recurrence) {
             $vehicle = Vehicle::findOrFail($data['vehicle_id']);
 
             $ticket = MaintenanceTicket::create([
@@ -180,6 +203,7 @@ class TicketController extends Controller
                 'status'                => 'Open',
                 'assigned_custodian_id' => $data['assigned_custodian_id'],
                 'assigned_at'           => now(),
+                'recurrence_count'      => $recurrence,
             ]);
 
             if (!empty($data['issue_report_id'])) {
@@ -277,14 +301,26 @@ class TicketController extends Controller
      * PUT /tickets/:ticket/sub-issues — append a newly discovered root
      * cause to a still-Active ticket. Once the ticket is Closed, this is
      * never available — a new issue at that point must open a fresh ticket.
+     *
+     * Deliberately NOT available to Admin. Declaring "there's another real
+     * problem with this vehicle" requires firsthand contact with it — the
+     * same reason the initial inspection is Custodian-only. Only the
+     * assigned Custodian (re-inspecting) or a mechanic already working a
+     * sub-issue on this ticket (found something else mid-repair) has that
+     * standing. An Admin who genuinely needs to log a discovery does it by
+     * holding the Custodian/Maintenance role on their account and acting
+     * under that hat — not through an office role with no firsthand basis.
      */
     public function addSubIssue(Request $request, MaintenanceTicket $ticket)
     {
-        $this->requireRole($request, ['Admin', 'Custodian']);
+        $this->requireRole($request, ['Custodian', 'Maintenance Personnel']);
+        $user = $request->user();
 
-        if ($request->user()->role === 'Custodian') {
-            abort_unless($ticket->assigned_custodian_id === $request->user()->id, 403, 'This ticket is not assigned to you.');
-        }
+        $isAssignedCustodian = $user->hasRole('Custodian') && $ticket->assigned_custodian_id === $user->id;
+        $isAssignedMechanic = $user->hasRole('Maintenance Personnel')
+            && $ticket->subIssues()->where('assigned_mechanic_id', $user->id)->exists();
+
+        abort_unless($isAssignedCustodian || $isAssignedMechanic, 403, 'You are not currently assigned to this ticket.');
 
         abort_unless($ticket->status === 'Active', 422, "Sub-issues can only be added while the ticket is Active. Current status: {$ticket->status}.");
 
@@ -335,7 +371,7 @@ class TicketController extends Controller
         ]);
 
         $mechanic = User::findOrFail($data['assigned_mechanic_id']);
-        abort_unless($mechanic->role === 'Maintenance Personnel', 422, 'The selected user is not Maintenance Personnel.');
+        abort_unless($mechanic->hasRole('Maintenance Personnel'), 422, 'The selected user is not Maintenance Personnel.');
 
         DB::transaction(function () use ($ticket, $subIssue, $data, $request) {
             $subIssue->update([
@@ -433,14 +469,38 @@ class TicketController extends Controller
         abort_unless($ticket->assigned_custodian_id === $request->user()->id, 403, 'This ticket is not assigned to you.');
         abort_unless($subIssue->status === 'For Inspection', 422, "Verification can only be submitted when the sub-issue is For Inspection. Current: {$subIssue->status}.");
 
+        // Problem 2 — verification is now a real functional test ("UAT"):
+        // the Custodian operates the vehicle against a checklist and attests
+        // to it. This is deliberately the CUSTODIAN's gate, not the mechanic's
+        // — the tester must be independent of whoever did the repair
+        // ("don't grade your own homework"). A failed check cannot be
+        // Approved; rejecting bounces the sub-issue back to Under Repair.
         $data = $request->validate([
-            'verification_verdict' => ['required', Rule::in(['Approved', 'Rejected'])],
-            'verification_notes'   => ['nullable', 'string'],
+            'verification_verdict'     => ['required', Rule::in(['Approved', 'Rejected'])],
+            'verification_notes'       => ['nullable', 'string'],
+            'functional_test'          => ['required', 'array', 'min:1'],
+            'functional_test.*.item'   => ['required', 'string', 'max:255'],
+            'functional_test.*.passed' => ['required', 'boolean'],
+            'test_attested'            => ['boolean'],
         ]);
 
-        DB::transaction(function () use ($ticket, $subIssue, $data, $request) {
-            $approved = $data['verification_verdict'] === 'Approved';
+        $approved = $data['verification_verdict'] === 'Approved';
 
+        if ($approved) {
+            abort_unless(
+                $request->boolean('test_attested'),
+                422,
+                'Before approving, you must attest that you actually operated and tested the vehicle.'
+            );
+            $anyFailed = collect($data['functional_test'])->contains(fn ($i) => !$i['passed']);
+            abort_if(
+                $anyFailed,
+                422,
+                'This functional test has a failed check — it cannot be Approved. Reject it so the mechanic can redo the work.'
+            );
+        }
+
+        DB::transaction(function () use ($ticket, $subIssue, $data, $request, $approved) {
             $subIssue->update([
                 'status'               => $approved ? 'For Confirmation' : 'Under Repair',
                 'verification_verdict' => $data['verification_verdict'],
@@ -448,6 +508,8 @@ class TicketController extends Controller
                 'verified_by'          => $request->user()->id,
                 'verified_at'          => now(),
                 'repair_completed_at'  => $approved ? $subIssue->repair_completed_at : null,
+                'functional_test'      => $data['functional_test'],
+                'test_attested'        => $request->boolean('test_attested'),
             ]);
 
             $this->log($request, 'Repair Verified', "Ticket #{$ticket->ticket_id} — sub-issue \"{$subIssue->title}\" verification: {$data['verification_verdict']}.");
@@ -594,39 +656,92 @@ class TicketController extends Controller
         abort_unless($ticket->status === 'Active', 422, "Only an Active ticket can be closed. Current: {$ticket->status}.");
 
         $ticket->load('subIssues');
-        abort_unless($ticket->isEligibleToClose(), 422, 'Every sub-issue must be Done before this ticket can be closed.');
 
         $data = $request->validate([
-            'closing_notes' => ['nullable', 'string'],
+            'closing_notes'       => ['nullable', 'string'],
+            'deferral_reason'     => ['nullable', 'string'],
+            'returned_to_service' => ['nullable', 'boolean'],
         ]);
 
-        DB::transaction(function () use ($ticket, $data, $request) {
+        // A "decision-close" is any close made while sub-issues are still
+        // unfinished (not Done, not already Deferred). The Admin is choosing
+        // to end the ticket anyway — so the leftovers become Deferred, and
+        // the Admin must justify it AND make the fit-for-service call.
+        $unresolved = $ticket->unresolvedSubIssues();
+        $isDecisionClose = $unresolved->isNotEmpty();
+
+        if ($isDecisionClose) {
+            abort_if(
+                blank($data['deferral_reason'] ?? null),
+                422,
+                'This ticket still has unfinished sub-issues. To close it now, provide a reason — they will be recorded as Deferred.'
+            );
+            abort_unless(
+                array_key_exists('returned_to_service', $data) && $data['returned_to_service'] !== null,
+                422,
+                'You must state whether the vehicle is fit to return to service before closing with unfinished work.'
+            );
+        }
+
+        // A clean close (everything already Done/Deferred) returns the
+        // vehicle to service as before; a decision-close honours the
+        // Admin's explicit fit-for-service answer.
+        $returnToService = $isDecisionClose ? (bool) $data['returned_to_service'] : true;
+
+        DB::transaction(function () use ($ticket, $data, $request, $unresolved, $returnToService, $isDecisionClose) {
             $vehicleName = $ticket->vehicle->vehicle_name;
 
+            // Sweep every still-unfinished sub-issue into Deferred, each with
+            // the shared reason and its own forget-me-not breadcrumb.
+            $deferredReportIds = [];
+            foreach ($unresolved as $subIssue) {
+                $rid = $this->deferOneSubIssue($ticket, $subIssue, $data['deferral_reason'], $request->user()->id);
+                if ($rid) {
+                    $deferredReportIds[] = $rid;
+                }
+            }
+
             $ticket->update([
-                'status'        => 'Closed',
-                'closed_by'     => $request->user()->id,
-                'closed_at'     => now(),
-                'closing_notes' => $data['closing_notes'] ?? null,
-                'archived_at'   => now(),
+                'status'              => 'Closed',
+                'closed_by'           => $request->user()->id,
+                'closed_at'           => now(),
+                'closing_notes'       => $data['closing_notes'] ?? null,
+                'returned_to_service' => $returnToService,
+                'archived_at'         => now(),
             ]);
 
-            if ($ticket->issue_report_id) {
+            // Resolve the ticket's originating report only on a fit-for-service
+            // close, and never if that same report was just deferred instead.
+            if ($ticket->issue_report_id && $returnToService && !in_array($ticket->issue_report_id, $deferredReportIds, true)) {
                 VehicleIssueReport::where('issue_report_id', $ticket->issue_report_id)->update(['status' => 'Resolved']);
             }
 
-            $this->archiveCompleted($ticket->fresh()->load('subIssues'), $request->user()->id, 'Closed');
+            $ticket->refresh()->load('subIssues');
+            $this->archiveCompleted($ticket, $request->user()->id, 'Closed');
 
-            // Single choke point: only closing a ticket may free the
-            // vehicle, and only after checking every OTHER ticket on it.
-            $this->recomputeVehicleStatus($ticket->vehicle_id);
+            // Single choke point + fit-for-service gate: closing frees the
+            // vehicle ONLY if the Admin judged it fit. If not, the ticket is
+            // closed but the vehicle stays flagged out of service (the
+            // deferred defect lives on as its breadcrumb Issue Report).
+            if ($returnToService) {
+                $this->recomputeVehicleStatus($ticket->vehicle_id);
+            } else {
+                Vehicle::where('vehicle_id', $ticket->vehicle_id)->update([
+                    'status'    => 'Under Maintenance',
+                    'condition' => 'Needs Repair',
+                ]);
+            }
 
-            $this->log($request, 'Ticket Closed', "Ticket #{$ticket->ticket_id} ({$vehicleName}) closed by Admin. Progress: {$ticket->progress['done']}/{$ticket->progress['total']}.");
+            $progress = $ticket->progress;
+            $summary = $isDecisionClose
+                ? "Decision-close: {$progress['deferred']} sub-issue(s) deferred. Fit for service: " . ($returnToService ? 'Yes' : 'No') . '.'
+                : "Progress: {$progress['done']}/{$progress['total']}.";
+            $this->log($request, 'Ticket Closed', "Ticket #{$ticket->ticket_id} ({$vehicleName}) closed by Admin. {$summary}");
 
             $this->notifyUser(
                 $ticket->assigned_custodian_id,
                 'Ticket Closed',
-                "Ticket #{$ticket->ticket_id} ({$vehicleName}) has been closed by Admin.",
+                "Ticket #{$ticket->ticket_id} ({$vehicleName}) has been closed by Admin." . ($isDecisionClose ? ' Some sub-issues were deferred.' : ''),
                 'ticket_closed',
                 $ticket->ticket_id
             );
@@ -636,6 +751,44 @@ class TicketController extends Controller
         });
 
         return $ticket->fresh($this->eagerLoads());
+    }
+
+    /**
+     * PUT /tickets/:ticket/sub-issues/:subIssue/defer — Admin records a
+     * decision NOT to fix a single sub-issue now (no budget, part on
+     * back-order, etc.). It becomes Deferred (a terminal, "resolved" state)
+     * with a mandatory reason, and a breadcrumb Issue Report is opened so
+     * the unfixed defect isn't forgotten. Available while the ticket is
+     * Active and the sub-issue hasn't already ended.
+     */
+    public function deferSubIssue(Request $request, MaintenanceTicket $ticket, TicketSubIssue $subIssue)
+    {
+        $this->requireRole($request, ['Admin']);
+        $this->assertBelongsToTicket($ticket, $subIssue);
+
+        abort_unless($ticket->status === 'Active', 422, "Sub-issues can only be deferred while the ticket is Active. Current: {$ticket->status}.");
+        abort_if($subIssue->isResolved(), 422, "This sub-issue is already {$subIssue->status} and cannot be deferred.");
+
+        $data = $request->validate([
+            'deferred_reason' => ['required', 'string'],
+        ]);
+
+        DB::transaction(function () use ($ticket, $subIssue, $data, $request) {
+            $this->deferOneSubIssue($ticket, $subIssue, $data['deferred_reason'], $request->user()->id);
+            $this->recomputeVehicleStatus($ticket->vehicle_id);
+
+            $this->log($request, 'Sub-Issue Deferred', "Ticket #{$ticket->ticket_id} — sub-issue \"{$subIssue->title}\" deferred: {$data['deferred_reason']}");
+
+            $this->notifyUser(
+                $ticket->assigned_custodian_id,
+                'Sub-Issue Deferred',
+                "\"{$subIssue->title}\" on Ticket #{$ticket->ticket_id} ({$ticket->vehicle->vehicle_name}) was deferred by Admin. A follow-up issue report was opened so it isn't forgotten.",
+                'sub_issue_deferred',
+                $ticket->ticket_id
+            );
+        });
+
+        return $subIssue->fresh();
     }
 
     /**
@@ -776,6 +929,7 @@ class TicketController extends Controller
                 'repair_logs', 'parts_used', 'repair_started_at', 'repair_completed_at', 'maintenance_cost',
                 'verification_verdict', 'verification_notes', 'verified_by', 'verified_at',
                 'confirmation_verdict', 'confirmation_notes', 'confirmed_by', 'confirmed_at',
+                'deferred_reason', 'deferred_by', 'deferred_at', 'deferred_issue_report_id',
             ];
 
             foreach ($snapshot['sub_issues'] ?? [] as $si) {
@@ -835,6 +989,57 @@ class TicketController extends Controller
         }
     }
 
+    /**
+     * Mark one sub-issue Deferred (a recorded decision not to fix it now)
+     * and leave a breadcrumb so the defect stays visible. Returns the id of
+     * the breadcrumb Issue Report (or null if none was linkable).
+     */
+    private function deferOneSubIssue(MaintenanceTicket $ticket, TicketSubIssue $subIssue, string $reason, int $userId): ?int
+    {
+        $breadcrumbId = $this->createDeferralBreadcrumb($ticket, $subIssue, $reason, $userId);
+
+        $subIssue->update([
+            'status'                   => 'Deferred',
+            'deferred_reason'          => $reason,
+            'deferred_by'              => $userId,
+            'deferred_at'              => now(),
+            'deferred_issue_report_id' => $breadcrumbId,
+        ]);
+
+        return $breadcrumbId;
+    }
+
+    /**
+     * The "breadcrumb": a deferred defect must not vanish. If the sub-issue
+     * came from a real Issue Report, resurface that same report as Pending
+     * so it's back on the active radar. Otherwise (a defect first found
+     * during inspection, with no formal report) open a fresh one. Returns
+     * the report id either way.
+     */
+    private function createDeferralBreadcrumb(MaintenanceTicket $ticket, TicketSubIssue $subIssue, string $reason, int $userId): ?int
+    {
+        if ($subIssue->issue_report_id) {
+            VehicleIssueReport::where('issue_report_id', $subIssue->issue_report_id)->update([
+                'status'  => 'Pending',
+                'remarks' => "Deferred from Ticket #{$ticket->ticket_id}: {$reason}",
+            ]);
+
+            return $subIssue->issue_report_id;
+        }
+
+        $report = VehicleIssueReport::create([
+            'vehicle_id'        => $ticket->vehicle_id,
+            'issue_type'        => 'Other',
+            'issue_description' => "[Deferred from Ticket #{$ticket->ticket_id}] {$subIssue->title}",
+            'severity_level'    => 'Medium',
+            'reported_by'       => $userId,
+            'status'            => 'Pending',
+            'remarks'           => "Auto-created when this repair was deferred. Reason: {$reason}. Re-open a ticket when it can be addressed.",
+        ]);
+
+        return $report->issue_report_id;
+    }
+
     private function resetLinkedIssueReports(MaintenanceTicket $ticket, string $status): void
     {
         $ids = $ticket->subIssues()->pluck('issue_report_id')
@@ -874,6 +1079,7 @@ class TicketController extends Controller
     {
         return [
             'vehicle',
+            'vehicle.category',
             'issueReport',
             'createdBy',
             'assignedCustodian',
@@ -883,6 +1089,7 @@ class TicketController extends Controller
             'subIssues.mechanicAssignedBy',
             'subIssues.verifiedBy',
             'subIssues.confirmedBy',
+            'subIssues.deferredBy',
             'subIssues.createdBy',
         ];
     }
@@ -900,7 +1107,7 @@ class TicketController extends Controller
 
     private function requireRole(Request $request, array $roles): void
     {
-        abort_unless(in_array($request->user()->role, $roles, true), 403, 'Your account role cannot perform this action.');
+        abort_unless($request->user()->hasAnyRole($roles), 403, 'Your account role cannot perform this action.');
     }
 
     private function notifyUser($userId, $title, $message, $type, $ticketId)
@@ -917,7 +1124,7 @@ class TicketController extends Controller
 
     private function notifyAdmins($title, $message, $type, $ticketId)
     {
-        $admins = User::where('role', 'Admin')->get();
+        $admins = User::havingRole('Admin')->get();
         foreach ($admins as $admin) {
             $this->notifyUser($admin->id, $title, $message, $type, $ticketId);
         }

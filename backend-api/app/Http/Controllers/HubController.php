@@ -82,6 +82,6 @@ class HubController extends Controller
 
     private function requireRole(Request $request, array $roles): void
     {
-        abort_unless(in_array($request->user()->role, $roles, true), 403, 'Your account role cannot perform this action.');
+        abort_unless($request->user()->hasAnyRole($roles), 403, 'Your account role cannot perform this action.');
     }
 }

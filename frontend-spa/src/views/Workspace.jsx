@@ -65,6 +65,37 @@ const modulesByRole = {
   ],
 };
 
+// Multi-role helpers. `role` is the primary (portal/routing); `roles` is
+// every hat the account may wear. Permission checks use hasRole so a person
+// holding several roles is allowed to act under any of them.
+function hasRole(user, role) {
+  if (!user) return false;
+  const roles = user.roles;
+  if (Array.isArray(roles) && roles.length) return roles.includes(role);
+  return user.role === role; // fall back to primary role
+}
+
+function userRoles(user) {
+  if (!user) return [];
+  const roles = (Array.isArray(user.roles) && user.roles.length) ? [...user.roles] : (user.role ? [user.role] : []);
+  // Keep the primary role first so it drives the default landing module.
+  if (user.role && roles.includes(user.role)) {
+    return [user.role, ...roles.filter((r) => r !== user.role)];
+  }
+  return roles;
+}
+
+// The sidebar a user sees is the UNION of every module across all their
+// roles — a Custodian + Maintenance person gets both portals' modules.
+function resolveModules(user) {
+  const seen = new Set();
+  const merged = [];
+  userRoles(user).forEach((r) => (modulesByRole[r] ?? []).forEach((m) => {
+    if (!seen.has(m[0])) { seen.add(m[0]); merged.push(m); }
+  }));
+  return merged.length ? merged : (modulesByRole[user?.role] ?? []);
+}
+
 const moduleEndpoints = {
   vehicles: '/vehicles',
   categories: '/categories',
@@ -253,7 +284,7 @@ function Workspace() {
     || logRepairsTicketId || inspectTicketId
   );
   const { user, logout } = useContext(AuthContext);
-  const modules = useMemo(() => modulesByRole[user.role] ?? [], [user.role]);
+  const modules = useMemo(() => resolveModules(user), [user.role, user.roles]);
   const [activeModule, setActiveModule] = useState(modules[0]?.[0] ?? 'dashboard');
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(
     () => localStorage.getItem('vms_sidebar_collapsed') === '1'
@@ -384,11 +415,11 @@ function Workspace() {
 
     const params = {};
 
-    if (key === 'issues' && user.role === 'Custodian') {
+    if (key === 'issues' && hasRole(user, 'Custodian') && !hasRole(user, 'Admin')) {
       params.mine = 1;
     }
 
-    if (key === 'maintenance' && user.role === 'Maintenance Personnel') {
+    if (key === 'maintenance' && hasRole(user, 'Maintenance Personnel') && !hasRole(user, 'Admin')) {
       params.mine = 1;
     }
 
@@ -1000,6 +1031,29 @@ function Workspace() {
     });
   };
 
+  // DEV-ONLY impersonation — a fast way to switch accounts while testing,
+  // without logging out and back in. import.meta.env.DEV is compile-time, so
+  // this entire block (and its UI below) is stripped from a production build;
+  // the backend also 404s the endpoint outside local/testing.
+  const [impersonateCandidates, setImpersonateCandidates] = useState([]);
+  const [impersonateId, setImpersonateId] = useState('');
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    api.get('/impersonate/candidates').then((r) => setImpersonateCandidates(r.data)).catch(() => {});
+  }, []);
+  const doImpersonate = async () => {
+    if (!impersonateId) return;
+    try {
+      const res = await api.post(`/impersonate/${impersonateId}`);
+      localStorage.setItem('token', res.data.access_token);
+      // Full reload → axios picks up the new token and AuthContext reloads the
+      // impersonated user cleanly (no stale state from the previous account).
+      window.location.assign(roleRoutes[res.data.user?.role] ?? '/admin');
+    } catch {
+      setNotice({ type: 'error', text: 'Could not impersonate that account.' });
+    }
+  };
+
   return (
     <FormNoticeContext.Provider value={notice}>
     <RowActionsContext.Provider value={rowActions}>
@@ -1018,6 +1072,19 @@ function Workspace() {
             <Icon name="gear" size={28} className="topbar-gear-icon" filled />
             <span className="vms-wordmark vms-wordmark-sm">vms</span>
           </div>
+          {import.meta.env.DEV && impersonateCandidates.length > 0 && (
+            <div className="dev-impersonate" title="Dev only — switch account without logging out. Not present in production.">
+              <select value={impersonateId} onChange={(e) => setImpersonateId(e.target.value)} aria-label="Impersonate account">
+                <option value="">Switch user…</option>
+                {impersonateCandidates.map((u) => (
+                  <option key={u.id} value={u.id} disabled={!u.is_active}>
+                    {u.name} · {u.role}{u.is_active ? '' : ' (inactive)'}
+                  </option>
+                ))}
+              </select>
+              <button type="button" onClick={doImpersonate} disabled={!impersonateId}>Impersonate</button>
+            </div>
+          )}
         </div>
 
         <div className="topbar-right">
@@ -1180,15 +1247,19 @@ function Workspace() {
               vehicleId={vehicleProfileId}
               lookups={lookups}
               allHubs={allHubs}
+              canManage={hasRole(user, 'Admin')}
+              canCheckReadiness={hasRole(user, 'Admin') || hasRole(user, 'Custodian')}
               onBack={() => returnToModule('vehicles')}
               setNotice={setNotice}
               onSaved={loadLookups}
               onViewTicket={openTicketProfile}
+              onRequestConfirmation={setConfirmDialog}
             />
           ) : ticketProfileId ? (
             <TicketProfilePage
               ticketId={ticketProfileId}
               role={user.role}
+              userId={user.id}
               ticketLookups={ticketLookups}
               onBack={() => returnToModule('tickets')}
               onDeleteTicket={deleteTicket}
@@ -1272,7 +1343,12 @@ function Workspace() {
               description="Create and manage user accounts — Admin, Custodian, and Maintenance Personnel."
               onBack={() => returnToModule('users')}
               fields={userFields(Boolean(editUserId))}
-              initialValues={editUserId ? (records.users ?? []).find((u) => String(u.id) === String(editUserId)) : EMPTY_OBJ}
+              initialValues={editUserId ? (() => {
+                const u = (records.users ?? []).find((x) => String(x.id) === String(editUserId));
+                // Legacy rows may have no `roles` list yet — seed it from the primary role.
+                if (u && (!Array.isArray(u.roles) || !u.roles.length) && u.role) return { ...u, roles: [u.role] };
+                return u;
+              })() : EMPTY_OBJ}
               onSubmit={(payload) => submitFormPage('users', editUserId ? { id: editUserId } : null, payload)}
               submitLabel={editUserId ? 'Update User' : 'Add User'}
             />
@@ -1313,7 +1389,7 @@ function Workspace() {
     if (activeModule === 'vehicles') {
       return (
         <ModulePanel
-          description={(user.role === 'Custodian' ? 'View-only fleet information.' : 'Register, edit, and archive vehicle records.') + ' Status = availability (can it be dispatched right now?). Condition = physical state (does it need repair or inspection?). Click a row to see full vehicle details.'}
+          description={((hasRole(user, 'Custodian') && !hasRole(user, 'Admin')) ? 'View-only fleet information.' : 'Register, edit, and archive vehicle records.') + ' Status = availability (can it be dispatched right now?). Condition = physical state (does it need repair or inspection?). Click a row to see full vehicle details.'}
           statCards={
             <ModuleStatCards
               totalLabel="Total Vehicles"
@@ -1331,7 +1407,7 @@ function Workspace() {
               value={searchQuery}
               onChange={setSearchQuery}
               placeholder="Search vehicles..."
-              onAdd={user.role === 'Admin' ? () => navigate(`${roleRoutes[user.role]}/vehicles/new`) : undefined}
+              onAdd={hasRole(user, 'Admin') ? () => navigate(`${roleRoutes[user.role]}/vehicles/new`) : undefined}
               addLabel="Add Vehicle"
               onExport={() => exportRowsToCsv('vehicles.csv', VEHICLE_EXPORT_COLUMNS, visibleRows)}
             />
@@ -1447,7 +1523,7 @@ function Workspace() {
                     vehicles={lookups.vehicles ?? []}
                     onClearSelectedVehicle={() => setSelectedMapVehicleId(null)}
                     onHubsChange={setAllHubs}
-                    canManageHubs={user.role === 'Admin'}
+                    canManageHubs={hasRole(user, 'Admin')}
                   />
                 </div>
               </div>
@@ -1514,7 +1590,7 @@ function Workspace() {
                 value={searchQuery}
                 onChange={setSearchQuery}
                 placeholder="Search conditions..."
-                onAdd={user.role === 'Custodian' ? () => navigate(`${roleRoutes[user.role]}/conditions/new`) : undefined}
+                onAdd={hasRole(user, 'Custodian') ? () => navigate(`${roleRoutes[user.role]}/conditions/new`) : undefined}
                 addLabel="Add Condition Check"
               />
             </div>
@@ -1626,7 +1702,7 @@ function Workspace() {
     }
 
     if (activeModule === 'issues') {
-      if (user.role === 'Custodian' && !hasVehicles) {
+      if (hasRole(user, 'Custodian') && !hasVehicles) {
         return (
           <ModulePanel description={issueDescription(user.role)}>
             <div className="empty-prereq">
@@ -1657,7 +1733,7 @@ function Workspace() {
               value={searchQuery}
               onChange={setSearchQuery}
               placeholder="Search issues..."
-              onAdd={user.role === 'Custodian' ? () => navigate(`${roleRoutes[user.role]}/issues/new`) : undefined}
+              onAdd={hasRole(user, 'Custodian') ? () => navigate(`${roleRoutes[user.role]}/issues/new`) : undefined}
               addLabel="Report Issue"
             />
           </div>
@@ -1707,7 +1783,7 @@ function Workspace() {
               value={searchQuery}
               onChange={setSearchQuery}
               placeholder="Search maintenance..."
-              onAdd={user.role === 'Admin' ? () => navigate(`${roleRoutes[user.role]}/maintenance/new`) : undefined}
+              onAdd={hasRole(user, 'Admin') ? () => navigate(`${roleRoutes[user.role]}/maintenance/new`) : undefined}
               addLabel="Add Maintenance"
             />
           </div>
@@ -1784,7 +1860,7 @@ function Workspace() {
               value={searchQuery}
               onChange={setSearchQuery}
               placeholder="Search schedules..."
-              onAdd={user.role === 'Admin' ? () => navigate(`${roleRoutes[user.role]}/schedules/new`) : undefined}
+              onAdd={hasRole(user, 'Admin') ? () => navigate(`${roleRoutes[user.role]}/schedules/new`) : undefined}
               addLabel="Add Schedule"
               onExport={() => exportRowsToCsv('maintenance-schedules.csv', SCHEDULE_EXPORT_COLUMNS, visibleRows)}
             />
@@ -2277,6 +2353,16 @@ function Dashboard({ data, hubs = null, user }) {
   const forecastOut = forecast.under_maintenance ?? [];
   const overdueSchedules = data.overdue_schedules ?? [];
 
+  // Gap 1 — readiness/coverage by vehicle type; Gap 2 — preventive watch.
+  const readiness = data.readiness ?? [];
+  const noCoverage = readiness.filter((r) => r.no_coverage);
+  const preventiveWatch = data.preventive_watch ?? [];
+  // Gap A — readiness watch; Gap B — fragility; Gap C — failure patterns.
+  const readinessWatch = data.readiness_watch ?? [];
+  const fragility = data.fragility ?? [];
+  const failurePatterns = data.failure_patterns ?? [];
+  const READINESS_STATE_LABEL = { stale: 'Check stale', not_ready: 'Not ready', unchecked: 'Never checked' };
+
   const fleetStatus = [
     { label: 'Available', value: availableVehicles, color: '#36c66d' },
     { label: 'Under Maintenance', value: maintenanceVehicles, color: '#ff7a1a' },
@@ -2349,6 +2435,91 @@ function Dashboard({ data, hubs = null, user }) {
         })}
       </section>
 
+      {readiness.length > 0 && (
+        <section className="panel full-span">
+          <div className="panel-header-bar">
+            <h3><Icon name="checkCircle" size={16} /> Emergency Readiness</h3>
+            <span className="area-chart-tag">Coverage by vehicle type</span>
+          </div>
+          {noCoverage.length > 0 && (
+            <div style={{ margin: '0 0 14px', padding: '12px 16px', borderRadius: 10, background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b', display: 'flex', alignItems: 'center', gap: 10, fontWeight: 600 }}>
+              <Icon name="alert" size={18} />
+              NO COVERAGE: {noCoverage.map((r) => r.category).join(', ')} — no ready unit available right now.
+            </div>
+          )}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 12 }}>
+            {readiness.map((r) => {
+              const ok = !r.no_coverage;
+              return (
+                <div key={r.category} style={{ padding: 14, borderRadius: 12, border: `1px solid ${r.no_coverage ? '#fecaca' : '#e2e8f0'}`, background: r.no_coverage ? '#fff5f5' : '#fff' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                    <strong style={{ fontSize: '0.9rem' }}>{r.category}</strong>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: '0.72rem', fontWeight: 700, padding: '3px 9px', borderRadius: 999, background: ok ? '#ecfdf5' : '#fef2f2', color: ok ? '#065f46' : '#991b1b', border: `1px solid ${ok ? '#a7f3d0' : '#fecaca'}` }}>
+                      <Icon name={ok ? 'checkCircle' : 'alert'} size={11} /> {ok ? 'Covered' : 'No coverage'}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                    <span style={{ fontSize: '1.6rem', fontWeight: 800, color: ok ? '#16a34a' : '#dc2626' }}>{r.ready}</span>
+                    <span style={{ fontSize: '0.9rem', color: '#64748b' }}>of {r.total} available</span>
+                  </div>
+                  {typeof r.verified_ready === 'number' && (
+                    <span style={{ fontSize: '0.76rem', color: r.verified_ready < r.ready ? '#b45309' : '#16a34a' }} title="Passed a recent pre-deployment readiness check.">
+                      {r.verified_ready} verified ready to respond{r.verified_ready < r.ready ? ` · ${r.ready - r.verified_ready} unverified` : ''}
+                    </span>
+                  )}
+                  {r.down > 0 && <span style={{ display: 'block', fontSize: '0.76rem', color: '#b45309' }}>{r.down} down</span>}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {(fragility.length > 0 || readinessWatch.length > 0) && (
+        <section className="panel full-span">
+          <div className="panel-header-bar">
+            <h3><Icon name="alert" size={16} /> Risk &amp; Readiness Watch</h3>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16 }}>
+            {fragility.length > 0 && (
+              <div>
+                <h4 style={{ margin: '0 0 8px', fontSize: '0.85rem', color: '#334155' }}>Single points of failure</h4>
+                {fragility.map((f) => (
+                  <div key={f.category} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', marginBottom: 6, borderRadius: 8, background: f.critical ? '#fef2f2' : '#fffbeb', border: `1px solid ${f.critical ? '#fecaca' : '#fde68a'}`, color: f.critical ? '#991b1b' : '#92400e', fontSize: '0.83rem' }}>
+                    <Icon name="alert" size={14} />
+                    <span><strong>Only 1 {f.category}</strong> — {f.critical ? 'and it is currently DOWN. No coverage.' : 'no backup if it goes down.'}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {readinessWatch.length > 0 && (
+              <div>
+                <h4 style={{ margin: '0 0 8px', fontSize: '0.85rem', color: '#334155' }}>Available but not verified ready</h4>
+                {readinessWatch.map((r) => (
+                  <div key={r.vehicle_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '8px 12px', marginBottom: 6, borderRadius: 8, background: '#f8fafc', border: '1px solid #e2e8f0', fontSize: '0.83rem' }}>
+                    <span>{r.vehicle_name} <span className="muted">· {r.category ?? '—'}</span></span>
+                    <span style={{ fontSize: '0.72rem', fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: r.state === 'not_ready' ? '#fee2e2' : '#fef3c7', color: r.state === 'not_ready' ? '#b91c1c' : '#92400e' }}>
+                      {READINESS_STATE_LABEL[r.state] ?? r.state}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+
+      {hasRole(user, 'Admin') && failurePatterns.length > 0 && (
+        <section className="panel full-span">
+          <div className="panel-header-bar">
+            <h3><Icon name="wrench" size={16} /> What's Breaking Most</h3>
+            <span className="area-chart-tag">Fleet-wide · last 12 months</span>
+          </div>
+          <HorizontalBarChart rows={failurePatterns.map((p) => ({ label: p.type, value: p.count }))} />
+          <p className="muted" style={{ marginTop: 8, fontSize: '0.82rem' }}>A single common failure across many vehicles often points to a systemic cause (rough roads, a bad parts batch) worth fixing at the root.</p>
+        </section>
+      )}
+
       <section className="dashboard-graphs full-span" aria-label="Dashboard graphs">
         <GraphPanel title="Fleet Status" stat={`${availabilityRate}% available`}>
           <DonutChart
@@ -2413,7 +2584,22 @@ function Dashboard({ data, hubs = null, user }) {
             ))}
           </div>
         )}
-        {overdueSchedules.length > 0 && (
+        {preventiveWatch.length > 0 ? (
+          <div className="forecast-overdue">
+            <h4><Icon name="alert" size={14} /> Preventive Maintenance Watch</h4>
+            {preventiveWatch.map((s) => (
+              <div className="forecast-overdue-row" key={s.schedule_id}>
+                <span>
+                  <span style={{ display: 'inline-block', fontSize: '0.68rem', fontWeight: 700, padding: '1px 7px', borderRadius: 999, marginRight: 6, background: s.state === 'overdue' ? '#fee2e2' : '#fef3c7', color: s.state === 'overdue' ? '#b91c1c' : '#92400e' }}>
+                    {s.state === 'overdue' ? 'OVERDUE' : 'DUE SOON'}
+                  </span>
+                  {s.vehicle_name} · {s.maintenance_type}
+                </span>
+                <span className="forecast-overdue-date">{s.state === 'overdue' ? 'was due' : 'due'} {formatForecastDate(s.scheduled_date)}</span>
+              </div>
+            ))}
+          </div>
+        ) : overdueSchedules.length > 0 && (
           <div className="forecast-overdue">
             <h4><Icon name="alert" size={14} /> Overdue scheduled maintenance</h4>
             {overdueSchedules.map((s) => (
@@ -2426,7 +2612,7 @@ function Dashboard({ data, hubs = null, user }) {
         )}
       </section>
 
-      {user?.role === 'Admin' && (
+      {hasRole(user, 'Admin') && (
         <section className="panel full-span">
           <div className="panel-header-bar">
             <h3>Recent Updates</h3>
@@ -3301,7 +3487,33 @@ function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, onSubmit, subm
               ))}
             </select>
           ) : null}
-          {!['textarea', 'select', 'quantity'].includes(field.type) ? (
+          {field.type === 'checkboxes' ? (
+            <div className="checkbox-group" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {field.options.map((option) => {
+                const val = option?.value ?? option;
+                const label = option?.label ?? option;
+                const selected = Array.isArray(values[field.name]) && values[field.name].includes(val);
+                return (
+                  <label key={val} style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 400, cursor: 'pointer', margin: 0 }}>
+                    <input
+                      type="checkbox"
+                      checked={selected}
+                      onChange={() => setValues((current) => {
+                        const list = Array.isArray(current[field.name]) ? current[field.name] : [];
+                        const next = selected ? list.filter((r) => r !== val) : [...list, val];
+                        const merged = { ...current, [field.name]: next };
+                        onValuesChange?.(merged);
+                        return merged;
+                      })}
+                      style={{ width: 'auto' }}
+                    />
+                    <span style={{ margin: 0 }}>{label}</span>
+                  </label>
+                );
+              })}
+            </div>
+          ) : null}
+          {!['textarea', 'select', 'quantity', 'checkboxes'].includes(field.type) ? (
             <input
               accept={field.accept}
               name={field.name}
@@ -3481,7 +3693,7 @@ function userFields(isEditing) {
     { label: 'Email', name: 'email', required: true, type: 'text' },
     { label: 'Phone', name: 'phone', type: 'text' },
     { label: 'Address', name: 'address', type: 'text' },
-    { label: 'Role', name: 'role', options: ['Admin', 'Custodian', 'Maintenance Personnel'], required: true, type: 'select' },
+    { label: 'Roles (a person can hold more than one — the first is their primary)', name: 'roles', options: ['Admin', 'Custodian', 'Maintenance Personnel'], required: true, type: 'checkboxes' },
     { label: 'Profile Photo', name: 'photo', accept: 'image/*', type: 'file' },
     {
       label: isEditing ? 'New Password (leave blank to keep current)' : 'Password',
@@ -4120,8 +4332,8 @@ function vehicleColumns(role, onEdit, deleteRecord, restoreRecord, filterStatus)
       render: (row) => (
         <div className="row-actions">
           <button className="btn-edit-action" onClick={() => onEdit(row)} type="button" title="Edit" aria-label="Edit"><Icon name="edit" size={14} /> Edit</button>
-          {row.status === 'Inactive' ? (
-            <button className="btn-edit-action" onClick={() => restoreRecord(`/vehicles/${row.vehicle_id}/restore`, 'Vehicle restored.')} type="button" title="Restore" aria-label="Restore"><Icon name="undo" size={14} /> Restore</button>
+          {(row.status === 'Inactive' || row.status === 'Decommissioned') ? (
+            <button className="btn-edit-action" onClick={() => restoreRecord(`/vehicles/${row.vehicle_id}/restore`, row.status === 'Decommissioned' ? 'Vehicle recommissioned.' : 'Vehicle restored.')} type="button" title={row.status === 'Decommissioned' ? 'Recommission' : 'Restore'} aria-label="Restore"><Icon name="undo" size={14} /> {row.status === 'Decommissioned' ? 'Recommission' : 'Restore'}</button>
           ) : (
             <button className="btn-delete-action" onClick={() => deleteRecord(`/vehicles/${row.vehicle_id}`, 'Vehicle marked inactive.')} type="button" title="Deactivate" aria-label="Deactivate"><Icon name="archive" size={14} /> Deactivate</button>
           )}
@@ -4158,7 +4370,14 @@ function userColumns(onEdit, onToggleActive, currentUserId) {
     { label: 'User', render: (row) => <UserAvatarName user={row} /> },
     { label: 'Email', render: (row) => row.email },
     { label: 'Phone', render: (row) => row.phone ?? '-' },
-    { label: 'Role', render: (row) => <StatusBadge value={row.role} /> },
+    { label: 'Role', render: (row) => {
+      const roles = (Array.isArray(row.roles) && row.roles.length) ? row.roles : [row.role].filter(Boolean);
+      return (
+        <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 4 }}>
+          {roles.map((r) => <StatusBadge key={r} value={r} />)}
+        </span>
+      );
+    } },
     { label: 'Status', render: (row) => <StatusBadge value={row.is_active ? 'Active' : 'Inactive'} /> },
     {
       label: 'Action',
@@ -4549,10 +4768,18 @@ function ExpandableText({ text, lines = 2, className = '' }) {
 // real API origin so images load; leave external URLs (e.g. Supabase) untouched.
 const API_ORIGIN = (api.defaults.baseURL || '').replace(/\/api\/?$/, '');
 
+// Only these protocols may ever reach an href/src. Blocks javascript:, data:,
+// vbscript: etc. from rendering live — defense in depth, since these URLs are
+// server-generated today but this guarantees it stays safe regardless.
+const SAFE_URL_PROTOCOLS = ['http:', 'https:'];
+
 function resolvePhotoUrl(url) {
   if (!url) return url;
   try {
     const parsed = new URL(url, window.location.origin);
+    if (!SAFE_URL_PROTOCOLS.includes(parsed.protocol)) {
+      return ''; // unsafe scheme — refuse to render it
+    }
     const isLocalHost = ['localhost', '127.0.0.1', '0.0.0.0'].includes(parsed.hostname);
     if (isLocalHost && API_ORIGIN) {
       const base = new URL(API_ORIGIN);
@@ -4561,7 +4788,7 @@ function resolvePhotoUrl(url) {
     }
     return parsed.toString();
   } catch {
-    return url;
+    return '';
   }
 }
 
@@ -4759,7 +4986,11 @@ async function sendPayload(method, path, payload) {
   if (hasFile) {
     const formData = new FormData();
     Object.entries(payload).forEach(([key, value]) => {
-      if (value !== '' && value !== null && value !== undefined) {
+      if (value === '' || value === null || value === undefined) return;
+      if (Array.isArray(value)) {
+        // Send arrays (e.g. multi-role `roles`) as roles[] so PHP parses a list.
+        value.forEach((item) => formData.append(`${key}[]`, item));
+      } else {
         formData.append(key, value);
       }
     });
@@ -4785,7 +5016,13 @@ function cleanPayload(payload) {
 }
 
 function valuesFromFields(fields, initialValues) {
-  return Object.fromEntries(fields.map((field) => [field.name, initialValues?.[field.name] ?? '']));
+  return Object.fromEntries(fields.map((field) => {
+    const raw = initialValues?.[field.name];
+    if (field.type === 'checkboxes') {
+      return [field.name, Array.isArray(raw) && raw.length ? raw : []];
+    }
+    return [field.name, raw ?? ''];
+  }));
 }
 
 function options(items, valueKey, labelKey) {
@@ -4800,7 +5037,7 @@ function options(items, valueKey, labelKey) {
 // vehicle that's been taken out of service.
 function vehicleOptions(lookups) {
   return lookups.vehicles
-    .filter((vehicle) => vehicle.status !== 'Inactive')
+    .filter((vehicle) => vehicle.status !== 'Inactive' && vehicle.status !== 'Decommissioned')
     .map((vehicle) => ({
       value: vehicle.vehicle_id,
       label: vehicleLabel(vehicle),
@@ -5067,6 +5304,121 @@ const verifyRepairFields = [
   { label: 'Verification Notes', name: 'verification_notes', type: 'textarea', rows: 2 },
 ];
 
+// Problem 2 — the functional test ("UAT") checklist. What must be physically
+// operated and confirmed depends on the KIND of vehicle, keyed off the same
+// Land/Water domain that drives the specs form (plus a fire-truck extra).
+function functionalTestChecklist(vehicle) {
+  const domain = vehicle?.category?.domain ?? 'Land';
+  const name = (vehicle?.category?.category_name ?? '').toLowerCase();
+  const base = [
+    'Engine / power system starts normally',
+    'No warning indicators or abnormal noise',
+    'The reported problem no longer occurs',
+  ];
+  if (domain === 'Water') {
+    return [...base, 'Engine runs under load on the water', 'Bilge pump operates', 'No hull leaks or water ingress'];
+  }
+  const land = ['Brakes respond properly', 'Completed a short test drive'];
+  const fireTruck = name.includes('fire') ? ['Water pump reaches full pressure'] : [];
+  return [...base, ...land, ...fireTruck];
+}
+
+// The Custodian's verification IS the functional test: operate the vehicle
+// against the checklist, mark each Pass/Fail, and the verdict follows the
+// result — any Fail => Rejected (bounced back to the mechanic); all Pass =>
+// Approved, but only once the tester attests they actually operated it.
+function VerificationForm({ target, onCancel, onSubmit }) {
+  const checklist = useMemo(() => functionalTestChecklist(target?.vehicle), [target?.vehicle]);
+  const [results, setResults] = useState(() => checklist.map((item) => ({ item, passed: null })));
+  const [attested, setAttested] = useState(false);
+  const [notes, setNotes] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const allAnswered = results.every((r) => r.passed !== null);
+  const anyFailed = results.some((r) => r.passed === false);
+  const verdict = anyFailed ? 'Rejected' : 'Approved';
+  const needsAttestation = !anyFailed;
+  const canSubmit = allAnswered && (!needsAttestation || attested) && !submitting;
+
+  const setResult = (i, passed) => setResults((rs) => rs.map((r, idx) => (idx === i ? { ...r, passed } : r)));
+
+  const submit = async () => {
+    if (!canSubmit) return;
+    setSubmitting(true);
+    try {
+      await onSubmit({
+        verification_verdict: verdict,
+        verification_notes: notes || null,
+        functional_test: results.map((r) => ({ item: r.item, passed: r.passed === true })),
+        test_attested: verdict === 'Approved' ? attested : false,
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div>
+      <p className="muted" style={{ margin: '0 0 12px', fontSize: '0.85rem' }}>
+        Physically operate the vehicle and mark each check. A repair is only accepted once it actually works — any failed check sends it back to the mechanic.
+      </p>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {results.map((r, i) => (
+          <div key={r.item} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '8px 10px', background: '#f8fafc', borderRadius: 8, border: '1px solid #e2e8f0' }}>
+            <span style={{ fontSize: '0.85rem' }}>{r.item}</span>
+            <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+              <button
+                type="button"
+                onClick={() => setResult(i, true)}
+                style={{ padding: '4px 12px', borderRadius: 6, fontSize: '0.78rem', fontWeight: 600, cursor: 'pointer', border: `1px solid ${r.passed === true ? '#16a34a' : '#cbd5e1'}`, background: r.passed === true ? '#16a34a' : '#fff', color: r.passed === true ? '#fff' : '#64748b' }}
+              >
+                Pass
+              </button>
+              <button
+                type="button"
+                onClick={() => setResult(i, false)}
+                style={{ padding: '4px 12px', borderRadius: 6, fontSize: '0.78rem', fontWeight: 600, cursor: 'pointer', border: `1px solid ${r.passed === false ? '#dc2626' : '#cbd5e1'}`, background: r.passed === false ? '#dc2626' : '#fff', color: r.passed === false ? '#fff' : '#64748b' }}
+              >
+                Fail
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {allAnswered && (
+        <div style={{ marginTop: 12, padding: '8px 12px', borderRadius: 8, fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: 8,
+          background: anyFailed ? '#fef2f2' : '#ecfdf5', color: anyFailed ? '#991b1b' : '#065f46', border: `1px solid ${anyFailed ? '#fecaca' : '#a7f3d0'}` }}>
+          <Icon name={anyFailed ? 'alert' : 'checkCircle'} size={15} />
+          {anyFailed
+            ? 'A check failed — this will be Rejected and sent back to the mechanic to redo.'
+            : 'All checks passed — this will be Approved for Admin confirmation.'}
+        </div>
+      )}
+
+      {needsAttestation && (
+        <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 12, fontSize: '0.85rem', cursor: 'pointer' }}>
+          <input type="checkbox" checked={attested} onChange={(e) => setAttested(e.target.checked)} style={{ marginTop: 3 }} />
+          <span>I confirm I <strong>personally operated and tested</strong> this vehicle — this is not a paperwork-only sign-off.</span>
+        </label>
+      )}
+
+      <div style={{ marginTop: 12 }}>
+        <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: '#475569', marginBottom: 4 }}>Notes {anyFailed ? '(what failed / needs redoing)' : '(optional)'}</label>
+        <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} style={{ width: '100%', borderRadius: 8, border: '1px solid #cbd5e1', padding: '8px 10px', fontSize: '0.85rem', fontFamily: 'inherit', resize: 'vertical' }} />
+      </div>
+
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 16 }}>
+        <button type="button" className="ghost-button" onClick={onCancel}>Cancel</button>
+        <button type="button" className={anyFailed ? 'danger-button' : 'primary-button'} onClick={submit} disabled={!canSubmit}>
+          {submitting ? 'Submitting…' : anyFailed ? 'Reject & Send Back' : 'Approve Repair'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 const confirmTicketFields = [
   { label: 'Confirmation Verdict', name: 'confirmation_verdict', options: ['Confirmed', 'Reopened'], required: true, type: 'select' },
   { label: 'Notes / Remarks', name: 'confirmation_notes', type: 'textarea', rows: 2 },
@@ -5085,6 +5437,7 @@ function TicketStatusBadge({ value, size = 'normal' }) {
     'For Inspection': 'ticket-forinspect',
     'For Confirmation': 'ticket-forconfirm',
     'Done': 'ticket-done',
+    'Deferred': 'ticket-deferred',
     'Closed': 'ticket-done',
     'Deleted': 'ticket-cancelled',
     'Cancelled': 'ticket-cancelled',
@@ -5107,17 +5460,44 @@ function TicketStatusBadge({ value, size = 'normal' }) {
 // TICKET DETAIL PANEL — shown when admin clicks a ticket row
 // =========================================================================
 
-function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm, onAddSubIssue, onCloseTicket, onCancel, onUncancel, onDelete, onRequestConfirmation, onClose, asPage = false }) {
+function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, onConfirm, onAddSubIssue, onDeferSubIssue, onCloseTicket, onCancel, onUncancel, onDelete, onRequestConfirmation, onClose, asPage = false }) {
   const [assigningId, setAssigningId] = useState(null);
   const [confirmingId, setConfirmingId] = useState(null);
+  const [deferringId, setDeferringId] = useState(null);
   const [addingSubIssue, setAddingSubIssue] = useState(false);
+  const [decisionClosing, setDecisionClosing] = useState(false);
 
   if (!ticket) return null;
 
   const subIssues = ticket.sub_issues ?? [];
-  const progress = ticket.progress ?? { done: subIssues.filter((s) => s.status === 'Done').length, total: subIssues.length };
-  const canClose = ticket.status === 'Active' && (progress.total === 0 || progress.done === progress.total);
+  const progress = ticket.progress ?? {
+    done: subIssues.filter((s) => s.status === 'Done').length,
+    deferred: subIssues.filter((s) => s.status === 'Deferred').length,
+    total: subIssues.length,
+  };
+  // A sub-issue is "resolved" once it's either fixed (Done) or a recorded
+  // decision not to fix it now (Deferred). A ticket closes when everything
+  // is resolved — not only when everything is Done.
+  const isResolvedStatus = (s) => s === 'Done' || s === 'Deferred';
+  const hasUnresolved = subIssues.some((s) => !isResolvedStatus(s.status));
+  const allResolved = subIssues.length === 0 || !hasUnresolved;
+  const canClose = ticket.status === 'Active' && allResolved;
+  const canDecisionClose = ticket.status === 'Active' && hasUnresolved;
   const isAdmin = role === 'Admin';
+
+  // Adding a sub-issue requires firsthand contact with the vehicle — the
+  // assigned Custodian, or a mechanic currently working one of its
+  // sub-issues (found something else mid-repair). Admin never qualifies,
+  // regardless of role — this is ownership by id, matching the backend's
+  // real check, not a role label (so it stays correct for multi-role users).
+  const canAddSubIssue = ticket.status === 'Active' && (
+    ticket.assigned_custodian_id === userId
+    || subIssues.some((s) => s.assigned_mechanic_id === userId)
+  );
+
+  // "How long has this been sitting?" — the aging signal. Flagged past 30 days.
+  const daysOpen = ticket.days_open;
+  const isAging = ticket.status !== 'Closed' && ticket.status !== 'Cancelled' && typeof daysOpen === 'number' && daysOpen >= 30;
 
   const requestDelete = () => {
     onRequestConfirmation({
@@ -5140,10 +5520,26 @@ function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm,
               <TicketStatusBadge value={ticket.priority} />
               {progress.total > 0 && (
                 <span className={`status-badge ${progress.done === progress.total ? 'ticket-done' : 'ticket-repair'}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                  <Icon name="checkCircle" size={12} /> {progress.done}/{progress.total} Sub-Issues Done
+                  <Icon name="checkCircle" size={12} /> {progress.done}/{progress.total} Done
+                  {progress.deferred > 0 && <> · {progress.deferred} Deferred</>}
                 </span>
               )}
-              <DateBadge value={ticket.created_at} />
+              {typeof daysOpen === 'number' && (
+                <span className={`status-badge ${isAging ? 'ticket-cancelled' : 'ticket-open'}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }} title={isAging ? 'This ticket has been open a long time — resolve or close it.' : undefined}>
+                  <Icon name={isAging ? 'alert' : 'calendar'} size={12} /> Open {daysOpen} day{daysOpen === 1 ? '' : 's'}{isAging ? ' — aging' : ''}
+                </span>
+              )}
+              {ticket.recurrence_count > 0 && (
+                <span className="status-badge rework-warning" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }} title="This Main Issue was already fixed on this vehicle recently — a recurring failure.">
+                  <Icon name="undo" size={12} /> Recurring — {ticket.recurrence_count + 1}
+                  {['st', 'nd', 'rd'][ticket.recurrence_count] ?? 'th'} time
+                </span>
+              )}
+              {ticket.created_at && (
+                <span className="status-badge" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                  <Icon name="calendar" size={12} /> Created {formatDate(ticket.created_at)}
+                </span>
+              )}
             </div>
           </div>
           {asPage ? (
@@ -5186,38 +5582,89 @@ function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm,
           </div>
         )}
 
-        <div className="ticket-detail-body">
-          <section className="ticket-section" style={{ padding: '0 12px 10px' }}>
-            <h4 style={{ margin: '0 -12px 8px', padding: '7px 12px', fontSize: '0.75rem' }}><Icon name="vehicle" size={14} /> Overview</h4>
-            <div className="ticket-detail-vehicle-layout" style={{ marginBottom: 6, padding: 8, gap: 10 }}>
-              {ticket.vehicle?.photo_url && (
-                <div className="ticket-detail-vehicle-photo" style={{ width: 44, height: 44 }}>
-                  <img src={resolvePhotoUrl(ticket.vehicle.photo_url)} alt={ticket.vehicle.vehicle_name} />
-                </div>
-              )}
-              <div className="ticket-detail-vehicle-info">
-                <p style={{ margin: '0 0 4px' }}><strong style={{ color: '#2563eb' }}>{ticket.vehicle?.vehicle_name}</strong> <span className="muted">({ticket.vehicle?.plate_number})</span></p>
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                  <StatusBadge value={ticket.vehicle?.status} />
-                  <StatusBadge value={ticket.vehicle?.condition} />
+        <div className="ticket-detail-body ticket-detail-body-columns">
+          <div className="ticket-detail-col-left">
+            <section className="ticket-section" style={{ padding: '0 12px 10px' }}>
+              <h4 style={{ margin: '0 -12px 8px', padding: '7px 12px', fontSize: '0.75rem' }}><Icon name="vehicle" size={14} /> Overview</h4>
+              <div className="ticket-detail-vehicle-layout" style={{ marginBottom: 6, padding: 8, gap: 10 }}>
+                {ticket.vehicle?.photo_url && (
+                  <div className="ticket-detail-vehicle-photo" style={{ width: 44, height: 44 }}>
+                    <img src={resolvePhotoUrl(ticket.vehicle.photo_url)} alt={ticket.vehicle.vehicle_name} />
+                  </div>
+                )}
+                <div className="ticket-detail-vehicle-info">
+                  <p style={{ margin: '0 0 4px' }}><strong style={{ color: '#2563eb' }}>{ticket.vehicle?.vehicle_name}</strong> <span className="muted">({ticket.vehicle?.plate_number})</span></p>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    <StatusBadge value={ticket.vehicle?.status} />
+                    <StatusBadge value={ticket.vehicle?.condition} />
+                  </div>
                 </div>
               </div>
-            </div>
-            <p className="muted" style={{ margin: 0, fontSize: '0.82rem' }}>{ticket.ticket_description}</p>
-          </section>
-
-          {ticket.assigned_custodian_id && (
-            <section className="ticket-section" style={{ padding: '0 12px 10px' }}>
-              <h4 style={{ margin: '0 -12px 8px', padding: '7px 12px', fontSize: '0.75rem' }}><Icon name="search" size={14} /> Custodian Inspection</h4>
-              <p style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', margin: '0 0 4px' }}>
-                Assigned to <UserAvatarName user={ticket.assigned_custodian} />
-                {ticket.inspection_result && <>· Result: <TicketStatusBadge value={ticket.inspection_result} /></>}
-              </p>
-              {ticket.inspection_notes && <p className="muted" style={{ margin: '0 0 4px' }}>{ticket.inspection_notes}</p>}
-              {ticket.inspected_at && <p className="muted" style={{ margin: 0, fontSize: '0.78rem' }}>Inspected by <span style={{ color: '#7c3aed', fontWeight: 600 }}>{ticket.inspected_by?.name}</span> on {formatDate(ticket.inspected_at)}</p>}
+              <p className="muted" style={{ margin: 0, fontSize: '0.82rem' }}>{ticket.ticket_description}</p>
             </section>
-          )}
 
+            {ticket.assigned_custodian_id && (
+              <section className="ticket-section" style={{ padding: '0 12px 10px' }}>
+                <h4 style={{ margin: '0 -12px 8px', padding: '7px 12px', fontSize: '0.75rem' }}><Icon name="search" size={14} /> Custodian Inspection</h4>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: (ticket.inspection_notes ? 8 : 0) }}>
+                  <div>
+                    <span style={{ display: 'block', fontSize: '0.66rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 2 }}>Assigned To</span>
+                    <UserAvatarName user={ticket.assigned_custodian} />
+                  </div>
+                  {ticket.inspection_result && (
+                    <div>
+                      <span style={{ display: 'block', fontSize: '0.66rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 2 }}>Result</span>
+                      <TicketStatusBadge value={ticket.inspection_result} />
+                    </div>
+                  )}
+                  {ticket.inspected_by && (
+                    <div>
+                      <span style={{ display: 'block', fontSize: '0.66rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 2 }}>Inspected By</span>
+                      <UserAvatarName user={ticket.inspected_by} />
+                    </div>
+                  )}
+                  {ticket.inspected_at && (
+                    <div>
+                      <span style={{ display: 'block', fontSize: '0.66rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 2 }}>Date</span>
+                      <DateBadge value={ticket.inspected_at} />
+                    </div>
+                  )}
+                </div>
+                {ticket.inspection_notes && <p className="muted" style={{ margin: 0, fontSize: '0.82rem' }}>{ticket.inspection_notes}</p>}
+              </section>
+            )}
+
+            {/* Recaps the ticket's own lifecycle dates in one place — also
+                fills the left column so it doesn't end in a large empty gap
+                below the (usually taller) Sub-Issues column on the right. */}
+            <section className="ticket-section" style={{ padding: '0 12px 10px' }}>
+              <h4 style={{ margin: '0 -12px 8px', padding: '7px 12px', fontSize: '0.75rem' }}><Icon name="calendar" size={14} /> Ticket Timeline</h4>
+              <div style={{ display: 'flex', flexDirection: 'column' }}>
+                {[
+                  { label: 'Created', at: ticket.created_at, by: ticket.created_by, icon: 'clipboard' },
+                  ticket.assigned_at && { label: 'Assigned to Custodian', at: ticket.assigned_at, by: ticket.assigned_custodian, icon: 'search' },
+                  ticket.inspected_at && { label: 'Inspected', at: ticket.inspected_at, by: ticket.inspected_by, icon: 'search' },
+                  ticket.closed_at && { label: 'Closed', at: ticket.closed_at, by: ticket.closed_by, icon: 'checkCircle' },
+                ].filter(Boolean).map((ev, i, all) => (
+                  <div key={ev.label} style={{ display: 'flex', gap: 10 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flexShrink: 0 }}>
+                      <span style={{ width: 20, height: 20, borderRadius: '50%', background: '#eff6ff', color: '#2563eb', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                        <Icon name={ev.icon} size={11} />
+                      </span>
+                      {i < all.length - 1 && <span style={{ width: 2, flex: 1, minHeight: 18, background: '#e2e8f0', marginTop: 2 }} />}
+                    </div>
+                    <div style={{ paddingBottom: 10 }}>
+                      <p style={{ margin: '0 0 3px', fontSize: '0.82rem', fontWeight: 700, color: '#0f172a' }}>{ev.label}</p>
+                      {ev.by?.name && <p className="muted" style={{ margin: '0 0 4px', fontSize: '0.76rem' }}>by {ev.by.name}</p>}
+                      <DateBadge value={ev.at} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </div>
+
+          <div className="ticket-detail-col-right">
           {ticket.status !== 'Open' && (
             <section className="ticket-section" style={{ padding: '0 12px 10px' }}>
               <h4 style={{ margin: '0 -12px 8px', padding: '7px 12px', fontSize: '0.75rem' }}><Icon name="wrench" size={14} /> Sub-Issues under "{ticket.ticket_title}"</h4>
@@ -5259,32 +5706,23 @@ function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm,
                     <TicketStatusBadge value={si.status} />
                   </div>
 
+                  {/* Compact single-line meta strip — was a 4-box label/value
+                      grid; each value is now self-descriptive (avatar =
+                      mechanic, wrench icon = category, ₱ = cost, colored
+                      badge = verdict), which cuts the block's height by more
+                      than half without losing any information. */}
                   {(si.assigned_mechanic || si.maintenance_type || si.verification_verdict || (si.maintenance_cost !== null && si.maintenance_cost !== undefined)) && (
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 8, marginTop: 8, padding: '8px 10px', background: '#f8fafc', borderRadius: 8 }}>
-                      {si.assigned_mechanic && (
-                        <div>
-                          <span style={{ display: 'block', fontSize: '0.66rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 2 }}>Mechanic</span>
-                          <UserAvatarName user={si.assigned_mechanic} />
-                        </div>
-                      )}
+                    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px 10px', marginTop: 8, padding: '6px 9px', background: '#f8fafc', borderRadius: 8, fontSize: '0.8rem' }}>
+                      {si.assigned_mechanic && <UserAvatarName user={si.assigned_mechanic} />}
                       {si.maintenance_type && (
-                        <div>
-                          <span style={{ display: 'block', fontSize: '0.66rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 2 }}>Category</span>
-                          <strong style={{ fontSize: '0.85rem' }}>{si.maintenance_type}</strong>
-                        </div>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: '#475569' }}>
+                          <Icon name="wrench" size={11} /> {si.maintenance_type}
+                        </span>
                       )}
                       {si.maintenance_cost !== null && si.maintenance_cost !== undefined && (
-                        <div>
-                          <span style={{ display: 'block', fontSize: '0.66rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 2 }}>Cost</span>
-                          <strong style={{ fontSize: '0.85rem', color: '#16a34a' }}>₱{Number(si.maintenance_cost).toLocaleString('en-US', { minimumFractionDigits: 2 })}</strong>
-                        </div>
+                        <strong style={{ color: '#16a34a' }}>₱{Number(si.maintenance_cost).toLocaleString('en-US', { minimumFractionDigits: 2 })}</strong>
                       )}
-                      {si.verification_verdict && (
-                        <div>
-                          <span style={{ display: 'block', fontSize: '0.66rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 2 }}>Custodian Verdict</span>
-                          <TicketStatusBadge value={si.verification_verdict} />
-                        </div>
-                      )}
+                      {si.verification_verdict && <TicketStatusBadge value={si.verification_verdict} />}
                     </div>
                   )}
 
@@ -5298,7 +5736,12 @@ function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm,
                   )}
 
                   {si.repair_logs && <div style={{ marginTop: 8 }}><RepairLogEntries text={si.repair_logs} compact /></div>}
-                  {si.parts_used && <div style={{ marginTop: 8 }}><PartsTags value={si.parts_used} /></div>}
+                  {si.parts_used && (
+                    <div style={{ marginTop: 8 }}>
+                      <span style={{ display: 'block', fontSize: '0.66rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 3 }}>Parts Used</span>
+                      <PartsTags value={si.parts_used} />
+                    </div>
+                  )}
                   {si.attachment_url && (
                     <p style={{ marginTop: 8 }}>
                       <a href={resolvePhotoUrl(si.attachment_url)} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '0.85rem' }}>
@@ -5306,8 +5749,49 @@ function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm,
                       </a>
                     </p>
                   )}
-                  {si.confirmation_verdict && (
+                  {Array.isArray(si.functional_test) && si.functional_test.length > 0 && (
+                    <div style={{ marginTop: 8, padding: '8px 10px', background: '#f8fafc', borderRadius: 8, border: '1px solid #e2e8f0' }}>
+                      <span style={{ display: 'block', fontSize: '0.66rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 5 }}>
+                        Functional Test{si.test_attested ? ' · operator-attested' : ''}
+                      </span>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                        {si.functional_test.map((t, ti) => (
+                          <span key={ti} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: '0.76rem', padding: '2px 8px', borderRadius: 999, background: t.passed ? '#ecfdf5' : '#fef2f2', color: t.passed ? '#065f46' : '#991b1b', border: `1px solid ${t.passed ? '#a7f3d0' : '#fecaca'}` }}>
+                            <Icon name={t.passed ? 'checkCircle' : 'alert'} size={11} /> {t.item}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {si.confirmation_verdict && si.status !== 'Deferred' && (
                     <p className="muted" style={{ marginTop: 8 }}>Admin verdict: <TicketStatusBadge value={si.confirmation_verdict} /> {si.confirmation_notes}</p>
+                  )}
+
+                  {si.status === 'Deferred' && (
+                    <div style={{ marginTop: 8, padding: '8px 12px', background: '#fffbeb', borderLeft: '3px solid #f59e0b', borderRadius: 6, fontSize: '0.82rem', color: '#92400e' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <Icon name="alert" size={14} /> <strong>Deferred{si.deferred_by?.name ? ` by ${si.deferred_by.name}` : ''}</strong>
+                      </div>
+                      {si.deferred_reason && <p style={{ margin: '4px 0 0' }}>{si.deferred_reason}</p>}
+                      <p style={{ margin: '4px 0 0', fontStyle: 'italic', opacity: 0.85 }}>A follow-up issue report was opened so this defect isn't forgotten.</p>
+                    </div>
+                  )}
+
+                  {isAdmin && ticket.status === 'Active' && !isResolvedStatus(si.status) && (
+                    deferringId === si.sub_issue_id ? (
+                      <div className="ticket-inline-form" style={{ marginTop: 8, padding: '10px 12px' }}>
+                        <p className="muted" style={{ marginBottom: 8, fontSize: '0.8rem' }}>Record a decision not to fix this now (e.g. no budget, part on back-order). A follow-up issue report is opened automatically.</p>
+                        <SmartForm
+                          fields={[{ label: 'Reason for deferring', name: 'deferred_reason', required: true, type: 'textarea', rows: 2 }]}
+                          key={`defer-${si.sub_issue_id}`}
+                          onCancel={() => setDeferringId(null)}
+                          onSubmit={(payload) => onDeferSubIssue(ticket, si, payload).then(() => setDeferringId(null))}
+                          submitLabel="Defer This Sub-Issue"
+                          title=""
+                        />
+                      </div>
+                    ) : null
                   )}
 
                   {isAdmin && si.status === 'Open' && (
@@ -5346,11 +5830,23 @@ function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm,
                       <button className="primary-button" style={{ marginTop: 10 }} type="button" onClick={() => setConfirmingId(si.sub_issue_id)}>Issue Confirmation Verdict</button>
                     )
                   )}
+
+                  {/* Escape hatch for a line item that can't be finished (no
+                      budget, part unavailable). Available while unresolved. */}
+                  {isAdmin && ticket.status === 'Active' && !isResolvedStatus(si.status) && deferringId !== si.sub_issue_id && (
+                    <button
+                      type="button"
+                      onClick={() => { setDeferringId(si.sub_issue_id); setAssigningId(null); setConfirmingId(null); }}
+                      style={{ marginTop: 10, marginLeft: 8, background: 'none', border: '1px solid #f59e0b', color: '#b45309', borderRadius: 8, padding: '6px 12px', fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5 }}
+                    >
+                      <Icon name="alert" size={13} /> Defer (can't finish now)
+                    </button>
+                  )}
                 </div>
                 );
               })}
 
-              {isAdmin && ticket.status === 'Active' && (
+              {canAddSubIssue && (
                 addingSubIssue ? (
                   <div className="ticket-inline-form">
                     <SmartForm
@@ -5371,26 +5867,63 @@ function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm,
               )}
             </section>
           )}
+          </div>
         </div>
 
         <div className="ticket-detail-actions">
-          {isAdmin && ticket.status === 'Active' && !canClose && (
-            <p className="notice warning" style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}><Icon name="alert" size={15} /> Every sub-issue must be Done before this ticket can be closed ({progress.done}/{progress.total}).</p>
+          {/* The explanation and its action live in one visual unit, so the
+              recommended next step is never separated from why it's offered. */}
+          {isAdmin && canDecisionClose && !decisionClosing && (
+            <div className="notice warning" style={{ marginBottom: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Icon name="alert" size={15} /> {progress.done}/{progress.total} sub-issue(s) done. You can still finish or defer the rest — or close now as a decision, which records the leftovers as Deferred.
+              </span>
+              <button className="primary-button" type="button" style={{ background: '#d97706', borderColor: '#d97706', flexShrink: 0 }} onClick={() => setDecisionClosing(true)}>Close as Decision</button>
+            </div>
           )}
+
+          {/* Decision-close: end the ticket with unfinished work. The
+              leftovers become Deferred, and the Admin must justify it AND
+              make the fit-for-service call — closing a ticket no longer
+              blindly returns a possibly-unsafe vehicle to service. */}
+          {isAdmin && canDecisionClose && decisionClosing && (
+            <div className="ticket-inline-form" style={{ marginBottom: 12, padding: '12px 14px' }}>
+              <p className="muted" style={{ marginBottom: 10, fontSize: '0.82rem' }}>
+                Closing now will mark the {progress.total - progress.done - progress.deferred} unfinished sub-issue(s) as <strong>Deferred</strong>, each with a follow-up issue report so nothing is forgotten.
+              </p>
+              <SmartForm
+                fields={[
+                  { label: 'Reason for closing with unfinished work', name: 'deferral_reason', required: true, type: 'textarea', rows: 2 },
+                  { label: 'Is the vehicle fit to return to service?', name: 'returned_to_service', required: true, type: 'select', options: [
+                    { value: 'yes', label: 'Yes — safe to dispatch' },
+                    { value: 'no', label: 'No — keep it out of service' },
+                  ] },
+                ]}
+                key="decision-close"
+                onCancel={() => setDecisionClosing(false)}
+                onSubmit={(payload) => onCloseTicket(ticket, {
+                  deferral_reason: payload.deferral_reason,
+                  returned_to_service: payload.returned_to_service === 'yes',
+                }).then(() => setDecisionClosing(false))}
+                submitLabel="Close Ticket as Decision"
+                title=""
+              />
+            </div>
+          )}
+
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
             {ticket.status === 'Cancelled' && onUncancel && (
               <button className="primary-button" type="button" onClick={() => onUncancel(ticket)}>Restore Ticket</button>
             )}
             {isAdmin && canClose && (
-              <button className="primary-button" type="button" onClick={() => onCloseTicket(ticket)}>Close Ticket</button>
+              <button className="primary-button" type="button" onClick={() => onCloseTicket(ticket, {})}>Close Ticket</button>
             )}
             {ticket.status !== 'Closed' && ticket.status !== 'Cancelled' && (
               <button className="ghost-button" type="button" onClick={() => onCancel(ticket)}>Cancel Ticket</button>
             )}
-            {/* Once every sub-issue is Done (ready to close) or the ticket is
-                already Closed, there's real completed work on record —
-                Delete is only for genuine mistakes, not for discarding
-                finished repairs. */}
+            {/* Once every sub-issue is resolved (ready to close) or the ticket
+                is already Closed, there's real work on record — Delete is only
+                for genuine mistakes, not for discarding finished repairs. */}
             {ticket.status !== 'Closed' && !canClose && (
               <button className="danger-button" type="button" onClick={requestDelete}>Delete Ticket</button>
             )}
@@ -5408,7 +5941,7 @@ function TicketDetailPanel({ role, ticket, lookups, onAssignMechanic, onConfirm,
   );
 }
 
-function TicketProfilePage({ ticketId, role, ticketLookups, onBack, onDeleteTicket, onRequestConfirmation, ticketAction: sendTicketAction }) {
+function TicketProfilePage({ ticketId, role, userId, ticketLookups, onBack, onDeleteTicket, onRequestConfirmation, ticketAction: sendTicketAction }) {
   const [ticket, setTicket] = useState(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
@@ -5440,12 +5973,14 @@ function TicketProfilePage({ ticketId, role, ticketLookups, onBack, onDeleteTick
     <TicketDetailPanel
       asPage
       role={role}
+      userId={userId}
       ticket={ticket}
       lookups={ticketLookups}
       onAssignMechanic={(t, subIssue, payload) => sendTicketAction(`/tickets/${t.ticket_id}/sub-issues/${subIssue.sub_issue_id}/assign-mechanic`, payload, 'Mechanic assigned — work order dispatched.').then(loadTicket)}
       onConfirm={(t, subIssue, payload) => sendTicketAction(`/tickets/${t.ticket_id}/sub-issues/${subIssue.sub_issue_id}/confirm`, payload, 'Confirmation verdict submitted.').then(loadTicket)}
       onAddSubIssue={(t, payload) => sendTicketAction(`/tickets/${t.ticket_id}/sub-issues`, payload, 'Sub-issue added.', 'post').then(loadTicket)}
-      onCloseTicket={(t) => sendTicketAction(`/tickets/${t.ticket_id}/close`, {}, 'Ticket closed.').then(loadTicket)}
+      onDeferSubIssue={(t, subIssue, payload) => sendTicketAction(`/tickets/${t.ticket_id}/sub-issues/${subIssue.sub_issue_id}/defer`, payload, 'Sub-issue deferred — a follow-up issue report was opened.').then(loadTicket)}
+      onCloseTicket={(t, payload = {}) => sendTicketAction(`/tickets/${t.ticket_id}/close`, payload, payload.deferral_reason ? 'Ticket closed as a decision.' : 'Ticket closed.').then(loadTicket)}
       onCancel={(t) => sendTicketAction(`/tickets/${t.ticket_id}/cancel`, {}, 'Ticket cancelled.').then(loadTicket)}
       onUncancel={(t) => sendTicketAction(`/tickets/${t.ticket_id}/uncancel`, {}, 'Ticket restored.').then(loadTicket)}
       onDelete={(t) => onDeleteTicket(t).then(onBack)}
@@ -5634,11 +6169,92 @@ function TicketModule({
 // VEHICLE DETAIL PANEL — shown when a vehicle row is clicked
 // =========================================================================
 
-function VehicleProfilePage({ vehicleId, lookups, allHubs, onBack, setNotice, onSaved, onViewTicket }) {
+// Gap A — the pre-deployment readiness checklist, by vehicle type. Distinct
+// from the post-repair functional test: this proves the vehicle is mission-
+// ready NOW (fuelled, equipped, working), regardless of whether it's broken.
+function readinessChecklist(vehicle) {
+  const domain = vehicle?.category?.domain ?? 'Land';
+  const name = (vehicle?.category?.category_name ?? '').toLowerCase();
+  if (domain === 'Water') return ['Fuel tank full', 'Life vests aboard', 'Bilge pump works', 'No water in the hull'];
+  if (name.includes('ambulance')) return ['Fuel tank full', 'Oxygen tank present', 'Lights & siren work', 'Stretcher aboard'];
+  if (name.includes('fire')) return ['Fuel tank full', 'Water tank full', 'Pump primes', 'Hoses aboard', 'Lights & siren work'];
+  return ['Fuel tank full', 'Lights work', 'Engine starts normally'];
+}
+
+const READINESS_BADGE = {
+  ready:          { label: 'Ready to respond', bg: '#ecfdf5', color: '#065f46', border: '#a7f3d0', icon: 'checkCircle' },
+  stale:          { label: 'Check stale — re-check', bg: '#fef3c7', color: '#92400e', border: '#fde68a', icon: 'alert' },
+  not_ready:      { label: 'NOT ready to respond', bg: '#fee2e2', color: '#b91c1c', border: '#fecaca', icon: 'alert' },
+  unchecked:      { label: 'Never checked', bg: '#f1f5f9', color: '#475569', border: '#cbd5e1', icon: 'alert' },
+  in_maintenance: { label: 'In maintenance', bg: '#fff7ed', color: '#9a3412', border: '#fed7aa', icon: 'wrench' },
+  retired:        { label: 'Out of fleet', bg: '#f1f5f9', color: '#475569', border: '#cbd5e1', icon: 'alert' },
+};
+
+function ReadinessCheckForm({ vehicle, onCancel, onSubmit }) {
+  const items = useMemo(() => readinessChecklist(vehicle), [vehicle]);
+  const [results, setResults] = useState(() => items.map((item) => ({ item, passed: null })));
+  const [notes, setNotes] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const allAnswered = results.every((r) => r.passed !== null);
+  const anyFailed = results.some((r) => r.passed === false);
+  const setResult = (i, passed) => setResults((rs) => rs.map((r, idx) => (idx === i ? { ...r, passed } : r)));
+
+  const submit = async () => {
+    if (!allAnswered || submitting) return;
+    setSubmitting(true);
+    try {
+      await onSubmit({ checklist: results.map((r) => ({ item: r.item, passed: r.passed === true })), notes: notes || null });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div>
+      <p className="muted" style={{ margin: '0 0 12px', fontSize: '0.85rem' }}>
+        Physically confirm the vehicle is ready to respond right now — fuelled, equipped, and working. Any failed item marks it NOT ready.
+      </p>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {results.map((r, i) => (
+          <div key={r.item} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '8px 10px', background: '#f8fafc', borderRadius: 8, border: '1px solid #e2e8f0' }}>
+            <span style={{ fontSize: '0.85rem' }}>{r.item}</span>
+            <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+              <button type="button" onClick={() => setResult(i, true)} style={{ padding: '4px 12px', borderRadius: 6, fontSize: '0.78rem', fontWeight: 600, cursor: 'pointer', border: `1px solid ${r.passed === true ? '#16a34a' : '#cbd5e1'}`, background: r.passed === true ? '#16a34a' : '#fff', color: r.passed === true ? '#fff' : '#64748b' }}>OK</button>
+              <button type="button" onClick={() => setResult(i, false)} style={{ padding: '4px 12px', borderRadius: 6, fontSize: '0.78rem', fontWeight: 600, cursor: 'pointer', border: `1px solid ${r.passed === false ? '#dc2626' : '#cbd5e1'}`, background: r.passed === false ? '#dc2626' : '#fff', color: r.passed === false ? '#fff' : '#64748b' }}>Fail</button>
+            </div>
+          </div>
+        ))}
+      </div>
+      {allAnswered && (
+        <div style={{ marginTop: 12, padding: '8px 12px', borderRadius: 8, fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: 8, background: anyFailed ? '#fef2f2' : '#ecfdf5', color: anyFailed ? '#991b1b' : '#065f46', border: `1px solid ${anyFailed ? '#fecaca' : '#a7f3d0'}` }}>
+          <Icon name={anyFailed ? 'alert' : 'checkCircle'} size={15} />
+          {anyFailed ? 'This vehicle will be marked NOT ready to respond.' : 'This vehicle will be marked verified ready to respond.'}
+        </div>
+      )}
+      <div style={{ marginTop: 12 }}>
+        <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: '#475569', marginBottom: 4 }}>Notes (optional)</label>
+        <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} style={{ width: '100%', borderRadius: 8, border: '1px solid #cbd5e1', padding: '8px 10px', fontSize: '0.85rem', fontFamily: 'inherit', resize: 'vertical' }} />
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 16 }}>
+        <button type="button" className="ghost-button" onClick={onCancel}>Cancel</button>
+        <button type="button" className="primary-button" onClick={submit} disabled={!allAnswered || submitting}>
+          {submitting ? 'Saving…' : 'Record Readiness Check'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function VehicleProfilePage({ vehicleId, lookups, allHubs, canManage = false, canCheckReadiness = false, onBack, setNotice, onSaved, onViewTicket, onRequestConfirmation }) {
   const location = useLocation();
   const [editing, setEditing] = useState(new URLSearchParams(location.search).get('tab') === 'edit');
   const [tabData, setTabData] = useState({});
   const [tabLoading, setTabLoading] = useState(false);
+  const [reliability, setReliability] = useState(null);
+  const [decommissioning, setDecommissioning] = useState(false);
+  const [readiness, setReadiness] = useState(null);
+  const [checkingReadiness, setCheckingReadiness] = useState(false);
 
   const vehicle = (lookups.vehicles ?? []).find((v) => String(v.vehicle_id) === String(vehicleId));
 
@@ -5663,6 +6279,56 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, onBack, setNotice, on
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vehicleId]);
+
+  // Gap 3 — per-vehicle reliability lens; Gap A — response-readiness state.
+  const loadReadiness = useCallback(() => {
+    api.get(`/vehicles/${vehicleId}/readiness`).then((r) => setReadiness(r.data)).catch(() => setReadiness(null));
+  }, [vehicleId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.get(`/vehicles/${vehicleId}/reliability`)
+      .then((r) => { if (!cancelled) setReliability(r.data); })
+      .catch(() => { if (!cancelled) setReliability(null); });
+    loadReadiness();
+    return () => { cancelled = true; };
+  }, [vehicleId, loadReadiness]);
+
+  const handleReadinessCheck = async (payload) => {
+    setNotice(null);
+    try {
+      await api.post(`/vehicles/${vehicleId}/readiness-check`, payload);
+      loadReadiness();
+      await onSaved();
+      setNotice({ type: 'success', text: 'Readiness check recorded.' });
+      setCheckingReadiness(false);
+    } catch (error) {
+      showError(error, setNotice);
+    }
+  };
+
+  const handleDecommission = async (reason) => {
+    setNotice(null);
+    try {
+      await api.put(`/vehicles/${vehicleId}/decommission`, { decommission_reason: reason });
+      await onSaved();
+      setNotice({ type: 'success', text: 'Vehicle decommissioned.' });
+      setDecommissioning(false);
+    } catch (error) {
+      showError(error, setNotice);
+    }
+  };
+
+  const handleRecommission = async () => {
+    setNotice(null);
+    try {
+      await api.post(`/vehicles/${vehicleId}/restore`);
+      await onSaved();
+      setNotice({ type: 'success', text: 'Vehicle recommissioned to active service.' });
+    } catch (error) {
+      showError(error, setNotice);
+    }
+  };
 
   if (!vehicle) {
     return (
@@ -5727,10 +6393,67 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, onBack, setNotice, on
           <span className="ticket-detail-id">{vehicle.plate_number}</span>
           <h3 className="ticket-detail-title">{vehicle.vehicle_name}</h3>
         </div>
-        <button className={editing ? 'ghost-button' : 'primary-button'} type="button" onClick={() => setEditing((e) => !e)}>
-          <Icon name={editing ? 'undo' : 'edit'} size={14} /> {editing ? 'Cancel Edit' : 'Edit Vehicle'}
-        </button>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {vehicle.status !== 'Decommissioned' && (
+            <button className={editing ? 'ghost-button' : 'primary-button'} type="button" onClick={() => setEditing((e) => !e)}>
+              <Icon name={editing ? 'undo' : 'edit'} size={14} /> {editing ? 'Cancel Edit' : 'Edit Vehicle'}
+            </button>
+          )}
+          {canCheckReadiness && !['Decommissioned', 'Inactive'].includes(vehicle.status) && !editing && (
+            <button className="ghost-button" type="button" onClick={() => setCheckingReadiness(true)}>
+              <Icon name="checkCircle" size={14} /> Readiness Check
+            </button>
+          )}
+          {canManage && vehicle.status !== 'Decommissioned' && !editing && (
+            <button className="danger-button" type="button" onClick={() => setDecommissioning(true)}>
+              <Icon name="alert" size={14} /> Decommission
+            </button>
+          )}
+          {canManage && vehicle.status === 'Decommissioned' && (
+            <button className="primary-button" type="button" onClick={() => onRequestConfirmation?.({
+              title: 'Recommission Vehicle',
+              message: `Bring ${vehicle.vehicle_name} back into active service? This reverses the decommission.`,
+              confirmLabel: 'Recommission',
+              onConfirm: handleRecommission,
+            })}>
+              <Icon name="undo" size={14} /> Recommission
+            </button>
+          )}
+        </div>
       </div>
+
+      {vehicle.status === 'Decommissioned' && (
+        <div style={{ margin: '0 0 16px', padding: '14px 18px', borderRadius: 12, background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontWeight: 700, marginBottom: 4 }}>
+            <Icon name="alert" size={18} /> Decommissioned — retired from the fleet
+          </div>
+          {vehicle.decommission_reason && <p style={{ margin: '4px 0 0' }}>Reason: {vehicle.decommission_reason}</p>}
+          {vehicle.decommissioned_at && <p style={{ margin: '4px 0 0', fontSize: '0.82rem', opacity: 0.85 }}>Retired {formatForecastDate(vehicle.decommissioned_at)}. Its history is preserved; it no longer counts toward readiness.</p>}
+        </div>
+      )}
+
+      <FormModal open={checkingReadiness} title={`Readiness Check — ${vehicle.vehicle_name}`} onClose={() => setCheckingReadiness(false)} confirmClose>
+        <ReadinessCheckForm
+          key={`readiness-${vehicle.vehicle_id}`}
+          vehicle={vehicle}
+          onCancel={() => setCheckingReadiness(false)}
+          onSubmit={handleReadinessCheck}
+        />
+      </FormModal>
+
+      <FormModal open={decommissioning} title={`Decommission ${vehicle.vehicle_name}`} onClose={() => setDecommissioning(false)} confirmClose>
+        <p className="muted" style={{ marginBottom: 12, fontSize: '0.85rem' }}>
+          This permanently retires the vehicle (end of life) and removes it from readiness/coverage. Its full history is kept, and an Admin can recommission it later if this was a mistake.
+        </p>
+        <SmartForm
+          fields={[{ label: 'Reason for decommissioning', name: 'decommission_reason', required: true, type: 'textarea', rows: 3 }]}
+          key="decommission"
+          onCancel={() => setDecommissioning(false)}
+          onSubmit={(payload) => handleDecommission(payload.decommission_reason)}
+          submitLabel="Decommission Vehicle"
+          title=""
+        />
+      </FormModal>
 
       {editing ? (
         <div className="form-grid-2col">
@@ -5778,6 +6501,14 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, onBack, setNotice, on
             <dl className="veh-kv">
               <div><dt>Availability</dt><dd><StatusBadge value={vehicle.status} /></dd></div>
               <div><dt>Condition</dt><dd><StatusBadge value={vehicle.condition} /></dd></div>
+              {readiness && READINESS_BADGE[readiness.state] && (
+                <div><dt>Response Readiness</dt><dd>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '0.76rem', fontWeight: 700, padding: '3px 10px', borderRadius: 999, background: READINESS_BADGE[readiness.state].bg, color: READINESS_BADGE[readiness.state].color, border: `1px solid ${READINESS_BADGE[readiness.state].border}` }}>
+                    <Icon name={READINESS_BADGE[readiness.state].icon} size={11} /> {READINESS_BADGE[readiness.state].label}
+                  </span>
+                  {readiness.last_checked && <div className="muted" style={{ fontSize: '0.72rem', marginTop: 3 }}>Last checked {formatForecastDate(readiness.last_checked)}</div>}
+                </dd></div>
+              )}
               <div><dt>Current Location</dt><dd>{vehicle.current_location ?? '-'}</dd></div>
               {vehicle.estimated_return_date && (
                 <div><dt>Est. Return Date</dt><dd>{formatForecastDate(vehicle.estimated_return_date)}</dd></div>
@@ -5812,6 +6543,24 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, onBack, setNotice, on
               </>
             )}
           </section>
+
+          {reliability && (
+            <section className="veh-card veh-analytics">
+              <div className="veh-card-head"><Icon name="wrench" size={16} /><h4>Reliability</h4></div>
+              {reliability.chronic && (
+                <div style={{ margin: '0 0 12px', padding: '10px 12px', borderRadius: 10, background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b', display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600, fontSize: '0.85rem' }}>
+                  <Icon name="alert" size={16} /> Chronic unit — failing often{reliability.has_recurring ? ' (with recurring issues)' : ''}. Consider a deeper diagnosis or decommissioning.
+                </div>
+              )}
+              <div className="veh-stat-grid">
+                <div className="veh-stat"><span>{reliability.failures_6mo}</span><small>Failures (6 mo)</small></div>
+                <div className="veh-stat"><span>{reliability.failures_12mo}</span><small>Failures (12 mo)</small></div>
+                <div className="veh-stat"><span>{reliability.avg_days_out ?? '—'}</span><small>Avg Days Out</small></div>
+                <div className="veh-stat"><span>₱{Number(reliability.total_spend ?? 0).toLocaleString()}</span><small>Lifetime Repair Spend</small></div>
+              </div>
+              <p className="veh-hint">A vehicle that keeps failing is a reliability signal — for an emergency unit, that's a safety concern, not just a cost.</p>
+            </section>
+          )}
 
           <section className="veh-card veh-map">
             <div className="veh-card-head"><Icon name="pin" size={16} /><h4>Current Location — {vehicle.current_location ?? 'Unknown'}</h4></div>
@@ -6242,14 +6991,12 @@ function CustodianVerificationModule({
           )
         }
       </section>
-      <FormModal open={!!editTarget} title={`Verify Repair — ${editTarget?.ticket_title ? `${editTarget.ticket_title}: ` : ''}${editTarget?.title ?? `Ticket #${editTarget?.ticket_id}`}`} onClose={onCancelEdit} confirmClose>
-        <SmartForm
-          fields={verifyRepairFields}
-          key={editTarget?.ticket_id}
+      <FormModal open={!!editTarget} title={`Functional Test — ${editTarget?.ticket_title ? `${editTarget.ticket_title}: ` : ''}${editTarget?.title ?? `Ticket #${editTarget?.ticket_id}`}`} onClose={onCancelEdit} confirmClose>
+        <VerificationForm
+          key={editTarget?.sub_issue_id ?? editTarget?.ticket_id}
+          target={editTarget}
           onCancel={onCancelEdit}
           onSubmit={(payload) => onVerify(editTarget, payload)}
-          submitLabel="Submit Verification"
-          title=""
         />
         <div style={{marginTop: '16px', paddingTop: '12px', borderTop: '1px solid var(--border-subtle)'}}>
           <p className="muted"><strong>Repair Log:</strong></p>

@@ -28,10 +28,15 @@ class Vehicle extends Model
         'estimated_return_date',
         'archived_at',
         'archived_by',
+        // Gap 4 — end-of-life (decommission)
+        'decommission_reason',
+        'decommissioned_by',
+        'decommissioned_at',
     ];
 
     protected $casts = [
         'archived_at' => 'datetime',
+        'decommissioned_at' => 'datetime',
         // Serialize as a plain Y-m-d string so it binds directly to a
         // native <input type="date"> on the frontend.
         'estimated_return_date' => 'date:Y-m-d',
@@ -45,6 +50,26 @@ class Vehicle extends Model
     public function archivedBy()
     {
         return $this->belongsTo(User::class, 'archived_by');
+    }
+
+    public function decommissionedBy()
+    {
+        return $this->belongsTo(User::class, 'decommissioned_by');
+    }
+
+    public function schedules()
+    {
+        return $this->hasMany(VehicleMaintenanceSchedule::class, 'vehicle_id', 'vehicle_id');
+    }
+
+    public function readinessChecks()
+    {
+        return $this->hasMany(VehicleReadinessCheck::class, 'vehicle_id', 'vehicle_id');
+    }
+
+    public function tickets()
+    {
+        return $this->hasMany(MaintenanceTicket::class, 'vehicle_id', 'vehicle_id');
     }
 
     public function issueReports()
