@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Http\Controllers\Concerns\UploadsImages;
 use App\Models\ActivityLog;
 use App\Models\MaintenanceTicket;
+use App\Models\TicketSubIssue;
 use App\Models\User;
 use App\Models\Vehicle;
 use App\Models\VehicleCategory;
@@ -15,6 +16,7 @@ use App\Models\VehicleIssueReport;
 use App\Models\VehicleLocation;
 use App\Models\VehicleMaintenanceRecord;
 use App\Models\VehicleMaintenanceSchedule;
+use App\Models\VehicleReadinessCheck;
 use App\Rules\NumberOnly;
 use App\Rules\TextOnly;
 use Illuminate\Http\Request;
@@ -24,6 +26,12 @@ use Illuminate\Validation\Rule;
 class FleetController extends Controller
 {
     use UploadsImages;
+
+    private const HULL_MATERIAL_OPTIONS = ['Fiberglass', 'Aluminum', 'Steel', 'Wood', 'Rubber/Inflatable'];
+
+    // Gap A — a passed readiness check is only "fresh" for this many hours;
+    // older than this and the vehicle reads "stale — needs re-check".
+    private const READINESS_FRESHNESS_HOURS = 24;
 
     private array $issueTypes = [
         'Engine Problem',
@@ -62,7 +70,7 @@ class FleetController extends Controller
                 ->whereNot('status', 'Resolved')
                 ->latest('issue_report_id')
                 ->get(),
-            'maintenance_personnel' => User::where('role', 'Maintenance Personnel')
+            'maintenance_personnel' => User::havingRole('Maintenance Personnel')
                 ->orderBy('name')
                 ->get(['id', 'name', 'email', 'role']),
             'issue_types' => $this->issueTypes,
@@ -70,7 +78,7 @@ class FleetController extends Controller
             'severity_levels' => ['Low', 'Medium', 'High', 'Critical'],
             // 'In Use' exists in the DB enum but is intentionally not offered —
             // this system tracks availability only; nothing ever sets In Use.
-            'vehicle_statuses' => ['Available', 'Under Maintenance', 'Inactive'],
+            'vehicle_statuses' => ['Available', 'Under Maintenance', 'Inactive', 'Decommissioned'],
             'condition_results' => ['Good', 'Needs Inspection', 'Needs Repair', 'Damaged'],
             'issue_statuses' => ['Pending', 'Under Review', 'In Maintenance', 'Resolved'],
             'maintenance_statuses' => ['Assigned', 'Under Repair', 'For Verification', 'Completed'],
@@ -81,7 +89,8 @@ class FleetController extends Controller
     public function dashboard(Request $request)
     {
         $this->syncVehicleStatuses();
-        $role = $request->user()->role;
+        $user = $request->user();
+        $latestChecks = $this->latestReadinessChecks();
         $activeIssues = VehicleIssueReport::whereNot('status', 'Resolved')
             ->whereHas('vehicle', fn ($q) => $q->where('status', '!=', 'Inactive'))
             ->count();
@@ -98,24 +107,24 @@ class FleetController extends Controller
             ['label' => 'Vehicles Under Maintenance', 'value' => Vehicle::where('status', 'Under Maintenance')->count()],
         ];
 
-        if ($role === 'Admin') {
+        if ($user->hasRole('Admin')) {
             $metrics[] = ['label' => 'Inactive Vehicles', 'value' => Vehicle::where('status', 'Inactive')->count()];
             $metrics[] = ['label' => 'Reported Issues', 'value' => $activeIssues];
             $metrics[] = ['label' => 'Upcoming Maintenance', 'value' => $upcomingMaintenance];
             $metrics[] = ['label' => 'Overdue Maintenance', 'value' => $overdueMaintenance];
 
-            // Maintenance Records already include every confirmed ticket's cost
-            // (auto-copied on ticket confirmation), so records + still-active
-            // tickets covers all expenses exactly once — direct logs included.
+            // Maintenance Records already include every confirmed sub-issue's cost
+            // (auto-copied the moment Admin confirms it Done), so records + still
+            // not-yet-Done sub-issues covers all expenses exactly once.
             $totalExpenses = VehicleMaintenanceRecord::sum('maintenance_cost')
-                + MaintenanceTicket::whereNotIn('status', ['Done', 'Cancelled'])->sum('maintenance_cost');
+                + TicketSubIssue::where('status', '!=', 'Done')->sum('maintenance_cost');
             $metrics[] = [
                 'label' => 'Total Maintenance Expenses',
                 'value' => '₱' . number_format($totalExpenses, 2)
             ];
         }
 
-        if ($role === 'Custodian') {
+        if ($user->hasRole('Custodian')) {
             $metrics[] = ['label' => 'Reported Issues', 'value' => $activeIssues];
             $metrics[] = [
                 'label' => 'My Reported Issues',
@@ -123,7 +132,7 @@ class FleetController extends Controller
             ];
         }
 
-        if ($role === 'Maintenance Personnel') {
+        if ($user->hasRole('Maintenance Personnel')) {
             // Append to (not replace) the base $metrics array — it already carries
             // Total/Available/Under Maintenance vehicle counts, which the Fleet
             // Status donut and Operations Queue panels below rely on regardless
@@ -144,20 +153,42 @@ class FleetController extends Controller
             ];
         }
 
+        // A multi-hat user (e.g. Custodian + Maintenance) can accumulate the
+        // same metric from two blocks — keep the first of each label.
+        $seenLabels = [];
+        $metrics = array_values(array_filter($metrics, function ($m) use (&$seenLabels) {
+            if (isset($seenLabels[$m['label']])) {
+                return false;
+            }
+            $seenLabels[$m['label']] = true;
+            return true;
+        }));
+
         return response()->json([
             'metrics' => $metrics,
             'badge_counts' => [
-                'issues' => $activeIssues,
-                'tickets' => MaintenanceTicket::whereNotIn('status', ['Done', 'Cancelled'])->count(),
+                // Match the badge to what the module list actually shows: a
+                // Custodian's issue list is scoped to their OWN reports, so
+                // the badge counts their own unresolved issues (not fleet-wide
+                // — that would count other people's reports and breadcrumbs).
+                'issues' => ($user->hasRole('Custodian') && !$user->hasRole('Admin'))
+                    ? VehicleIssueReport::where('reported_by', $user->id)
+                        ->whereNot('status', 'Resolved')
+                        ->whereHas('vehicle', fn ($q) => $q->where('status', '!=', 'Inactive'))
+                        ->count()
+                    : $activeIssues,
+                'tickets' => MaintenanceTicket::whereNotIn('status', ['Closed', 'Cancelled'])->count(),
                 'conditions' => Vehicle::whereIn('condition', ['Needs Inspection', 'Needs Repair', 'Damaged'])->count(),
                 'schedules' => $upcomingMaintenance,
                 'ticketInspections' => MaintenanceTicket::where('assigned_custodian_id', $request->user()->id)
                     ->where('status', 'Open')
                     ->count(),
-                'ticketVerifications' => MaintenanceTicket::where('assigned_custodian_id', $request->user()->id)
-                    ->where('status', 'For Inspection')
+                // Verification/work-order badges now count SUB-ISSUES, not
+                // tickets — assignment and verification happen per line item.
+                'ticketVerifications' => TicketSubIssue::where('status', 'For Inspection')
+                    ->whereHas('ticket', fn ($q) => $q->where('assigned_custodian_id', $request->user()->id))
                     ->count(),
-                'ticketWorkOrders' => MaintenanceTicket::where('assigned_mechanic_id', $request->user()->id)
+                'ticketWorkOrders' => TicketSubIssue::where('assigned_mechanic_id', $request->user()->id)
                     ->where('status', 'Under Repair')
                     ->count(),
             ],
@@ -193,6 +224,229 @@ class FleetController extends Controller
                 ->whereDate('scheduled_date', '<', now()->toDateString())
                 ->orderBy('scheduled_date')
                 ->get(['schedule_id', 'vehicle_id', 'maintenance_type', 'scheduled_date']),
+
+            // Gap 1 — Readiness/Coverage: don't ask "is this vehicle up?", ask
+            // "for each emergency function, do we have a ready unit?". Now also
+            // reports "verified ready" (Gap A) alongside merely "available".
+            'readiness' => $this->fleetReadiness($latestChecks),
+
+            // Gap 2 — Preventive maintenance with teeth: overdue/due-soon PM is
+            // surfaced as an at-risk signal instead of a silent calendar list.
+            'preventive_watch' => $this->preventiveWatch(),
+
+            // Gap A — available vehicles whose readiness check is stale, failed,
+            // or never done: "available" but not verified ready to respond.
+            'readiness_watch' => $this->readinessWatch($latestChecks),
+
+            // Gap B — standing single-point-of-failure risk, visible even while
+            // the lone unit is still healthy.
+            'fragility' => $this->fragility(),
+
+            // Gap C — what's breaking most across the whole fleet (12 months).
+            'failure_patterns' => $this->failurePatterns(),
+        ]);
+    }
+
+    /** Latest readiness check per vehicle, keyed by vehicle_id. */
+    private function latestReadinessChecks()
+    {
+        return VehicleReadinessCheck::orderByDesc('checked_at')
+            ->get()
+            ->unique('vehicle_id')
+            ->keyBy('vehicle_id');
+    }
+
+    /**
+     * Gap A — a vehicle's "ready to respond" state. "Available" is necessary
+     * but not sufficient: only a recent passing check makes it verified ready.
+     */
+    private function responseReadinessState(Vehicle $vehicle, $latest): string
+    {
+        if (in_array($vehicle->status, ['Inactive', 'Decommissioned'], true)) {
+            return 'retired';
+        }
+        if ($vehicle->status !== 'Available') {
+            return 'in_maintenance';
+        }
+        if (!$latest) {
+            return 'unchecked';
+        }
+        if (!$latest->all_passed) {
+            return 'not_ready';
+        }
+
+        return $latest->checked_at->gte(now()->subHours(self::READINESS_FRESHNESS_HOURS))
+            ? 'ready'
+            : 'stale';
+    }
+
+    /**
+     * Gap 1 — coverage grouped by vehicle type. A category whose ready count
+     * hits zero is a NO-COVERAGE alarm (e.g. the only ambulance is down).
+     */
+    private function fleetReadiness($latestChecks = null): array
+    {
+        $latestChecks = $latestChecks ?? $this->latestReadinessChecks();
+
+        return Vehicle::with('category')
+            ->whereNotIn('status', ['Inactive', 'Decommissioned'])
+            ->get()
+            ->groupBy(fn ($v) => $v->category?->category_name ?? 'Uncategorized')
+            ->map(function ($group, $name) use ($latestChecks) {
+                $total = $group->count();
+                $ready = $group->where('status', 'Available')->count();
+                // "Verified ready" = Available AND passed a fresh readiness check.
+                $verifiedReady = $group->filter(
+                    fn ($v) => $this->responseReadinessState($v, $latestChecks->get($v->vehicle_id)) === 'ready'
+                )->count();
+                return [
+                    'category'       => $name,
+                    'ready'          => $ready,
+                    'verified_ready' => $verifiedReady,
+                    'down'           => $total - $ready,
+                    'total'          => $total,
+                    'no_coverage'    => $ready === 0 && $total > 0,
+                ];
+            })
+            ->sortBy('category')
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Gap A — available vehicles that are NOT verified ready: their readiness
+     * check is stale, failed, or was never done. "Available" but unproven.
+     */
+    private function readinessWatch($latestChecks): array
+    {
+        return Vehicle::with('category')
+            ->where('status', 'Available')
+            ->get()
+            ->map(function ($v) use ($latestChecks) {
+                $latest = $latestChecks->get($v->vehicle_id);
+                return [
+                    'vehicle_id'   => $v->vehicle_id,
+                    'vehicle_name' => $v->vehicle_name,
+                    'plate_number' => $v->plate_number,
+                    'category'     => $v->category?->category_name,
+                    'state'        => $this->responseReadinessState($v, $latest),
+                    'last_checked' => $latest?->checked_at,
+                ];
+            })
+            ->filter(fn ($r) => in_array($r['state'], ['stale', 'not_ready', 'unchecked'], true))
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Gap B — single-point-of-failure map. A vehicle type with only ONE
+     * operational unit is a standing risk (one breakdown from zero coverage),
+     * flagged even while that lone unit is still healthy.
+     */
+    private function fragility(): array
+    {
+        return Vehicle::with('category')
+            ->whereNotIn('status', ['Inactive', 'Decommissioned'])
+            ->get()
+            ->groupBy(fn ($v) => $v->category?->category_name ?? 'Uncategorized')
+            ->map(function ($group, $name) {
+                $operational = $group->count();
+                $ready = $group->where('status', 'Available')->count();
+                return [
+                    'category'          => $name,
+                    'operational'       => $operational,
+                    'ready'             => $ready,
+                    'single_point'      => $operational === 1,
+                    // Worse: the lone unit is not just single, it's currently down.
+                    'critical'          => $operational === 1 && $ready === 0,
+                ];
+            })
+            ->filter(fn ($r) => $r['single_point'])
+            ->sortBy('category')
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Gap C — what's breaking most across the WHOLE fleet in the last 12
+     * months, so a systemic cause (bad roads, a bad supplier) surfaces instead
+     * of hiding as unrelated one-off tickets.
+     */
+    private function failurePatterns(): array
+    {
+        return VehicleMaintenanceRecord::where('created_at', '>=', now()->subMonths(12))
+            ->get()
+            ->groupBy(fn ($r) => $r->maintenance_type ?? 'Other')
+            ->map(fn ($group, $type) => ['type' => $type, 'count' => $group->count()])
+            ->sortByDesc('count')
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Gap 2 — vehicles whose preventive maintenance is overdue or due within
+     * 7 days, so prevention is visible BEFORE a breakdown, not after.
+     */
+    private function preventiveWatch(): array
+    {
+        $soon = now()->addDays(7)->toDateString();
+        $today = now()->toDateString();
+
+        return VehicleMaintenanceSchedule::with('vehicle:vehicle_id,vehicle_name,plate_number,status')
+            ->where('status', 'Scheduled')
+            ->whereDate('scheduled_date', '<=', $soon)
+            ->orderBy('scheduled_date')
+            ->get()
+            ->filter(fn ($s) => $s->vehicle && !in_array($s->vehicle->status, ['Inactive', 'Decommissioned'], true))
+            ->map(fn ($s) => [
+                'schedule_id'      => $s->schedule_id,
+                'vehicle_id'       => $s->vehicle_id,
+                'vehicle_name'     => $s->vehicle->vehicle_name,
+                'plate_number'     => $s->vehicle->plate_number,
+                'maintenance_type' => $s->maintenance_type,
+                'scheduled_date'   => $s->scheduled_date,
+                'state'            => $s->scheduled_date < $today ? 'overdue' : 'due_soon',
+            ])
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Gap 3 — per-vehicle reliability lens. Reads the vehicle's own ticket +
+     * maintenance history back as actionable signals: how often it fails,
+     * what it has cost, how long it sits, and whether it's chronic.
+     */
+    public function vehicleReliability(Request $request, Vehicle $vehicle)
+    {
+        $sixMonthsAgo = now()->subMonths(6);
+        $twelveMonthsAgo = now()->subMonths(12);
+
+        $tickets = MaintenanceTicket::where('vehicle_id', $vehicle->vehicle_id)
+            ->whereNotIn('status', ['Cancelled'])
+            ->get();
+
+        $failures6 = $tickets->where('created_at', '>=', $sixMonthsAgo)->count();
+        $failures12 = $tickets->where('created_at', '>=', $twelveMonthsAgo)->count();
+
+        $closed = $tickets->whereNotNull('closed_at')->where('status', 'Closed');
+        $avgDaysOut = $closed->isNotEmpty()
+            ? round($closed->avg(fn ($t) => $t->created_at->diffInDays($t->closed_at)), 1)
+            : null;
+
+        $totalSpend = (float) VehicleMaintenanceRecord::where('vehicle_id', $vehicle->vehicle_id)->sum('maintenance_cost');
+
+        // Chronic = 3+ tickets in the last 6 months, or any ticket that came
+        // back as a recurrence of a previously-fixed issue.
+        $hasRecurring = $tickets->contains(fn ($t) => ($t->recurrence_count ?? 0) > 0);
+        $chronic = $failures6 >= 3 || $hasRecurring;
+
+        return response()->json([
+            'failures_6mo'   => $failures6,
+            'failures_12mo'  => $failures12,
+            'avg_days_out'   => $avgDaysOut,
+            'total_spend'    => $totalSpend,
+            'has_recurring'  => $hasRecurring,
+            'chronic'        => $chronic,
         ]);
     }
 
@@ -380,18 +634,134 @@ class FleetController extends Controller
     {
         $this->requireRole($request, ['Admin']);
 
-        abort_unless($vehicle->status === 'Inactive', 422, 'Vehicle is not archived.');
+        // Restore reverses either a temporary archive OR a decommission (an
+        // Admin undoing a mistaken write-off) — both bring the unit back to
+        // active service and clear whichever end-state it was in.
+        abort_unless(
+            in_array($vehicle->status, ['Inactive', 'Decommissioned'], true),
+            422,
+            'Vehicle is not archived or decommissioned.'
+        );
+
+        $wasDecommissioned = $vehicle->status === 'Decommissioned';
 
         $vehicle->update([
             'status' => 'Available',
+            'condition' => 'Good',
             'archived_at' => null,
             'archived_by' => null,
             'estimated_return_date' => null,
+            'decommission_reason' => null,
+            'decommissioned_by' => null,
+            'decommissioned_at' => null,
         ]);
-        $this->history($vehicle, 'Vehicle Restored', "{$vehicle->vehicle_name} was restored to active service.", 'vehicles', $vehicle->vehicle_id, $request);
-        $this->log($request, 'Restore', 'Vehicle Management', $vehicle->vehicle_id, "Restored vehicle {$vehicle->vehicle_name}");
+
+        $verb = $wasDecommissioned ? 'recommissioned' : 'restored';
+        $this->history($vehicle, 'Vehicle Restored', "{$vehicle->vehicle_name} was {$verb} to active service.", 'vehicles', $vehicle->vehicle_id, $request);
+        $this->log($request, 'Restore', 'Vehicle Management', $vehicle->vehicle_id, ucfirst($verb) . " vehicle {$vehicle->vehicle_name}");
 
         return response()->json($vehicle->fresh(['category', 'archivedBy']));
+    }
+
+    /**
+     * Gap 4 — retire a vehicle at end-of-life. Distinct from archiving: it's
+     * a documented, reason-stamped write-off that pulls the unit out of the
+     * readiness/coverage math for good (its history is kept). Open tickets
+     * must be settled first — a beyond-repair vehicle's unfinishable ticket
+     * is exactly what decision-close (Problem 1) exists for.
+     */
+    public function decommissionVehicle(Request $request, Vehicle $vehicle)
+    {
+        $this->requireRole($request, ['Admin']);
+
+        abort_if($vehicle->status === 'Decommissioned', 422, 'This vehicle is already decommissioned.');
+
+        $openTickets = MaintenanceTicket::where('vehicle_id', $vehicle->vehicle_id)
+            ->whereNotIn('status', ['Closed', 'Cancelled'])
+            ->count();
+        abort_if($openTickets > 0, 422, 'Close or cancel this vehicle\'s open ticket(s) before decommissioning it.');
+
+        $data = $request->validate([
+            'decommission_reason' => ['required', 'string'],
+        ]);
+
+        $vehicle->update([
+            'status' => 'Decommissioned',
+            'condition' => 'Damaged',
+            'estimated_return_date' => null,
+            'decommission_reason' => $data['decommission_reason'],
+            'decommissioned_by' => $request->user()->id,
+            'decommissioned_at' => now(),
+        ]);
+
+        $this->history($vehicle, 'Vehicle Decommissioned', "{$vehicle->vehicle_name} was decommissioned (end of life): {$data['decommission_reason']}", 'vehicles', $vehicle->vehicle_id, $request);
+        $this->log($request, 'Decommission', 'Vehicle Management', $vehicle->vehicle_id, "Decommissioned vehicle {$vehicle->vehicle_name}");
+
+        return response()->json($vehicle->fresh(['category', 'decommissionedBy']));
+    }
+
+    /**
+     * Gap A — record a pre-deployment readiness check. A vehicle is only
+     * "verified ready to respond" after a recent passing check; this is the
+     * proof that it will actually start, move, and do its job — not just that
+     * it has no open repair.
+     */
+    public function storeReadinessCheck(Request $request, Vehicle $vehicle)
+    {
+        $this->requireRole($request, ['Admin', 'Custodian']);
+        abort_if(
+            in_array($vehicle->status, ['Inactive', 'Decommissioned'], true),
+            422,
+            'This vehicle is out of the fleet and cannot be readiness-checked.'
+        );
+
+        $data = $request->validate([
+            'checklist'          => ['required', 'array', 'min:1'],
+            'checklist.*.item'   => ['required', 'string', 'max:255'],
+            'checklist.*.passed' => ['required', 'boolean'],
+            'notes'              => ['nullable', 'string'],
+        ]);
+
+        $allPassed = collect($data['checklist'])->every(fn ($i) => $i['passed']);
+
+        $check = VehicleReadinessCheck::create([
+            'vehicle_id' => $vehicle->vehicle_id,
+            'checked_by' => $request->user()->id,
+            'checklist'  => $data['checklist'],
+            'all_passed' => $allPassed,
+            'notes'      => $data['notes'] ?? null,
+            'checked_at' => now(),
+        ]);
+
+        $verb = $allPassed ? 'passed' : 'failed';
+        $this->history($vehicle, 'Readiness Check', ucfirst($verb) . " a readiness check.", 'vehicle_readiness_checks', $check->readiness_check_id, $request);
+        $this->log($request, 'Readiness Check', 'Vehicle Management', $vehicle->vehicle_id, "Readiness check {$verb} for {$vehicle->vehicle_name}");
+
+        return response()->json([
+            'check' => $check,
+            'state' => $this->responseReadinessState($vehicle->fresh(), $check),
+        ], 201);
+    }
+
+    /**
+     * Gap A — current "ready to respond" state + recent check history for a
+     * single vehicle, for its profile page.
+     */
+    public function vehicleReadiness(Request $request, Vehicle $vehicle)
+    {
+        $latest = $vehicle->readinessChecks()->orderByDesc('checked_at')->first();
+
+        return response()->json([
+            'state'            => $this->responseReadinessState($vehicle, $latest),
+            'last_checked'     => $latest?->checked_at,
+            'latest_checklist' => $latest?->checklist,
+            'freshness_hours'  => self::READINESS_FRESHNESS_HOURS,
+            'history'          => $vehicle->readinessChecks()
+                ->with('checkedBy:id,name')
+                ->orderByDesc('checked_at')
+                ->limit(5)
+                ->get(),
+        ]);
     }
 
     public function locations(Request $request)
@@ -588,6 +958,14 @@ class FleetController extends Controller
             'remarks' => ['nullable', 'string'],
         ]);
 
+        // A retired/archived vehicle is out of the fleet — no new reports on it.
+        $reportedVehicle = Vehicle::findOrFail($data['vehicle_id']);
+        abort_if(
+            in_array($reportedVehicle->status, ['Inactive', 'Decommissioned'], true),
+            422,
+            'Cannot report an issue on an archived or decommissioned vehicle.'
+        );
+
         if ($request->hasFile('photo')) {
             $data['photo_url'] = $this->storeUploadedImage($request->file('photo'), 'issue-attachments');
         }
@@ -618,7 +996,7 @@ class FleetController extends Controller
     {
         $this->requireRole($request, ['Admin', 'Maintenance Personnel', 'Custodian']);
 
-        if ($request->user()->role === 'Custodian') {
+        if ($request->user()->hasRole('Custodian') && !$request->user()->hasAnyRole(['Admin', 'Maintenance Personnel'])) {
             abort_unless($issue->reported_by === $request->user()->id, 403, 'You can only edit your own issue reports.');
             abort_unless($issue->status === 'Pending', 422, 'This issue has already been reviewed and can no longer be edited.');
 
@@ -683,7 +1061,7 @@ class FleetController extends Controller
     {
         $user = $request->user();
 
-        if ($user->role === 'Custodian') {
+        if ($user->hasRole('Custodian') && !$user->hasAnyRole(['Admin', 'Maintenance Personnel'])) {
             abort_unless($issue->reported_by === $user->id, 403, 'You can only delete your own issue reports.');
             abort_unless($issue->status === 'Pending', 422, 'This issue has already been reviewed and can no longer be deleted.');
         } else {
@@ -754,7 +1132,9 @@ class FleetController extends Controller
             'remarks' => ['nullable', 'string'],
         ]);
 
-        if ($request->user()->role === 'Maintenance Personnel') {
+        // A pure mechanic logs work as themselves; an Admin (even one who also
+        // holds the Maintenance hat) keeps the ability to assign someone else.
+        if ($request->user()->hasRole('Maintenance Personnel') && !$request->user()->hasRole('Admin')) {
             $data['maintenance_personnel_id'] = $request->user()->id;
         }
 
@@ -803,7 +1183,7 @@ class FleetController extends Controller
             'remarks' => ['nullable', 'string'],
         ]);
 
-        if (($data['progress_status'] ?? null) === 'Completed' && $request->user()->role === 'Maintenance Personnel') {
+        if (($data['progress_status'] ?? null) === 'Completed' && $request->user()->hasRole('Maintenance Personnel') && !$request->user()->hasRole('Admin')) {
             $data['progress_status'] = 'For Verification';
             $data['date_completed'] = null;
             $data['verification_result'] = null;
@@ -814,7 +1194,7 @@ class FleetController extends Controller
 
         if (($data['progress_status'] ?? null) === 'Completed') {
             abort_unless(
-                $request->user()->role === 'Admin' && $record->verification_result === 'Passed',
+                $request->user()->hasRole('Admin') && $record->verification_result === 'Passed',
                 422,
                 'A maintenance record can only be completed by an Admin after Custodian verification has passed. Use the verify/confirm workflow instead.'
             );
@@ -1152,8 +1532,8 @@ class FleetController extends Controller
             'model' => ['required', 'string', 'max:255'],
             'year_model' => ['required', new NumberOnly, 'integer', 'min:1900', 'max:' . now()->addYear()->year],
             'capacity' => ['required', 'string', 'max:255'],
-            'fuel_type' => [$domain === 'Land' ? 'required' : 'nullable', 'string', 'max:255'],
-            'hull_material' => [$domain === 'Water' ? 'required' : 'nullable', 'string', 'max:255'],
+            'fuel_type' => ['required', 'string', 'max:255'],
+            'hull_material' => [$domain === 'Water' ? 'required' : 'nullable', Rule::in(self::HULL_MATERIAL_OPTIONS)],
             'engine_type' => [$domain === 'Water' ? 'required' : 'nullable', 'string', 'max:255'],
             'vehicle_color' => ['required', 'string', 'max:255', new TextOnly],
             'current_location' => ['required', 'string', 'max:255', Rule::in(VehicleHub::pluck('name'))],
@@ -1196,12 +1576,12 @@ class FleetController extends Controller
 
     private function requireRole(Request $request, array $roles): void
     {
-        abort_unless(in_array($request->user()->role, $roles, true), 403, 'Your account role cannot perform this action.');
+        abort_unless($request->user()->hasAnyRole($roles), 403, 'Your account role cannot perform this action.');
     }
 
     private function syncVehicleStatuses()
     {
-        $vehicles = Vehicle::where('status', '!=', 'Inactive')->get();
+        $vehicles = Vehicle::whereNotIn('status', ['Inactive', 'Decommissioned'])->get();
         if ($vehicles->isEmpty()) {
             return;
         }
@@ -1210,7 +1590,7 @@ class FleetController extends Controller
         // vehicle — this runs on every dashboard/vehicle-list request.
         $vehicleIds = $vehicles->pluck('vehicle_id');
         $maintenanceTicketVehicleIds = \App\Models\MaintenanceTicket::whereIn('vehicle_id', $vehicleIds)
-            ->whereIn('status', ['For Maintenance', 'Under Repair', 'For Inspection', 'For Confirmation'])
+            ->whereNotIn('status', ['Closed', 'Cancelled'])
             ->pluck('vehicle_id')
             ->flip();
         $activeRecordVehicleIds = VehicleMaintenanceRecord::whereIn('vehicle_id', $vehicleIds)

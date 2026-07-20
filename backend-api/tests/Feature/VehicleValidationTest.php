@@ -171,6 +171,37 @@ class VehicleValidationTest extends TestCase
             'description' => 'For testing',
         ]);
 
+        // Fuel Type is required for Water vehicles too, alongside Hull
+        // Material and Engine Type — a boat's engine still burns something.
+        $payload = $this->validPayload([
+            'category_id' => $waterCategory->category_id,
+            'hull_material' => 'Fiberglass',
+            'engine_type' => 'Outboard 40HP',
+            'fuel_type' => 'Gasoline',
+        ]);
+
+        $response = $this->postJson('/api/vehicles', $payload);
+
+        $response->assertCreated();
+        $this->assertDatabaseHas('vehicles', [
+            'plate_number' => 'ABC-1234',
+            'hull_material' => 'Fiberglass',
+            'engine_type' => 'Outboard 40HP',
+            'fuel_type' => 'Gasoline',
+        ]);
+    }
+
+    #[Test]
+    public function a_water_vehicle_also_requires_fuel_type(): void
+    {
+        $this->actingAsAdmin();
+
+        $waterCategory = VehicleCategory::create([
+            'category_name' => 'Rescue Boat',
+            'domain' => 'Water',
+            'description' => 'For testing',
+        ]);
+
         $payload = $this->validPayload([
             'category_id' => $waterCategory->category_id,
             'hull_material' => 'Fiberglass',
@@ -180,11 +211,7 @@ class VehicleValidationTest extends TestCase
 
         $response = $this->postJson('/api/vehicles', $payload);
 
-        $response->assertCreated();
-        $this->assertDatabaseHas('vehicles', [
-            'plate_number' => 'ABC-1234',
-            'hull_material' => 'Fiberglass',
-            'engine_type' => 'Outboard 40HP',
-        ]);
+        $response->assertStatus(422);
+        $response->assertJsonValidationErrors(['fuel_type']);
     }
 }

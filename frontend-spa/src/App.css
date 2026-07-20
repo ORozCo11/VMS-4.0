@@ -387,6 +387,37 @@
   box-shadow: 0 6px 18px rgba(15, 23, 42, 0.06);
 }
 .topbar-left { display: flex; align-items: center; gap: 14px; }
+
+/* DEV-ONLY impersonation control — on-brand blue, clean rectangular fields.
+   Rendered only under import.meta.env.DEV, absent from production builds. */
+.dev-impersonate {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 6px;
+  border: 1px solid rgba(37, 99, 235, 0.22);
+  border-radius: 6px;
+  background: rgba(37, 99, 235, 0.06);
+}
+.dev-impersonate select {
+  border: 1px solid rgba(37, 99, 235, 0.28); border-radius: 6px;
+  padding: 4px 10px; font-size: 0.78rem; max-width: 190px;
+  background: #ffffff; color: #0f172a; cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.dev-impersonate select:hover { border-color: #2563eb; }
+.dev-impersonate select:focus {
+  outline: none; border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.16);
+}
+.dev-impersonate button {
+  display: inline-flex; align-items: center; gap: 5px;
+  border: none; border-radius: 6px; padding: 5px 14px;
+  font-size: 0.76rem; font-weight: 700; cursor: pointer;
+  background: #2563eb; color: #fff;
+  transition: background 0.15s ease, transform 0.08s ease;
+}
+.dev-impersonate button:hover:not(:disabled) { background: #1d4ed8; }
+.dev-impersonate button:active:not(:disabled) { transform: translateY(1px); }
+.dev-impersonate button:disabled { opacity: 0.45; cursor: not-allowed; }
 .breadcrumb-path { font-size: 0.8rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: #94a3b8; }
 .topbar h2 { font-size: 1.4rem; font-weight: 800; color: #0f172a; margin-top: 2px; }
 .topbar-right { display: flex; align-items: center; gap: 12px; }
@@ -1067,7 +1098,7 @@ table a:hover {
   border-color: #fde68a;
   color: #b45309;
 }
-.status-badge.inactive, .status-badge.rejected, .status-badge.failed, .status-badge.overdue, .status-badge.needs-repair {
+.status-badge.inactive, .status-badge.decommissioned, .status-badge.rejected, .status-badge.failed, .status-badge.overdue, .status-badge.needs-repair {
   background: #fee2e2;
   border-color: #fca5a5;
   color: #b91c1c;
@@ -1964,6 +1995,7 @@ button.wizard-step-pill:hover {
 .status-badge.ticket-forconfirm { background: linear-gradient(90deg,#faf5ff,#ede9fe); border-color:#c4b5fd; color:#5b21b6; }
 .status-badge.ticket-done { background: linear-gradient(90deg,#ecfdf5,#d1fae5); border-color:#6ee7b7; color:#065f46; }
 .status-badge.ticket-cancelled { background: linear-gradient(90deg,#f1f5f9,#e2e8f0); border-color:#cbd5e1; color:#475569; }
+.status-badge.ticket-deferred { background: linear-gradient(90deg,#f8fafc,#f1f5f9); border-color:#f59e0b; color:#b45309; }
 .status-badge.rework-danger { background: #fee2e2; border-color: #fca5a5; color: #b91c1c; }
 .status-badge.rework-warning { background: #fffbeb; border-color: #fde68a; color: #b45309; }
 .status-badge.priority-low { background: linear-gradient(90deg,#f0fdf4,#dcfce7); border-color:#86efac; color:#166534; }
@@ -2045,7 +2077,9 @@ button.wizard-step-pill:hover {
   display: flex;
   align-items: flex-start;
   gap: 0;
-  padding: 22px 26px 18px;
+  /* Compressed from 22/18px — 3 states don't need the vertical weight of a
+     6-step checkout flow; reclaim the space for content that matters. */
+  padding: 10px 26px 8px;
   background: var(--surface-2, #f8fafc);
   border-bottom: 1px solid var(--border, #e2e8f0);
 }
@@ -2085,7 +2119,7 @@ button.wizard-step-pill:hover {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   position: relative;
   text-align: center;
 }
@@ -2144,7 +2178,7 @@ button.wizard-step-pill:hover {
   align-items: center;
   justify-content: center;
   gap: 5px;
-  min-height: 2.4em;
+  min-height: 1.2em;
   font-size: 0.74rem;
   font-weight: 800;
   text-transform: uppercase;
@@ -2156,13 +2190,9 @@ button.wizard-step-pill:hover {
 .ticket-progress-label svg { flex-shrink: 0; }
 .ticket-progress-step.is-done .ticket-progress-label { color: #4ade80; }
 .ticket-progress-step.is-active .ticket-progress-label { color: #22c55e; }
-.ticket-progress-stage {
-  font-size: 0.64rem;
-  font-weight: 700;
-  letter-spacing: 0.03em;
-  color: var(--text-faint, #94a3b8);
-  opacity: 0.7;
-}
+/* "Stage 1/2/3" added no information beyond the Open/Active/Closed label
+   already shown above it — hidden to reclaim vertical space. */
+.ticket-progress-stage { display: none; }
 .ticket-progress-step.is-done .ticket-progress-stage {
   color: #4ade80;
   opacity: 0.85;
@@ -2180,6 +2210,44 @@ button.wizard-step-pill:hover {
 .ticket-section p { font-size: 0.875rem; color: #334155; margin-bottom: 4px; }
 .ticket-section p.muted { color: #64748b; font-size: 0.8rem; }
 
+/* Two-column ticket detail layout — Overview + Custodian Inspection stack in
+   a narrower left column; Sub-Issues gets its own column on the right, so
+   the page reads as a compact dashboard instead of three long single-column
+   banners stacked end to end. Scoped to the full-page rendering only — a
+   narrow modal usage (currently unused, defined in .ticket-detail-panel's
+   base 600px width rule) falls back to a single column below. */
+.ticket-detail-panel.is-page .ticket-detail-body.ticket-detail-body-columns {
+  display: grid;
+  grid-template-columns: minmax(280px, 400px) 1fr;
+  align-items: start;
+  gap: 16px;
+}
+.ticket-detail-col-left,
+.ticket-detail-col-right {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+/* A vertical rule between the columns — since the left column (Overview +
+   Inspection + Timeline) and right column (Sub-Issues) rarely end up the
+   same height, this makes that asymmetry read as an intentional two-pane
+   layout instead of a page that broke. Spans the RIGHT column's own height,
+   which is the taller one in the common case, so it still runs past where
+   the shorter left column ends. */
+.ticket-detail-panel.is-page .ticket-detail-body.ticket-detail-body-columns .ticket-detail-col-right {
+  border-left: 1px solid var(--border, #e2e8f0);
+  padding-left: 16px;
+}
+@media (max-width: 860px) {
+  .ticket-detail-panel.is-page .ticket-detail-body.ticket-detail-body-columns {
+    grid-template-columns: 1fr;
+  }
+  .ticket-detail-panel.is-page .ticket-detail-body.ticket-detail-body-columns .ticket-detail-col-right {
+    border-left: none;
+    padding-left: 0;
+  }
+}
 
 /* Ticket detail action area */
 .ticket-detail-actions {
@@ -4048,18 +4116,20 @@ table button,
   border-radius: 7px;
 }
 
-/* Ticket detail sections — card with a blue header bar + blue left accent,
-   consistent with the vehicle profile cards. */
+/* Ticket detail sections — a solid blue header band + blue-bordered card,
+   matching the .panel-header-bar look used elsewhere (e.g. the Issue Reports
+   panel) — Overview / Custodian Inspection / Ticket Timeline / Sub-Issues
+   all use this treatment per explicit request to match that reference. */
 .ticket-section {
   padding: 0 18px 16px;
   background: var(--surface);
-  border: 2px solid var(--primary);
+  border: 1.5px solid #93c5fd;
   border-radius: 12px;
   overflow: hidden;
 }
 .ticket-section h4 {
   margin: 0 -18px 14px;
-  padding: 12px 18px;
+  padding: 10px 18px;
   background: var(--primary);
   color: #ffffff !important;
 }
@@ -4301,6 +4371,7 @@ table a:hover,
 .status-badge.ticket-repair,
 .status-badge.ticket-forinspect,
 .status-badge.ticket-forconfirm,
+.status-badge.ticket-deferred,
 .status-badge.priority-medium,
 .status-badge.priority-high {
   background: rgba(255, 186, 74, 0.12);
@@ -4309,6 +4380,7 @@ table a:hover,
 }
 
 .status-badge.inactive,
+.status-badge.decommissioned,
 .status-badge.rejected,
 .status-badge.failed,
 .status-badge.overdue,
@@ -6644,6 +6716,7 @@ html[data-theme="light"] .status-badge.ticket-formaint,
 html[data-theme="light"] .status-badge.ticket-repair,
 html[data-theme="light"] .status-badge.ticket-forinspect,
 html[data-theme="light"] .status-badge.ticket-forconfirm,
+html[data-theme="light"] .status-badge.ticket-deferred,
 html[data-theme="light"] .status-badge.priority-medium,
 html[data-theme="light"] .status-badge.priority-high,
 html[data-theme="light"] .status-badge.rework-warning {
@@ -6653,6 +6726,7 @@ html[data-theme="light"] .status-badge.rework-warning {
 }
 
 html[data-theme="light"] .status-badge.inactive,
+html[data-theme="light"] .status-badge.decommissioned,
 html[data-theme="light"] .status-badge.rejected,
 html[data-theme="light"] .status-badge.failed,
 html[data-theme="light"] .status-badge.overdue,

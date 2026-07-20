@@ -1,0 +1,111 @@
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+
+/**
+ * One root cause / line item under a MaintenanceTicket's Main Issue,
+ * e.g. "Low coolant level" under the "Overheating" ticket. Runs its own
+ * copy of the assign -> repair -> verify -> confirm pipeline, independent
+ * of every other sub-issue on the same ticket.
+ */
+class TicketSubIssue extends Model
+{
+    protected $primaryKey = 'sub_issue_id';
+
+    protected $fillable = [
+        'ticket_id',
+        'issue_report_id',
+        'created_by',
+        'title',
+        'status',
+        'assigned_mechanic_id',
+        'maintenance_type',
+        'work_order_notes',
+        'mechanic_assigned_at',
+        'mechanic_assigned_by',
+        'repair_logs',
+        'parts_used',
+        'attachment_url',
+        'repair_started_at',
+        'repair_completed_at',
+        'maintenance_cost',
+        'verification_verdict',
+        'verification_notes',
+        'verified_by',
+        'verified_at',
+        // Problem 2 — functional test ("UAT") recorded at the verify gate
+        'functional_test',
+        'test_attested',
+        'confirmation_verdict',
+        'confirmation_notes',
+        'confirmed_by',
+        'confirmed_at',
+        // Problem 1 — "Deferred" outcome (a recorded decision not to fix now)
+        'deferred_reason',
+        'deferred_by',
+        'deferred_at',
+        'deferred_issue_report_id',
+    ];
+
+    protected $casts = [
+        'mechanic_assigned_at' => 'datetime',
+        'verified_at'          => 'datetime',
+        'confirmed_at'         => 'datetime',
+        'deferred_at'          => 'datetime',
+        'maintenance_cost'     => 'decimal:2',
+        'functional_test'      => 'array',
+        'test_attested'        => 'boolean',
+    ];
+
+    public function ticket()
+    {
+        return $this->belongsTo(MaintenanceTicket::class, 'ticket_id', 'ticket_id');
+    }
+
+    public function issueReport()
+    {
+        return $this->belongsTo(VehicleIssueReport::class, 'issue_report_id', 'issue_report_id');
+    }
+
+    public function createdBy()
+    {
+        return $this->belongsTo(User::class, 'created_by');
+    }
+
+    public function assignedMechanic()
+    {
+        return $this->belongsTo(User::class, 'assigned_mechanic_id');
+    }
+
+    public function mechanicAssignedBy()
+    {
+        return $this->belongsTo(User::class, 'mechanic_assigned_by');
+    }
+
+    public function verifiedBy()
+    {
+        return $this->belongsTo(User::class, 'verified_by');
+    }
+
+    public function confirmedBy()
+    {
+        return $this->belongsTo(User::class, 'confirmed_by');
+    }
+
+    public function deferredBy()
+    {
+        return $this->belongsTo(User::class, 'deferred_by');
+    }
+
+    /**
+     * A sub-issue is "resolved" when it has reached a terminal state —
+     * either genuinely fixed (Done) or a recorded decision not to fix it
+     * now (Deferred). Ticket closing keys off this, not off Done alone.
+     */
+    public function isResolved(): bool
+    {
+        return in_array($this->status, ['Done', 'Deferred'], true);
+    }
+}

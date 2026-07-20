@@ -13,7 +13,10 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
-        //
+        // Defense-in-depth: strip control/null bytes from all input, and add
+        // security headers (nosniff, anti-clickjacking, CSP) to every response.
+        $middleware->append(\App\Http\Middleware\SanitizeInput::class);
+        $middleware->append(\App\Http\Middleware\SecurityHeaders::class);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(

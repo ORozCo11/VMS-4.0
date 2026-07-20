@@ -22,34 +22,23 @@ class MaintenanceTicket extends Model
         'inspection_result',
         'inspected_by',
         'inspected_at',
-        'assigned_mechanic_id',
-        'maintenance_type',
-        'work_order_notes',
-        'mechanic_assigned_at',
-        'mechanic_assigned_by',
-        'repair_logs',
-        'parts_used',
-        'repair_started_at',
-        'repair_completed_at',
-        'verification_verdict',
-        'verification_notes',
-        'verified_by',
-        'verified_at',
-        'confirmation_verdict',
-        'confirmation_notes',
-        'confirmed_by',
-        'confirmed_at',
+        'closed_by',
+        'closed_at',
+        'closing_notes',
         'archived_at',
+        'returned_to_service',
+        'recurrence_count',
     ];
 
     protected $casts = [
-        'assigned_at'          => 'datetime',
-        'inspected_at'         => 'datetime',
-        'mechanic_assigned_at' => 'datetime',
-        'verified_at'          => 'datetime',
-        'confirmed_at'         => 'datetime',
-        'archived_at'          => 'datetime',
+        'assigned_at'         => 'datetime',
+        'inspected_at'        => 'datetime',
+        'closed_at'           => 'datetime',
+        'archived_at'         => 'datetime',
+        'returned_to_service' => 'boolean',
     ];
+
+    protected $appends = ['progress', 'days_open'];
 
     // -------------------------------------------------------
     // Relationships
@@ -75,24 +64,9 @@ class MaintenanceTicket extends Model
         return $this->belongsTo(User::class, 'inspected_by');
     }
 
-    public function assignedMechanic()
+    public function closedBy()
     {
-        return $this->belongsTo(User::class, 'assigned_mechanic_id');
-    }
-
-    public function mechanicAssignedBy()
-    {
-        return $this->belongsTo(User::class, 'mechanic_assigned_by');
-    }
-
-    public function verifiedBy()
-    {
-        return $this->belongsTo(User::class, 'verified_by');
-    }
-
-    public function confirmedBy()
-    {
-        return $this->belongsTo(User::class, 'confirmed_by');
+        return $this->belongsTo(User::class, 'closed_by');
     }
 
     public function archiveLog()
@@ -103,5 +77,67 @@ class MaintenanceTicket extends Model
     public function issueReport()
     {
         return $this->belongsTo(VehicleIssueReport::class, 'issue_report_id', 'issue_report_id');
+    }
+
+    public function subIssues()
+    {
+        return $this->hasMany(TicketSubIssue::class, 'ticket_id', 'ticket_id');
+    }
+
+    // -------------------------------------------------------
+    // Progress rollup
+    // -------------------------------------------------------
+
+    /**
+     * "X/N sub-issues Done" — the ticket-level progress counter shown
+     * in the UI, e.g. Overheating [2/3]. `deferred` is broken out so the
+     * UI can show, e.g., "2 Done · 1 Deferred" rather than hiding the
+     * fact that a line item was closed without being fixed.
+     */
+    public function getProgressAttribute(): array
+    {
+        $total    = $this->subIssues->count();
+        $done     = $this->subIssues->where('status', 'Done')->count();
+        $deferred = $this->subIssues->where('status', 'Deferred')->count();
+
+        return ['done' => $done, 'deferred' => $deferred, 'total' => $total];
+    }
+
+    /**
+     * How long the ticket has been open, in whole days — the "aging"
+     * signal that answers "how long has this been sitting?". Measured up
+     * to now while live, or up to when it ended once Closed/Cancelled.
+     */
+    public function getDaysOpenAttribute(): ?int
+    {
+        if (!$this->created_at) {
+            return null;
+        }
+
+        $end = in_array($this->status, ['Closed', 'Cancelled'], true)
+            ? ($this->closed_at ?? $this->updated_at ?? now())
+            : now();
+
+        return (int) $this->created_at->diffInDays($end);
+    }
+
+    /**
+     * A ticket is eligible to Close when every sub-issue is *resolved* —
+     * i.e. Done (fixed) OR Deferred (a recorded decision not to fix now).
+     * A ticket with zero sub-issues (a "No Issues" inspection) is also
+     * eligible — there was nothing to fix.
+     */
+    public function isEligibleToClose(): bool
+    {
+        return $this->subIssues->every(fn (TicketSubIssue $s) => $s->isResolved());
+    }
+
+    /**
+     * Sub-issues that are neither Done nor Deferred — the ones a
+     * decision-close would have to defer before the ticket can close.
+     */
+    public function unresolvedSubIssues()
+    {
+        return $this->subIssues->reject(fn (TicketSubIssue $s) => $s->isResolved());
     }
 }
