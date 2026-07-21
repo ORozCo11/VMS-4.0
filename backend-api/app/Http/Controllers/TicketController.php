@@ -183,11 +183,14 @@ class TicketController extends Controller
 
         // Gap 3 — recurrence: how many times this same Main Issue was already
         // fixed-and-closed on this vehicle in the last 90 days. Stamped now so
-        // a chronic unit surfaces as "Nth time" instead of hiding.
+        // a chronic unit surfaces as "Nth time" instead of hiding. Filtered on
+        // when it was CLOSED (fixed), not when it was originally opened — a
+        // ticket opened 120 days ago but only closed last week was just fixed
+        // recently and should still count.
         $recurrence = MaintenanceTicket::where('vehicle_id', $data['vehicle_id'])
             ->where('status', 'Closed')
             ->whereRaw('LOWER(TRIM(ticket_title)) = ?', [mb_strtolower(trim($data['ticket_title']))])
-            ->where('created_at', '>=', now()->subDays(90))
+            ->where('closed_at', '>=', now()->subDays(90))
             ->count();
 
         $ticket = DB::transaction(function () use ($data, $request, $recurrence) {
@@ -362,6 +365,7 @@ class TicketController extends Controller
         $this->requireRole($request, ['Admin']);
         $this->assertBelongsToTicket($ticket, $subIssue);
 
+        abort_unless($ticket->status === 'Active', 422, "Work orders can only be dispatched while the ticket is Active. Current status: {$ticket->status}.");
         abort_unless($subIssue->status === 'Open', 422, "A mechanic can only be assigned when the sub-issue is Open. Current: {$subIssue->status}.");
 
         $data = $request->validate([
@@ -400,6 +404,66 @@ class TicketController extends Controller
         return $subIssue->fresh();
     }
 
+    /**
+     * PUT /tickets/:ticket/sub-issues/:subIssue/reassign-mechanic — hand an
+     * in-progress work order to a different mechanic (e.g. the assigned one is
+     * out sick), so a repair on the only ambulance is never frozen. Only while
+     * Under Repair; the reason and both mechanics are recorded.
+     */
+    public function reassignMechanic(Request $request, MaintenanceTicket $ticket, TicketSubIssue $subIssue)
+    {
+        $this->requireRole($request, ['Admin']);
+        $this->assertBelongsToTicket($ticket, $subIssue);
+
+        abort_unless($ticket->status === 'Active', 422, "Work orders can only be reassigned while the ticket is Active. Current status: {$ticket->status}.");
+        abort_unless($subIssue->status === 'Under Repair', 422, "A work order can only be reassigned while it is Under Repair. Current: {$subIssue->status}.");
+
+        $data = $request->validate([
+            'assigned_mechanic_id' => ['required', 'exists:users,id'],
+            'reassign_reason'      => ['required', 'string'],
+        ]);
+
+        $newMechanic = User::findOrFail($data['assigned_mechanic_id']);
+        abort_unless($newMechanic->hasRole('Maintenance Personnel'), 422, 'The selected user is not Maintenance Personnel.');
+        abort_if($newMechanic->id === $subIssue->assigned_mechanic_id, 422, 'That mechanic is already assigned to this work order.');
+
+        $previousMechanicId = $subIssue->assigned_mechanic_id;
+
+        DB::transaction(function () use ($ticket, $subIssue, $data, $request, $newMechanic, $previousMechanicId) {
+            $previousName = $previousMechanicId ? (User::find($previousMechanicId)?->name ?? 'the previous mechanic') : 'the previous mechanic';
+
+            $subIssue->update([
+                'assigned_mechanic_id' => $data['assigned_mechanic_id'],
+                'mechanic_assigned_at' => now(),
+                'mechanic_assigned_by' => $request->user()->id,
+            ]);
+
+            $vehicleName = $ticket->vehicle->vehicle_name;
+            $this->log($request, 'Work Order Reassigned', "Ticket #{$ticket->ticket_id} — sub-issue \"{$subIssue->title}\" reassigned from {$previousName} to {$newMechanic->name}. Reason: {$data['reassign_reason']}");
+
+            // Let the new mechanic know they're now on it...
+            $this->notifyUser(
+                $newMechanic->id,
+                'Work Order Reassigned to You',
+                "You have been assigned to \"{$subIssue->title}\" on Ticket #{$ticket->ticket_id} ({$vehicleName}).",
+                'work_order_assigned',
+                $ticket->ticket_id
+            );
+            // ...and the previous mechanic that it's off their plate.
+            if ($previousMechanicId) {
+                $this->notifyUser(
+                    $previousMechanicId,
+                    'Work Order Reassigned',
+                    "\"{$subIssue->title}\" on Ticket #{$ticket->ticket_id} ({$vehicleName}) was reassigned to {$newMechanic->name}.",
+                    'work_order_reassigned',
+                    $ticket->ticket_id
+                );
+            }
+        });
+
+        return $subIssue->fresh();
+    }
+
     // ===================================================================
     // PHASE 3 — Mechanic: Log Repair on a Sub-Issue
     // ===================================================================
@@ -410,6 +474,7 @@ class TicketController extends Controller
         $this->assertBelongsToTicket($ticket, $subIssue);
 
         abort_unless($subIssue->assigned_mechanic_id === $request->user()->id, 403, 'This work order is not assigned to you.');
+        abort_unless($ticket->status === 'Active', 422, "Repairs can only be logged while the ticket is Active. Current status: {$ticket->status}.");
         abort_unless($subIssue->status === 'Under Repair', 422, "Repairs can only be logged when the sub-issue is Under Repair. Current: {$subIssue->status}.");
 
         $data = $request->validate([
@@ -467,6 +532,7 @@ class TicketController extends Controller
         $this->assertBelongsToTicket($ticket, $subIssue);
 
         abort_unless($ticket->assigned_custodian_id === $request->user()->id, 403, 'This ticket is not assigned to you.');
+        abort_unless($ticket->status === 'Active', 422, "Verification can only be submitted while the ticket is Active. Current status: {$ticket->status}.");
         abort_unless($subIssue->status === 'For Inspection', 422, "Verification can only be submitted when the sub-issue is For Inspection. Current: {$subIssue->status}.");
 
         // Problem 2 — verification is now a real functional test ("UAT"):
@@ -546,6 +612,7 @@ class TicketController extends Controller
         $this->requireRole($request, ['Admin']);
         $this->assertBelongsToTicket($ticket, $subIssue);
 
+        abort_unless($ticket->status === 'Active', 422, "A sub-issue can only be confirmed while the ticket is Active. Current status: {$ticket->status}.");
         abort_unless($subIssue->status === 'For Confirmation', 422, "A sub-issue can only be confirmed when it is For Confirmation. Current: {$subIssue->status}.");
 
         $data = $request->validate([
@@ -863,6 +930,8 @@ class TicketController extends Controller
     public function deleteTicket(Request $request, MaintenanceTicket $ticket)
     {
         $this->requireRole($request, ['Admin']);
+
+        abort_if($ticket->status === 'Closed', 422, 'A closed ticket is permanent and cannot be deleted.');
 
         DB::transaction(function () use ($ticket, $request) {
             $vehicleId = $ticket->vehicle_id;

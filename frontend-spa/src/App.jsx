@@ -3,6 +3,8 @@ import { ProtectedRoute } from './components/ProtectedRoute';
 import Login from './views/Login';
 import Privacy from './views/Privacy';
 import Terms from './views/Terms';
+import About from './views/About';
+import Developers from './views/Developers';
 import Workspace from './views/Workspace';
 import './App.css';
 
@@ -26,6 +28,8 @@ function App() {
         <Route path="/login" element={<Login />} />
         <Route path="/privacy" element={<Privacy />} />
         <Route path="/terms" element={<Terms />} />
+        <Route path="/about" element={<About />} />
+        <Route path="/developers" element={<Developers />} />
         <Route path="/unauthorized" element={<Unauthorized />} />
         <Route
           path="/admin/*"

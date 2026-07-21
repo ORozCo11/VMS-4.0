@@ -1,11 +1,12 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState, createContext } from 'react';
 import { createPortal } from 'react-dom';
-import { Link, useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import api from '../api/axios';
 import LocationDensityMap from '../components/LocationDensityMap';
 import VehicleLocationMap from '../components/VehicleLocationMap';
 import Icon from '../components/Icon';
 import TextType from '../components/TextType';
+import WorkspaceFooter from '../components/WorkspaceFooter';
 import { AuthContext } from '../context/AuthContextObject';
 import { groupLocationRowsByHub } from '../data/paknaanLocationDensity';
 
@@ -276,14 +277,15 @@ function Workspace() {
   const logRepairsTicketId = logRepairsMatch?.[1] ?? null;
   const logRepairsSubIssueId = logRepairsMatch?.[2] ?? null;
   const inspectTicketId = location.pathname.match(/\/inspections\/(\d+)\/inspect$/)?.[1] ?? null;
+  const isProfilePage = /\/profile$/.test(location.pathname);
   const isOnSpecialPage = Boolean(
     isNewVehiclePage || vehicleProfileId || isNewTicketPage || ticketProfileId
     || isNewCategoryPage || editCategoryId || isNewSchedulePage || editScheduleId
     || isNewIssuePage || editIssueId || viewIssueId || isNewConditionPage || editConditionId
     || isNewMaintenancePage || editMaintenanceId || isNewUserPage || editUserId || viewUserId
-    || logRepairsTicketId || inspectTicketId
+    || logRepairsTicketId || inspectTicketId || isProfilePage
   );
-  const { user, logout } = useContext(AuthContext);
+  const { user, logout, refreshUser } = useContext(AuthContext);
   const modules = useMemo(() => resolveModules(user), [user.role, user.roles]);
   const [activeModule, setActiveModule] = useState(modules[0]?.[0] ?? 'dashboard');
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(
@@ -292,8 +294,19 @@ function Workspace() {
   const [lookups, setLookups] = useState(emptyLookups);
   const [ticketLookups, setTicketLookups] = useState(emptyTicketLookups);
   const [records, setRecords] = useState({});
+  // Memoized so the object reference stays stable across unrelated re-renders
+  // — SmartForm resets its values whenever this reference changes, which
+  // would otherwise wipe out whatever the user has already typed.
+  const scheduleInitialValues = useMemo(() => (
+    editScheduleId
+      ? (records.schedules ?? []).find((s) => String(s.schedule_id) === String(editScheduleId))
+      // Default to tomorrow — a schedule is always plotted ahead, so this
+      // saves a click for the common case; still fully editable.
+      : { scheduled_date: new Date(Date.now() + 86400000).toISOString().slice(0, 10) }
+  ), [editScheduleId, records.schedules]);
   const [dashboard, setDashboard] = useState(null);
   const [editTarget, setEditTarget] = useState(null);
+  const [completeScheduleTarget, setCompleteScheduleTarget] = useState(null);
   const [report, setReport] = useState(null);
   const [notice, setNotice] = useState(null);
   useEffect(() => {
@@ -682,21 +695,22 @@ function Workspace() {
   // Per-cell click targets shared with tables via context. A user cell opens
   // that user's own profile page (carrying the row's user object as fallback so
   // it renders even for roles that can't list all users).
-  const rowActions = useMemo(
-    () => ({
-      viewVehicle: openVehicleProfile,
-      viewUser: (u) => {
-        if (u?.id) navigate(`${roleRoutes[user.role]}/users/${u.id}`, { state: { user: u } });
-      },
-    }),
-    [openVehicleProfile, navigate, user.role]
-  );
-
   const openTicketProfile = useCallback((ticket) => {
     if (ticket?.ticket_id) {
       navigate(`${roleRoutes[user.role]}/tickets/${ticket.ticket_id}`);
     }
   }, [navigate, user.role]);
+
+  const rowActions = useMemo(
+    () => ({
+      viewVehicle: openVehicleProfile,
+      viewTicket: openTicketProfile,
+      viewUser: (u) => {
+        if (u?.id) navigate(`${roleRoutes[user.role]}/users/${u.id}`, { state: { user: u } });
+      },
+    }),
+    [openVehicleProfile, openTicketProfile, navigate, user.role]
+  );
 
   // Regular sidebar modules never get their own URL — switching between them
   // only flips `activeModule` in local state, so browser history never has a
@@ -726,12 +740,31 @@ function Workspace() {
   // Shared submit handler for the simple single-form pages (Vehicle Types,
   // Maintenance Schedules, Condition Checks, Issue Reports) — moduleKey picks
   // the endpoint/method, existing (or null) picks create vs update.
+  // Gap 2 — close the loop on a scheduled PM: one call marks it done, logs the
+  // record, and (if recurring) seeds the next occurrence.
+  const completeSchedule = async (target, payload) => {
+    setNotice(null);
+    try {
+      await sendPayload('put', `/maintenance-schedules/${target.schedule_id}/complete`, payload);
+      await refreshCurrent();
+      setNotice({ type: 'success', text: target.recurrence_months ? 'Marked done — next service scheduled.' : 'Marked done.' });
+      setCompleteScheduleTarget(null);
+    } catch (error) {
+      showError(error, setNotice);
+    }
+  };
+
   const submitFormPage = async (moduleKey, existing, payload) => {
     setNotice(null);
     try {
       const request = moduleRequest(moduleKey, existing, payload);
       await sendPayload(request.method, request.path, payload);
       await refreshCurrent();
+      // If the admin just edited their OWN account, re-pull the logged-in user
+      // so the topbar name/avatar/photo update immediately (no reload needed).
+      if (moduleKey === 'users' && existing?.id != null && String(existing.id) === String(user.id)) {
+        await refreshUser();
+      }
       setNotice({ type: 'success', text: request.success });
       returnToModule(moduleKey);
     } catch (error) {
@@ -1036,7 +1069,9 @@ function Workspace() {
   // this entire block (and its UI below) is stripped from a production build;
   // the backend also 404s the endpoint outside local/testing.
   const [impersonateCandidates, setImpersonateCandidates] = useState([]);
-  const [impersonateId, setImpersonateId] = useState('');
+  // Default the selection to the currently logged-in account, so the dropdown
+  // shows who you are now and the button reads as active (not faded).
+  const [impersonateId, setImpersonateId] = useState(user?.id ?? '');
   useEffect(() => {
     if (!import.meta.env.DEV) return;
     api.get('/impersonate/candidates').then((r) => setImpersonateCandidates(r.data)).catch(() => {});
@@ -1075,14 +1110,13 @@ function Workspace() {
           {import.meta.env.DEV && impersonateCandidates.length > 0 && (
             <div className="dev-impersonate" title="Dev only — switch account without logging out. Not present in production.">
               <select value={impersonateId} onChange={(e) => setImpersonateId(e.target.value)} aria-label="Impersonate account">
-                <option value="">Switch user…</option>
                 {impersonateCandidates.map((u) => (
                   <option key={u.id} value={u.id} disabled={!u.is_active}>
                     {u.name} · {u.role}{u.is_active ? '' : ' (inactive)'}
                   </option>
                 ))}
               </select>
-              <button type="button" onClick={doImpersonate} disabled={!impersonateId}>Impersonate</button>
+              <button type="button" onClick={doImpersonate}>Impersonate</button>
             </div>
           )}
         </div>
@@ -1180,7 +1214,7 @@ function Workspace() {
             setOpen={setShowProfileMenu}
             onLogout={handleLogout}
             onOpenNotifications={() => setShowNotifications(true)}
-            setNotice={setNotice}
+            onOpenSettings={() => navigate(`${roleRoutes[user.role]}/profile`)}
           />
         </div>
       </div>
@@ -1228,7 +1262,13 @@ function Workspace() {
           </div>
         )}
         <div className="content-body">
-          {isNewVehiclePage ? (
+          {isProfilePage ? (
+            <ProfilePage
+              user={user}
+              onBack={() => navigate(roleRoutes[user.role])}
+              setNotice={setNotice}
+            />
+          ) : isNewVehiclePage ? (
             <NewVehiclePage
               onBack={() => returnToModule('vehicles')}
               lookups={lookups}
@@ -1281,8 +1321,8 @@ function Workspace() {
               title={editScheduleId ? 'Update Schedule' : 'Add Maintenance Schedule'}
               description="Plan preventative maintenance and track schedule status."
               onBack={() => returnToModule('schedules')}
-              fields={scheduleFields(lookups)}
-              initialValues={editScheduleId ? (records.schedules ?? []).find((s) => String(s.schedule_id) === String(editScheduleId)) : EMPTY_OBJ}
+              fields={scheduleFields(lookups, allHubs, Boolean(editScheduleId))}
+              initialValues={scheduleInitialValues}
               onSubmit={(payload) => submitFormPage('schedules', editScheduleId ? { schedule_id: editScheduleId } : null, payload)}
               submitLabel={editScheduleId ? 'Update Schedule' : 'Add Schedule'}
               contextVehicles={lookups.vehicles}
@@ -1291,6 +1331,8 @@ function Workspace() {
           ) : viewIssueId ? (
             <IssueViewPage
               issue={(records.issues ?? []).find((i) => String(i.issue_report_id) === String(viewIssueId))}
+              allIssues={records.issues ?? []}
+              allHubs={allHubs}
               onBack={() => returnToModule('issues')}
             />
           ) : (isNewIssuePage || editIssueId) ? (
@@ -1427,7 +1469,7 @@ function Workspace() {
             priorityOptions={lookups.condition_results}
             priorityLabel="Condition"
           />
-          <DataTable columns={vehicleColumns(user.role, (row) => openVehicleProfile(row, 'edit'), deleteRecord, restoreRecord, filterStatus)} rows={visibleRows} onRowClick={openVehicleProfile} emptyMessage="No vehicles here yet — click the + button to register one." />
+          <PaginatedTable columns={vehicleColumns(user.role, (row) => openVehicleProfile(row, 'edit'), deleteRecord, restoreRecord, filterStatus)} rows={visibleRows} onRowClick={openVehicleProfile} emptyMessage="No vehicles here yet — click the + button to register one." />
         </ModulePanel>
       );
     }
@@ -1531,8 +1573,8 @@ function Workspace() {
 
             {locationsTab === 'records' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                <div className="panel-header-bar inline">
-                  <h3>Location Records ({locationRows.length})</h3>
+                <div className="panel-header-bar">
+                  <h3>Location Records <span className="count-badge">{locationRows.length}</span></h3>
                   <LocalSearchInput
                     value={searchQuery}
                     onChange={setSearchQuery}
@@ -1630,7 +1672,7 @@ function Workspace() {
 
               {/* From Date */}
               <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
-                <span style={{ fontSize: '0.8rem', color: '#64748b', fontWeight: 'bold' }}>From:</span>
+                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted, #64748b)', fontWeight: 'bold' }}>From:</span>
                 <input
                   type="date"
                   className="filter-select"
@@ -1642,7 +1684,7 @@ function Workspace() {
 
               {/* To Date */}
               <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
-                <span style={{ fontSize: '0.8rem', color: '#64748b', fontWeight: 'bold' }}>To:</span>
+                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted, #64748b)', fontWeight: 'bold' }}>To:</span>
                 <input
                   type="date"
                   className="filter-select"
@@ -1752,7 +1794,7 @@ function Workspace() {
             priorityOptions={lookups.severity_levels}
             priorityLabel="Severity"
           />
-          <DataTable
+          <PaginatedTable
             columns={issueColumns(user.role, (row) => navigate(`${roleRoutes[user.role]}/issues/${row.issue_report_id}/edit`), handleCreateTicketFromIssue, setUserInfoTarget, (row) => navigate(`${roleRoutes[user.role]}/issues/${row.issue_report_id}`), deleteRecord)}
             emptyMessage="No issues reported — the fleet has no open problems right now."
             rows={visibleRows}
@@ -1799,7 +1841,7 @@ function Workspace() {
             statusOptions={lookups.maintenance_statuses}
             statusLabel="Progress"
           />
-          <DataTable
+          <PaginatedTable
             columns={maintenanceColumns(user.role, (row) => navigate(`${roleRoutes[user.role]}/maintenance/${row.maintenance_id}/edit`), updateRecord)}
             emptyMessage="No maintenance records yet — click the + button to log one."
             rows={visibleRows}
@@ -1866,11 +1908,36 @@ function Workspace() {
             />
           </div>
           <DataTable
-            columns={scheduleColumns((row) => navigate(`${roleRoutes[user.role]}/schedules/${row.schedule_id}/edit`), deleteRecord)}
+            columns={scheduleColumns((row) => navigate(`${roleRoutes[user.role]}/schedules/${row.schedule_id}/edit`), deleteRecord, setCompleteScheduleTarget)}
             emptyMessage="No maintenance scheduled — click the + button to plan one."
             rows={visibleRows}
             onRowClick={(row) => row.vehicle && openVehicleProfile(row.vehicle)}
           />
+
+          <FormModal open={!!completeScheduleTarget} title={`Mark Done — ${completeScheduleTarget?.maintenance_type ?? ''}`} onClose={() => setCompleteScheduleTarget(null)} confirmClose>
+            {completeScheduleTarget && (
+              <>
+                <p className="muted" style={{ marginBottom: 12, fontSize: '0.85rem' }}>
+                  This logs a maintenance record for the work and closes the schedule
+                  {completeScheduleTarget.recurrence_months ? `, then auto-schedules the next one (${RECURRENCE_LABEL[completeScheduleTarget.recurrence_months] ?? `every ${completeScheduleTarget.recurrence_months} months`}).` : '.'}
+                </p>
+                <SmartForm
+                  fields={[
+                    { label: 'Date Completed', name: 'date_completed', type: 'date' },
+                    { label: 'Performed By', name: 'maintenance_personnel_id', options: options(lookups.maintenance_personnel, 'id', 'name'), type: 'select' },
+                    { label: 'Cost (optional)', name: 'maintenance_cost', type: 'number' },
+                    { label: 'Notes (what was done)', name: 'notes', type: 'textarea', rows: 2 },
+                  ]}
+                  key={`complete-${completeScheduleTarget.schedule_id}`}
+                  initialValues={{ date_completed: new Date().toISOString().slice(0, 10), maintenance_personnel_id: completeScheduleTarget.assigned_to ?? '' }}
+                  onCancel={() => setCompleteScheduleTarget(null)}
+                  onSubmit={(payload) => completeSchedule(completeScheduleTarget, payload)}
+                  submitLabel="Mark as Done"
+                  title=""
+                />
+              </>
+            )}
+          </FormModal>
         </ModulePanel>
       );
     }
@@ -1899,11 +1966,13 @@ function Workspace() {
             <h3>Activity History <span className="count-badge">{visibleRows.length}</span></h3>
             <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search history..." />
           </div>
-          <DataTable
+          <PaginatedTable
             columns={historyColumns}
             emptyMessage="No vehicle activity recorded yet."
             rows={visibleRows}
             onRowClick={(row) => row.vehicle && openVehicleProfile(row.vehicle)}
+            pageSizeOptions={[10, 20, 40, 50]}
+            initialPageSize={10}
           />
         </ModulePanel>
       );
@@ -2509,52 +2578,6 @@ function Dashboard({ data, hubs = null, user }) {
         </section>
       )}
 
-      {hasRole(user, 'Admin') && failurePatterns.length > 0 && (
-        <section className="panel full-span">
-          <div className="panel-header-bar">
-            <h3><Icon name="wrench" size={16} /> What's Breaking Most</h3>
-            <span className="area-chart-tag">Fleet-wide · last 12 months</span>
-          </div>
-          <HorizontalBarChart rows={failurePatterns.map((p) => ({ label: p.type, value: p.count }))} />
-          <p className="muted" style={{ marginTop: 8, fontSize: '0.82rem' }}>A single common failure across many vehicles often points to a systemic cause (rough roads, a bad parts batch) worth fixing at the root.</p>
-        </section>
-      )}
-
-      <section className="dashboard-graphs full-span" aria-label="Dashboard graphs">
-        <GraphPanel title="Fleet Status" stat={`${availabilityRate}% available`}>
-          <DonutChart
-            centerLabel={totalVehicles}
-            centerSubLabel="Vehicles"
-            segments={fleetStatus}
-          />
-          <ChartLegend rows={fleetStatus} />
-        </GraphPanel>
-
-        <GraphPanel title="Vehicles by Type" stat={`${data.vehicles_by_type?.length ?? 0} types`}>
-          <HorizontalBarChart rows={data.vehicles_by_type} />
-        </GraphPanel>
-
-        <GraphPanel title="Vehicles by Location" stat={`${locationsByHub.length} sites`}>
-          <HorizontalBarChart rows={locationsByHub} />
-        </GraphPanel>
-
-        <GraphPanel title="Operations Queue" stat={String(maintenanceExpenses)}>
-          <ColumnChart rows={operationsQueue} />
-          <div className="graph-footnote">
-            <span>Total maintenance expenses</span>
-            <strong>{maintenanceExpenses}</strong>
-          </div>
-        </GraphPanel>
-      </section>
-
-      <section className="panel full-span area-chart-panel">
-        <div className="panel-header-bar">
-          <h3>Fleet Activity by Day</h3>
-          <span className="area-chart-tag">Last 14 days</span>
-        </div>
-        <ActivityChart rows={data.activity_by_day ?? []} />
-      </section>
-
       <section className="panel full-span">
         <div className="panel-header-bar">
           <h3>Availability Forecast</h3>
@@ -2610,6 +2633,52 @@ function Dashboard({ data, hubs = null, user }) {
             ))}
           </div>
         )}
+      </section>
+
+      {hasRole(user, 'Admin') && failurePatterns.length > 0 && (
+        <section className="panel full-span">
+          <div className="panel-header-bar">
+            <h3><Icon name="wrench" size={16} /> What's Breaking Most</h3>
+            <span className="area-chart-tag">Fleet-wide · last 12 months</span>
+          </div>
+          <HorizontalBarChart rows={failurePatterns.map((p) => ({ label: p.type, value: p.count }))} />
+          <p className="muted" style={{ marginTop: 8, fontSize: '0.82rem' }}>A single common failure across many vehicles often points to a systemic cause (rough roads, a bad parts batch) worth fixing at the root.</p>
+        </section>
+      )}
+
+      <section className="dashboard-graphs full-span" aria-label="Dashboard graphs">
+        <GraphPanel title="Fleet Status" stat={`${availabilityRate}% available`}>
+          <DonutChart
+            centerLabel={totalVehicles}
+            centerSubLabel="Vehicles"
+            segments={fleetStatus}
+          />
+          <ChartLegend rows={fleetStatus} />
+        </GraphPanel>
+
+        <GraphPanel title="Vehicles by Type" stat={`${data.vehicles_by_type?.length ?? 0} types`}>
+          <HorizontalBarChart rows={data.vehicles_by_type} />
+        </GraphPanel>
+
+        <GraphPanel title="Vehicles by Location" stat={`${locationsByHub.length} sites`}>
+          <HorizontalBarChart rows={locationsByHub} />
+        </GraphPanel>
+
+        <GraphPanel title="Operations Queue" stat={String(maintenanceExpenses)}>
+          <ColumnChart rows={operationsQueue} />
+          <div className="graph-footnote">
+            <span>Total maintenance expenses</span>
+            <strong>{maintenanceExpenses}</strong>
+          </div>
+        </GraphPanel>
+      </section>
+
+      <section className="panel full-span area-chart-panel">
+        <div className="panel-header-bar">
+          <h3>Fleet Activity by Day</h3>
+          <span className="area-chart-tag">Last 14 days</span>
+        </div>
+        <ActivityChart rows={data.activity_by_day ?? []} />
       </section>
 
       {hasRole(user, 'Admin') && (
@@ -2775,6 +2844,65 @@ function ChartLegend({ rows }) {
         </li>
       ))}
     </ul>
+  );
+}
+
+// A fully-filled pie (not a hollow donut) with a legend row ABOVE it showing
+// each slice's label, percentage, and count — e.g. the "Current Obligation"
+// widget style. Reuses the donut's stroke-dasharray segment math; the "solid"
+// look just comes from drawing a half-radius circle with a full-radius stroke
+// so it fills all the way to the center, instead of leaving a hole.
+function SolidPieChart({ segments, size = 170 }) {
+  const total = segments.reduce((sum, s) => sum + s.value, 0);
+  const outerRadius = 42;
+  const innerRadius = outerRadius / 2;
+  const circumference = 2 * Math.PI * innerRadius;
+  let offset = 0;
+
+  return (
+    <div className="solid-pie-chart" style={{ width: size, maxWidth: '100%' }}>
+      <svg viewBox="0 0 120 120" role="img" aria-label="Breakdown chart">
+        {total === 0 ? (
+          <circle cx="60" cy="60" r={innerRadius} fill="none" stroke="rgba(148, 163, 184, 0.25)" strokeWidth={outerRadius} />
+        ) : segments.filter((s) => s.value > 0).map((segment) => {
+          const length = (segment.value / total) * circumference;
+          const dashOffset = -offset;
+          offset += length;
+          return (
+            <circle
+              className="solid-pie-segment"
+              cx="60"
+              cy="60"
+              key={segment.label}
+              r={innerRadius}
+              stroke={segment.color}
+              strokeWidth={outerRadius}
+              strokeDasharray={`${length} ${circumference - length}`}
+              strokeDashoffset={dashOffset}
+            />
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+function SolidPieLegend({ segments, total }) {
+  const shown = segments.filter((s) => s.value > 0);
+  if (!shown.length) return null;
+  return (
+    <div className="solid-pie-legend">
+      {shown.map((s) => (
+        <div className="solid-pie-legend-item" key={s.label}>
+          <span className="solid-pie-legend-dot" style={{ background: s.color }} />
+          <div>
+            <p className="solid-pie-legend-label" style={{ color: s.color }}>{s.label}</p>
+            <p className="solid-pie-legend-pct">{total ? Math.round((s.value / total) * 100) : 0}%</p>
+            <p className="solid-pie-legend-count">{s.value} issue{s.value === 1 ? '' : 's'}</p>
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -3033,19 +3161,18 @@ function ActivityChart({ rows = [], height = 220 }) {
   );
 }
 
+// The "what this page does" hint banner (blue info callout) was removed from
+// every module per user request — kept as a no-op rather than touched at
+// every call site, so ModulePanel and the 4 ticket-workflow pages that use it
+// don't need to change.
+function DismissibleHint() {
+  return null;
+}
+
 function ModulePanel({ children, description, statCards }) {
   return (
     <div className="module-grid">
-      {description && (
-        <div className="info-callout">
-          <svg className="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="10"></circle>
-            <line x1="12" y1="16" x2="12" y2="12"></line>
-            <line x1="12" y1="8" x2="12.01" y2="8"></line>
-          </svg>
-          <p className="module-description">{description}</p>
-        </div>
-      )}
+      <DismissibleHint description={description} />
       {statCards}
       <section className="panel">
         {children}
@@ -3213,9 +3340,32 @@ function UserViewPage({ userId, users = [], role, onBack, onEdit }) {
   );
 }
 
+const ISSUE_STATUS_COLORS = {
+  'Pending': '#f59e0b',
+  'Under Review': '#a855f7',
+  'In Maintenance': '#2563eb',
+  'Resolved': '#22c55e',
+};
+
 // Full-page issue detail — mirrors the vehicle/ticket profile pages so every
 // "View" action opens its own page rather than a modal, consistently for all roles.
-function IssueViewPage({ issue, onBack }) {
+function IssueViewPage({ issue, allIssues = [], allHubs = [], onBack }) {
+  const actions = useContext(RowActionsContext);
+  const hub = allHubs.find((h) => h.name === issue?.vehicle?.current_location);
+
+  // This vehicle's full issue-report history, broken down by status — reuses
+  // the already-loaded issues list, no extra API call.
+  const historySegments = useMemo(() => {
+    if (!issue?.vehicle_id) return [];
+    const forThisVehicle = allIssues.filter((i) => i.vehicle_id === issue.vehicle_id);
+    return Object.entries(ISSUE_STATUS_COLORS).map(([label, color]) => ({
+      label,
+      color,
+      value: forThisVehicle.filter((i) => i.status === label).length,
+    }));
+  }, [allIssues, issue?.vehicle_id]);
+  const historyTotal = historySegments.reduce((sum, s) => sum + s.value, 0);
+
   if (!issue) {
     return (
       <ModulePanel description="This issue report could not be found — it may have been deleted.">
@@ -3239,38 +3389,121 @@ function IssueViewPage({ issue, onBack }) {
       </div>
 
       <div className="issue-view-dash">
-        <section className="veh-card issue-view-photo-card">
-          <div className="veh-card-head"><Icon name="clipboard" size={16} /><h4>Attachment</h4></div>
-          {issue.photo_url ? (
-            <a href={resolvePhotoUrl(issue.photo_url)} target="_blank" rel="noreferrer" className="issue-view-photo">
-              <img src={resolvePhotoUrl(issue.photo_url)} alt="Issue attachment" />
-            </a>
-          ) : <p className="empty-state" style={{ padding: '24px' }}>No photo attached.</p>}
-        </section>
+        <div className="issue-view-main">
+          <section className="veh-card issue-view-info">
+            <div className="veh-card-head"><Icon name="alert" size={16} /><h4>Issue Information</h4></div>
+            <div className="issue-view-info-body">
+              {issue.vehicle?.photo_url && (
+                <div className="issue-view-vehicle-photo">
+                  <img src={resolvePhotoUrl(issue.vehicle.photo_url)} alt={issue.vehicle.vehicle_name} />
+                </div>
+              )}
+              <div className="issue-view-identity">
+                <div>
+                  <span className="veh-remarks-label">Vehicle</span>
+                  {issue.vehicle ? (
+                    actions?.viewVehicle ? (
+                      <button type="button" className="issue-view-identity-link" onClick={() => actions.viewVehicle(issue.vehicle)}>
+                        {issue.vehicle.vehicle_name}
+                      </button>
+                    ) : <p className="issue-view-identity-value">{issue.vehicle.vehicle_name}</p>
+                  ) : <p className="issue-view-identity-value">-</p>}
+                  {issue.vehicle?.plate_number && <span className="muted"> ({issue.vehicle.plate_number})</span>}
+                </div>
+                <div>
+                  <span className="veh-remarks-label">Reported By</span>
+                  <div style={{ marginTop: 4 }}><UserAvatarName user={issue.reported_by} /></div>
+                </div>
+              </div>
 
-        <section className="veh-card issue-view-info">
-          <div className="veh-card-head"><Icon name="alert" size={16} /><h4>Issue Information</h4></div>
-          <dl className="veh-kv">
-            <div><dt>Vehicle</dt><dd>{issue.vehicle ? <VehicleCell vehicle={issue.vehicle} /> : '-'}</dd></div>
-            <div><dt>Issue Type</dt><dd>{issue.issue_type}</dd></div>
-            <div><dt>Severity</dt><dd><TicketStatusBadge value={issue.severity_level} /></dd></div>
-            <div><dt>Status</dt><dd><StatusBadge value={issue.status} /></dd></div>
-            <div><dt>Reported By</dt><dd><UserAvatarName user={issue.reported_by} /></dd></div>
-          </dl>
-        </section>
+              <div className="issue-view-facts">
+                <p><strong>Issue Type:</strong> {issue.issue_type}</p>
+                <p><strong>Severity:</strong> <TicketStatusBadge value={issue.severity_level} /></p>
+                <p><strong>Status:</strong> <StatusBadge value={issue.status} /></p>
+                {issue.maintenance_ticket && (
+                  <p>
+                    <strong>Linked Ticket:</strong>{' '}
+                    {actions?.viewTicket ? (
+                      <button type="button" className="issue-view-identity-link" style={{ display: 'inline', fontSize: 'inherit' }} onClick={() => actions.viewTicket(issue.maintenance_ticket)}>
+                        Ticket #{issue.maintenance_ticket.ticket_id}
+                      </button>
+                    ) : <>Ticket #{issue.maintenance_ticket.ticket_id}</>}
+                    {' '}<TicketStatusBadge value={issue.maintenance_ticket.status} />
+                  </p>
+                )}
+              </div>
+            </div>
+          </section>
 
-        <section className="veh-card issue-view-desc">
-          <div className="veh-card-head"><Icon name="clipboard" size={16} /><h4>Description &amp; Remarks</h4></div>
-          <div className="issue-view-text">
-            <p>{issue.issue_description || '-'}</p>
-            {issue.remarks && (
-              <>
-                <span className="veh-remarks-label">Remarks</span>
-                <p>{issue.remarks}</p>
-              </>
+          <section className="veh-card issue-view-desc">
+            <div className="veh-card-head"><Icon name="clipboard" size={16} /><h4>Description &amp; Remarks</h4></div>
+            <div className="issue-view-text">
+              <p>{issue.issue_description || '-'}</p>
+              {issue.remarks && (
+                <div className="issue-view-remarks">
+                  <span className="issue-view-remarks-label"><Icon name="clipboard" size={12} /> Remarks</span>
+                  <p>{issue.remarks}</p>
+                </div>
+              )}
+            </div>
+          </section>
+
+          {issue.vehicle && (
+            <section className="veh-card issue-view-map">
+              <div className="veh-card-head"><Icon name="pin" size={16} /><h4>Vehicle Location — {issue.vehicle.current_location ?? 'Unknown'}</h4></div>
+              <div className="issue-view-map-wrap">
+                <VehicleLocationMap lat={hub?.lat} lng={hub?.lng} label={issue.vehicle.current_location} />
+              </div>
+            </section>
+          )}
+        </div>
+
+        <div className="issue-view-side">
+          <section className="veh-card issue-view-photo-card">
+            <div className="veh-card-head"><Icon name="clipboard" size={16} /><h4>Attachment</h4></div>
+            {issue.photo_url ? (
+              <a href={resolvePhotoUrl(issue.photo_url)} target="_blank" rel="noreferrer" className="issue-view-photo">
+                <img src={resolvePhotoUrl(issue.photo_url)} alt="Issue attachment" />
+              </a>
+            ) : (
+              <div className="issue-view-photo-empty">
+                <Icon name="clipboard" size={22} />
+                <p>No photo attached.</p>
+              </div>
             )}
-          </div>
-        </section>
+          </section>
+
+          <section className="veh-card">
+            <div className="veh-card-head"><Icon name="calendar" size={16} /><h4>Report Timeline</h4></div>
+            <div className="issue-view-timeline">
+              <div className="issue-view-timeline-row">
+                <span className="issue-view-timeline-dot" />
+                <div>
+                  <p className="issue-view-timeline-label">Reported</p>
+                  <QuietDate value={issue.created_at} />
+                </div>
+              </div>
+              {issue.updated_at && issue.updated_at !== issue.created_at && (
+                <div className="issue-view-timeline-row">
+                  <span className="issue-view-timeline-dot is-last" />
+                  <div>
+                    <p className="issue-view-timeline-label">Last Updated</p>
+                    <QuietDate value={issue.updated_at} />
+                  </div>
+                </div>
+              )}
+            </div>
+          </section>
+
+          {historyTotal > 0 && (
+            <section className="veh-card">
+              <div className="veh-card-head"><Icon name="grid" size={16} /><h4>Issue History</h4></div>
+              <p className="solid-pie-subtitle">{issue.vehicle?.vehicle_name ?? 'This vehicle'} — {historyTotal} report{historyTotal === 1 ? '' : 's'} total</p>
+              <SolidPieLegend segments={historySegments} total={historyTotal} />
+              <SolidPieChart segments={historySegments} />
+            </section>
+          )}
+        </div>
       </div>
     </ModulePanel>
   );
@@ -3318,33 +3551,25 @@ function ConfirmDialog({ busy, dialog, onCancel, onConfirm }) {
   );
 }
 
-function ProfileMenu({ user, open, setOpen, onLogout, onOpenNotifications, setNotice }) {
-  const [pwOpen, setPwOpen] = useState(false);
-
-  const updatePassword = async (payload) => {
-    try {
-      await api.put('/profile/password', cleanPayload(payload));
-      setNotice({ type: 'success', text: 'Password updated.' });
-      setPwOpen(false);
-    } catch (error) {
-      showError(error, setNotice);
-    }
-  };
-
+function ProfileMenu({ user, open, setOpen, onLogout, onOpenNotifications, onOpenSettings }) {
   const initials = user.name
     ? user.name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase()
     : 'U';
+  // Show the uploaded profile photo when there is one; fall back to initials.
+  const avatarInner = user.photo_url
+    ? <img className="profile-menu-avatar-img" src={resolvePhotoUrl(user.photo_url)} alt={user.name} />
+    : initials;
 
   return (
     <>
       <button className="profile-menu-trigger" type="button" onClick={() => setOpen((v) => !v)} aria-label="Account menu">
-        <span className="profile-menu-avatar">{initials}</span>
+        <span className="profile-menu-avatar">{avatarInner}</span>
       </button>
 
       {open && (
         <div className="profile-menu-dropdown">
           <div className="profile-menu-user">
-            <span className="profile-menu-avatar">{initials}</span>
+            <span className="profile-menu-avatar">{avatarInner}</span>
             <div className="profile-menu-user-info">
               <span className="profile-menu-name">{user.name}</span>
               <span className="profile-menu-role">{user.role}</span>
@@ -3353,7 +3578,7 @@ function ProfileMenu({ user, open, setOpen, onLogout, onOpenNotifications, setNo
 
           <div className="profile-menu-divider" />
 
-          <button className="profile-menu-item" type="button" onClick={() => { setPwOpen(true); setOpen(false); }}>
+          <button className="profile-menu-item" type="button" onClick={() => { onOpenSettings(); setOpen(false); }}>
             <Icon name="key" size={15} /> My Settings
           </button>
           <button className="profile-menu-item" type="button" onClick={() => { onOpenNotifications(); setOpen(false); }}>
@@ -3372,28 +3597,65 @@ function ProfileMenu({ user, open, setOpen, onLogout, onOpenNotifications, setNo
           </button>
         </div>
       )}
-
-      <FormModal open={pwOpen} title="My Settings" onClose={() => setPwOpen(false)}>
-        <dl className="profile-info-row" style={{ marginBottom: '16px' }}>
-          <div className="profile-info-item">
-            <dt>ID</dt>
-            <dd>#{user.id}</dd>
-          </div>
-          <div className="profile-info-item">
-            <dt>Email</dt>
-            <dd title={user.email}>{user.email}</dd>
-          </div>
-        </dl>
-        <SmartForm
-          fields={passwordFields}
-          key="password-form"
-          onCancel={() => setPwOpen(false)}
-          onSubmit={updatePassword}
-          submitLabel="Update Password"
-          title=""
-        />
-      </FormModal>
     </>
+  );
+}
+
+/** Self-service profile page (all roles) — account summary + password change. */
+function ProfilePage({ user, onBack, setNotice }) {
+  const initials = user.name ? user.name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase() : 'U';
+  const roles = (Array.isArray(user.roles) && user.roles.length) ? user.roles : [user.role].filter(Boolean);
+
+  const updatePassword = async (payload) => {
+    setNotice(null);
+    try {
+      await api.put('/profile/password', cleanPayload(payload));
+      setNotice({ type: 'success', text: 'Password updated.' });
+    } catch (error) {
+      showError(error, setNotice);
+    }
+  };
+
+  return (
+    <ModulePanel description="Your account details and password.">
+      <div className="vehicle-profile-header">
+        <button className="ghost-button btn-exit-action" type="button" onClick={onBack}><Icon name="arrowLeft" size={18} /></button>
+        <div className="vehicle-profile-identity">
+          <span className="ticket-detail-id">My Profile</span>
+          <h3 className="ticket-detail-title">{user.name}</h3>
+        </div>
+      </div>
+
+      <div className="profile-page">
+        <div className="profile-hero">
+          <div className="profile-hero-avatar">
+            {user.photo_url
+              ? <img src={resolvePhotoUrl(user.photo_url)} alt={user.name} />
+              : <span>{initials}</span>}
+          </div>
+          <div className="profile-hero-info">
+            <h2>{user.name}</h2>
+            <p className="muted">{user.email}</p>
+            <div className="profile-hero-roles">{roles.map((r) => <StatusBadge key={r} value={r} />)}</div>
+          </div>
+        </div>
+
+        <div className="profile-section">
+          <h4 className="profile-section-title"><Icon name="key" size={15} /> Change Password</h4>
+          <p className="muted profile-section-hint">Use a strong password you don't reuse on other sites.</p>
+          <div className="profile-form">
+            <SmartForm
+              fields={passwordFields}
+              key="profile-password"
+              onCancel={onBack}
+              onSubmit={updatePassword}
+              submitLabel="Update Password"
+              title=""
+            />
+          </div>
+        </div>
+      </div>
+    </ModulePanel>
   );
 }
 
@@ -3407,6 +3669,54 @@ function splitQuantityValue(value, units) {
   const amount = str.slice(0, lastSpace).trim();
   const unitCandidate = str.slice(lastSpace + 1).trim();
   return units.includes(unitCandidate) ? { amount, unit: unitCandidate } : { amount: str, unit: units[0] };
+}
+
+const SELECT_OR_OTHER_SENTINEL = '__other__';
+
+// A dropdown of presets plus an "Other" option that reveals a free-text box —
+// e.g. Service Location: pick a known hub, or specify an outside repair shop.
+// Tracks "other mode" locally (not in the form's values), seeded from whether
+// the incoming value already fails to match any preset.
+function SelectOrOtherField({ field, value, onChange }) {
+  const options = field.options ?? [];
+  const matchesPreset = options.some((o) => String(o?.value ?? o) === String(value ?? ''));
+  const [otherMode, setOtherMode] = useState(Boolean(value) && !matchesPreset);
+
+  return (
+    <>
+      <select
+        required={field.required}
+        value={otherMode ? SELECT_OR_OTHER_SENTINEL : (value ?? '')}
+        onChange={(e) => {
+          if (e.target.value === SELECT_OR_OTHER_SENTINEL) {
+            setOtherMode(true);
+            onChange('');
+          } else {
+            setOtherMode(false);
+            onChange(e.target.value);
+          }
+        }}
+      >
+        <option value="">Select</option>
+        {options.map((option, i) => (
+          <option key={option?.value != null ? option.value : `opt-${i}`} value={option?.value ?? option ?? ''}>
+            {option?.label ?? option}
+          </option>
+        ))}
+        <option value={SELECT_OR_OTHER_SENTINEL}>{field.otherLabel ?? 'Other (specify)'}</option>
+      </select>
+      {otherMode && (
+        <input
+          type="text"
+          placeholder={field.otherPlaceholder ?? 'Specify'}
+          required={field.required}
+          value={value ?? ''}
+          onChange={(e) => onChange(e.target.value)}
+          style={{ marginTop: 8 }}
+        />
+      )}
+    </>
+  );
 }
 
 function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, onSubmit, submitLabel, title, onValuesChange }) {
@@ -3436,7 +3746,7 @@ function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, onSubmit, subm
       {fields.map((field) => {
         const quantity = field.type === 'quantity' ? splitQuantityValue(values[field.name], field.units) : null;
         return (
-        <label key={field.name}>
+        <label key={field.name} style={field.fullWidth ? { gridColumn: '1 / -1' } : undefined}>
           <span>{field.label}</span>
           {field.type === 'quantity' ? (
             <div className="quantity-field">
@@ -3487,6 +3797,17 @@ function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, onSubmit, subm
               ))}
             </select>
           ) : null}
+          {field.type === 'select-or-other' ? (
+            <SelectOrOtherField
+              field={field}
+              value={values[field.name]}
+              onChange={(v) => {
+                const next = { ...values, [field.name]: v };
+                setValues(next);
+                onValuesChange?.(next);
+              }}
+            />
+          ) : null}
           {field.type === 'checkboxes' ? (
             <div className="checkbox-group" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {field.options.map((option) => {
@@ -3513,7 +3834,7 @@ function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, onSubmit, subm
               })}
             </div>
           ) : null}
-          {!['textarea', 'select', 'quantity', 'checkboxes'].includes(field.type) ? (
+          {!['textarea', 'select', 'quantity', 'checkboxes', 'select-or-other'].includes(field.type) ? (
             <input
               accept={field.accept}
               name={field.name}
@@ -3565,7 +3886,7 @@ function DataTable({ columns, rows, compact = false, onRowClick, emptyMessage = 
   const hasWidths = columns.some((column) => column.width);
 
   return (
-    <div className={`table-shell${compact ? ' is-compact' : ''}`}>
+    <div className={`table-shell${compact ? ' is-compact' : ''}${hasWidths ? ' is-fixed' : ''}`}>
       <table>
         {hasWidths && (
           <colgroup>
@@ -3622,15 +3943,6 @@ function ModuleLoader({ label = 'Loading module data' }) {
           </div>
         ))}
       </div>
-    </div>
-  );
-}
-
-function EmptyPrerequisite({ title, message }) {
-  return (
-    <div className="empty-prereq">
-      <h3>{title}</h3>
-      <p>{message}</p>
     </div>
   );
 }
@@ -4048,15 +4360,34 @@ function maintenanceFields(lookups, role) {
   }
 }
 
-function scheduleFields(lookups) {
+function scheduleFields(lookups, allHubs = [], isEdit = false) {
+  const hubOptions = allHubs.map((hub) => ({ value: hub.name, label: hub.name }));
+
   return [
     { label: 'Vehicle', name: 'vehicle_id', options: vehicleOptions(lookups), required: true, type: 'select' },
     { label: 'Maintenance Type', name: 'maintenance_type', options: lookups.maintenance_types, required: true, type: 'select' },
     { label: 'Scheduled Date', name: 'scheduled_date', required: true, type: 'date' },
     { label: 'Scheduled Time', name: 'scheduled_time', type: 'time' },
-    { label: 'Service Location', name: 'service_location', type: 'text' },
-    { label: 'Assigned To', name: 'assigned_to', options: options(lookups.maintenance_personnel, 'id', 'name'), type: 'select' },
-    { label: 'Status', name: 'status', options: lookups.schedule_statuses, type: 'select' },
+    // Recurring PM: completing this schedule auto-creates the next at the chosen
+    // interval. Left blank = one-time (the default "Select" option).
+    { label: 'Repeat Every (optional)', name: 'recurrence_months', options: [
+      { value: 1, label: 'Month' },
+      { value: 3, label: 'Quarter (3 months)' },
+      { value: 6, label: '6 Months' },
+      { value: 12, label: 'Year' },
+    ], type: 'select' },
+    // A known hub, or "Other" for an outside repair shop not in that list.
+    { label: 'Service Location', name: 'service_location', type: 'select-or-other', options: hubOptions, otherLabel: 'Other / External Shop', otherPlaceholder: 'e.g. Toyota Service Center' },
+    // Full-width only on create: with Status hidden there, it's the trailing
+    // odd-one-out in the 2-column grid — spanning the full row reads as
+    // intentional instead of leaving an empty cell beside it. On edit, Status
+    // sits next to it instead, making the pair even again.
+    { label: 'Assigned To', name: 'assigned_to', options: options(lookups.maintenance_personnel, 'id', 'name'), type: 'select', fullWidth: !isEdit },
+    // Completed is deliberately never offered here — marking a schedule done
+    // goes through the dedicated "Mark Done" action (creates the proof-of-work
+    // record and, if recurring, the next occurrence); this field only ever
+    // needs to cancel an existing one. Not shown at all when creating new.
+    ...(isEdit ? [{ label: 'Status', name: 'status', options: ['Scheduled', 'Cancelled'], type: 'select' }] : []),
     { label: 'Notes', name: 'notes', type: 'textarea' },
   ];
 }
@@ -4261,7 +4592,7 @@ function ModuleStatCards({ totalLabel = 'Total', total, cards, counts, activeFil
   return (
     <section className="metric-grid" aria-label="Status summary" style={{ marginBottom: '16px' }}>
       <article className="metric-card metric-card-iconic">
-        <span className="metric-card-icon" style={{ background: '#dbeafe', color: '#2563eb' }}>
+        <span className="metric-card-icon is-total">
           <Icon name="grid" size={18} />
         </span>
         <div className="metric-card-body">
@@ -4335,7 +4666,7 @@ function vehicleColumns(role, onEdit, deleteRecord, restoreRecord, filterStatus)
           {(row.status === 'Inactive' || row.status === 'Decommissioned') ? (
             <button className="btn-edit-action" onClick={() => restoreRecord(`/vehicles/${row.vehicle_id}/restore`, row.status === 'Decommissioned' ? 'Vehicle recommissioned.' : 'Vehicle restored.')} type="button" title={row.status === 'Decommissioned' ? 'Recommission' : 'Restore'} aria-label="Restore"><Icon name="undo" size={14} /> {row.status === 'Decommissioned' ? 'Recommission' : 'Restore'}</button>
           ) : (
-            <button className="btn-delete-action" onClick={() => deleteRecord(`/vehicles/${row.vehicle_id}`, 'Vehicle marked inactive.')} type="button" title="Deactivate" aria-label="Deactivate"><Icon name="archive" size={14} /> Deactivate</button>
+            <button className="btn-archive-action" onClick={() => deleteRecord(`/vehicles/${row.vehicle_id}`, 'Vehicle marked inactive.')} type="button" title="Deactivate (reversible)" aria-label="Deactivate"><Icon name="archive" size={14} /> Deactivate</button>
           )}
         </div>
       ),
@@ -4347,13 +4678,14 @@ function vehicleColumns(role, onEdit, deleteRecord, restoreRecord, filterStatus)
 
 function categoryColumns(onEdit, deleteRecord) {
   return [
-    { label: 'ID', render: (row) => row.category_id },
-    { label: 'Vehicle Type', render: (row) => row.category_name },
-    { label: 'Domain', render: (row) => <StatusBadge value={row.domain ?? 'Land'} /> },
-    { label: 'Vehicles', render: (row) => row.vehicles_count ?? 0 },
-    { label: 'Description', render: (row) => row.description ?? '-' },
+    { label: 'ID', width: '6%', render: (row) => row.category_id },
+    { label: 'Vehicle Type', width: '18%', render: (row) => row.category_name },
+    { label: 'Domain', width: '10%', render: (row) => <StatusBadge value={row.domain ?? 'Land'} /> },
+    { label: 'Vehicles', width: '9%', render: (row) => row.vehicles_count ?? 0 },
+    { label: 'Description', width: '37%', render: (row) => row.description ?? '-' },
     {
       label: 'Action',
+      width: '20%',
       render: (row) => (
         <div className="row-actions">
           <button className="btn-edit-action" onClick={() => onEdit(row)} type="button" title="Edit" aria-label="Edit"><Icon name="edit" size={14} /> Edit</button>
@@ -4386,7 +4718,7 @@ function userColumns(onEdit, onToggleActive, currentUserId) {
           <button className="btn-edit-action" onClick={() => onEdit(row)} type="button" title="Edit" aria-label="Edit"><Icon name="edit" size={14} /> Edit</button>
           {row.id !== currentUserId && (
             row.is_active ? (
-              <button className="btn-delete-action" onClick={() => onToggleActive(row, false)} type="button" title="Deactivate" aria-label="Deactivate"><Icon name="archive" size={14} /> Deactivate</button>
+              <button className="btn-archive-action" onClick={() => onToggleActive(row, false)} type="button" title="Deactivate (reversible)" aria-label="Deactivate"><Icon name="archive" size={14} /> Deactivate</button>
             ) : (
               <button className="btn-edit-action" onClick={() => onToggleActive(row, true)} type="button" title="Activate" aria-label="Activate"><Icon name="undo" size={14} /> Activate</button>
             )
@@ -4459,13 +4791,13 @@ function conditionColumns(role, onEdit, deleteRecord) {
 
 function issueColumns(role, onEdit, onCreateTicketFromIssue, setUserInfoTarget, onView, deleteRecord) {
   const columns = [
+    { label: 'ID', width: '5%', render: (row) => row.issue_report_id },
     {
       label: 'Issue',
-      width: '24%',
+      width: '19%',
       render: (row) => (
         <div className="issue-cell">
           <div className="issue-cell-top">
-            <span className="issue-id-badge">#{row.issue_report_id}</span>
             <span className="issue-type">{row.issue_type}</span>
           </div>
           {row.issue_description && (
@@ -4528,21 +4860,21 @@ function issueColumns(role, onEdit, onCreateTicketFromIssue, setUserInfoTarget, 
 
 function maintenanceColumns(role, setEditTarget, updateRecord) {
   const columns = [
-    { label: 'ID', width: '3%', render: (row) => row.maintenance_id },
-    { label: 'Vehicle', width: '11%', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
-    { label: 'Plate', width: '6%', render: (row) => row.vehicle?.plate_number ?? '-' },
-    { label: 'Type', width: '7%', render: (row) => row.maintenance_type },
-    { label: 'Problem / Reason', width: '12%', className: 'cell-text', render: (row) => <ExpandableText text={row.problem_reason} /> },
-    { label: 'Personnel', width: '8%', render: (row) => <UserAvatarName user={row.maintenance_personnel} /> },
-    { label: 'Progress', width: '7%', render: (row) => <StatusBadge value={row.progress_status} /> },
-    { label: 'Verification', width: '7%', render: (row) => row.verification_result ? <StatusBadge value={row.verification_result} /> : '-' },
-    { label: 'Date Started', width: '6%', render: (row) => <DateBadge value={row.date_started} /> },
-    { label: 'Date Completed', width: '6%', render: (row) => <DateBadge value={row.date_completed} /> },
+    { label: 'ID', width: '4%', render: (row) => row.maintenance_id },
+    { label: 'Vehicle', width: '15%', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
+    { label: 'Plate', width: '8%', render: (row) => row.vehicle?.plate_number ?? '-' },
+    { label: 'Type', width: '9%', render: (row) => row.maintenance_type },
+    { label: 'Problem / Reason', width: '16%', className: 'cell-text', render: (row) => <ExpandableText text={row.problem_reason} /> },
+    { label: 'Personnel', width: '10%', render: (row) => <UserAvatarName user={row.maintenance_personnel} /> },
+    { label: 'Progress', width: '8%', render: (row) => <StatusBadge value={row.progress_status} /> },
+    { label: 'Verification', width: '8%', render: (row) => row.verification_result ? <StatusBadge value={row.verification_result} /> : '-' },
+    { label: 'Date Started', width: '5%', render: (row) => <DateBadge value={row.date_started} /> },
+    { label: 'Date Completed', width: '5%', render: (row) => <DateBadge value={row.date_completed} /> },
     {
       label: 'Action',
-      width: '27%',
+      width: '12%',
       render: (row) => (
-        <div className="row-actions" style={{ flexWrap: 'nowrap' }}>
+        <div className="row-actions" style={{ flexWrap: 'wrap' }}>
           <button className="btn-edit-action" onClick={() => setEditTarget(row)} type="button" title="Edit" aria-label="Edit"><Icon name="edit" size={14} /> Edit</button>
           {role === 'Admin' && row.verification_result === 'Passed' && row.progress_status !== 'Completed' ? (
             <>
@@ -4571,19 +4903,23 @@ function maintenanceStatusColumns(setEditTarget) {
   ];
 }
 
-function scheduleColumns(onEdit, deleteRecord) {
+function scheduleColumns(onEdit, deleteRecord, onComplete) {
   return [
     { label: 'ID', render: (row) => row.schedule_id },
     { label: 'Vehicle', render: (row) => <VehicleCell vehicle={row.vehicle} /> }, { label: 'Plate', render: (row) => row.vehicle?.plate_number ?? '-' },
     { label: 'Type', render: (row) => row.maintenance_type },
     { label: 'Date', render: (row) => <DateBadge value={row.scheduled_date} /> },
     { label: 'Time', render: (row) => row.scheduled_time ?? '-' },
+    { label: 'Repeat', render: (row) => row.recurrence_months ? <StatusBadge value={RECURRENCE_LABEL[row.recurrence_months] ?? `Every ${row.recurrence_months} mo`} /> : <span className="muted">One-time</span> },
     { label: 'Location', render: (row) => row.service_location ?? '-' },
     { label: 'Status', render: (row) => <StatusBadge value={row.status} /> },
     {
       label: 'Action',
       render: (row) => (
-        <div className="row-actions">
+        <div className="row-actions" style={{ flexWrap: 'wrap' }}>
+          {row.status === 'Scheduled' && onComplete && (
+            <button className="btn-confirm-action" onClick={() => onComplete(row)} type="button" title="Mark as Done" aria-label="Mark as Done"><Icon name="checkCircle" size={14} /> Mark Done</button>
+          )}
           <button className="btn-edit-action" onClick={() => onEdit(row)} type="button" title="Edit" aria-label="Edit"><Icon name="edit" size={14} /> Edit</button>
           <button className="btn-delete-action" onClick={() => deleteRecord(`/maintenance-schedules/${row.schedule_id}`, 'Schedule deleted.')} type="button" title="Delete" aria-label="Delete"><Icon name="trash" size={14} /> Delete</button>
         </div>
@@ -4591,6 +4927,8 @@ function scheduleColumns(onEdit, deleteRecord) {
     },
   ];
 }
+
+const RECURRENCE_LABEL = { 1: 'Monthly', 3: 'Quarterly', 6: 'Every 6 mo', 12: 'Yearly' };
 
 const maintenanceHistoryColumns = [
   { label: 'ID', render: (row) => row.maintenance_id },
@@ -4640,8 +4978,8 @@ function logColumns(vehicles, onViewVehicle) {
   ];
 }
 
-function PaginatedTable({ columns, rows, onRowClick, emptyMessage }) {
-  const [pageSize, setPageSize] = useState(25);
+function PaginatedTable({ columns, rows, onRowClick, emptyMessage, compact = false, pageSizeOptions = [10, 25, 50, 100], initialPageSize = 25 }) {
+  const [pageSize, setPageSize] = useState(initialPageSize);
   const [page, setPage] = useState(1);
 
   useEffect(() => {
@@ -4649,7 +4987,7 @@ function PaginatedTable({ columns, rows, onRowClick, emptyMessage }) {
   }, [rows.length, pageSize]);
 
   if (!rows?.length) {
-    return <DataTable columns={columns} rows={rows} onRowClick={onRowClick} emptyMessage={emptyMessage} />;
+    return <DataTable columns={columns} rows={rows} onRowClick={onRowClick} emptyMessage={emptyMessage} compact={compact} />;
   }
 
   const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
@@ -4659,14 +4997,14 @@ function PaginatedTable({ columns, rows, onRowClick, emptyMessage }) {
 
   return (
     <>
-      <DataTable columns={columns} rows={pageRows} onRowClick={onRowClick} />
+      <DataTable columns={columns} rows={pageRows} onRowClick={onRowClick} compact={compact} />
       <div className="table-pagination">
         <span className="muted">Showing {start + 1}-{Math.min(start + pageSize, rows.length)} of {rows.length}</span>
         <div className="table-pagination-controls">
           <label>
             Rows per page
             <select value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>
-              {[10, 25, 50, 100].map((n) => <option key={n} value={n}>{n}</option>)}
+              {pageSizeOptions.map((n) => <option key={n} value={n}>{n}</option>)}
             </select>
           </label>
           <button type="button" className="ghost-button" disabled={clampedPage <= 1} onClick={() => setPage((p) => p - 1)}>Prev</button>
@@ -4687,46 +5025,15 @@ function reportColumns(rows) {
   const keys = Object.keys(sample).filter((key) => !['category', 'vehicle', 'reported_by', 'maintenance_personnel', 'created_by', 'assigned_to'].includes(key));
 
   return keys.slice(0, 8).map((key) => ({
-    label: key.replaceAll('_', ' '),
+    // Prettify raw DB keys into Title Case headers ("maintenance_type" →
+    // "Maintenance Type") so the generated report reads like a real table.
+    label: key.replaceAll('_', ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
     render: (row) => String(row[key] ?? '-'),
   }));
 }
 
 function StatusBadge({ value }) {
   return <span className={`status-badge ${String(value).toLowerCase().replaceAll(' ', '-')}`}>{value ?? '-'}</span>;
-}
-
-function WorkspaceFooter() {
-  return (
-    <footer className="workspace-footer">
-      <div className="workspace-footer-brand">
-        <div className="workspace-footer-wordmark">
-          <Icon name="gear" size={36} className="workspace-footer-gear-icon" filled />
-          <span className="vms-wordmark vms-wordmark-md workspace-footer-vms-text">vms</span>
-        </div>
-        <p className="workspace-footer-tagline">A Smarter Way to Manage Your Barangay's Fleet.</p>
-        <div className="workspace-footer-social">
-          <a href="#" aria-label="Facebook"><Icon name="facebook" size={15} filled /></a>
-          <a href="#" aria-label="Instagram"><Icon name="instagram" size={15} filled /></a>
-          <a href="#" aria-label="X"><Icon name="twitterX" size={15} filled /></a>
-          <a href="#" aria-label="LinkedIn"><Icon name="linkedin" size={15} filled /></a>
-        </div>
-      </div>
-      <div className="workspace-footer-actions">
-        <div className="workspace-footer-buttons">
-          <button type="button" className="workspace-footer-btn workspace-footer-btn-light">Visit Support Center</button>
-          <button type="button" className="workspace-footer-btn workspace-footer-btn-dark">Contact Us</button>
-        </div>
-        <p className="workspace-footer-copyright">
-          © {new Date().getFullYear()} Barangay Vehicle Management System. All rights reserved.
-        </p>
-        <div className="workspace-footer-links">
-          <Link to="/privacy">Privacy Policy</Link>
-          <Link to="/terms">Terms of Service</Link>
-        </div>
-      </div>
-    </footer>
-  );
 }
 
 // Clamps long free-text table cells to a fixed number of lines so they can't
@@ -5090,6 +5397,19 @@ function DateBadge({ value }) {
   );
 }
 
+// Muted inline date for calm contexts (the ticket detail cards) where the
+// chunky red DateBadge tile reads as an alert. Dense tables keep the tile.
+function QuietDate({ value }) {
+  if (!value) return <span className="muted">—</span>;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return <span className="muted">—</span>;
+  return (
+    <span className="quiet-date">
+      <Icon name="calendar" size={12} /> {formatDate(value)}
+    </span>
+  );
+}
+
 // Plain time-of-day text for the "Time" column that sits next to a
 // DateBadge column — blank for date-only fields (no time component).
 function formatTime(value) {
@@ -5127,7 +5447,7 @@ function RepairLogEntries({ text, compact = false }) {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         {entries.map((entry, i) => (
           <p key={i} style={{ margin: 0, fontSize: '0.82rem', color: '#334155' }}>
-            {entry.iso && <span className="muted" style={{ fontSize: '0.7rem', marginRight: 6 }}>{formatDate(entry.iso)} {formatTime(entry.iso)}</span>}
+            {entry.iso && <span className="muted" style={{ fontSize: '0.7rem', marginRight: 6 }}>{formatDate(entry.iso)}</span>}
             {entry.message}
           </p>
         ))}
@@ -5294,16 +5614,6 @@ function mechanicAssignFields(lookups) {
   ];
 }
 
-const inspectionFields = [
-  { label: 'Inspection Result', name: 'inspection_result', options: ['Needs Maintenance', 'No Issues'], required: true, type: 'select' },
-  { label: 'Inspection Notes', name: 'inspection_notes', required: true, type: 'textarea' },
-];
-
-const verifyRepairFields = [
-  { label: 'Verification Verdict', name: 'verification_verdict', options: ['Approved', 'Rejected'], required: true, type: 'select' },
-  { label: 'Verification Notes', name: 'verification_notes', type: 'textarea', rows: 2 },
-];
-
 // Problem 2 — the functional test ("UAT") checklist. What must be physically
 // operated and confirmed depends on the KIND of vehicle, keyed off the same
 // Land/Water domain that drives the specs form (plus a fire-truck extra).
@@ -5460,8 +5770,9 @@ function TicketStatusBadge({ value, size = 'normal' }) {
 // TICKET DETAIL PANEL — shown when admin clicks a ticket row
 // =========================================================================
 
-function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, onConfirm, onAddSubIssue, onDeferSubIssue, onCloseTicket, onCancel, onUncancel, onDelete, onRequestConfirmation, onClose, asPage = false }) {
+function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, onReassignMechanic, onConfirm, onAddSubIssue, onDeferSubIssue, onCloseTicket, onCancel, onUncancel, onDelete, onRequestConfirmation, onClose, asPage = false }) {
   const [assigningId, setAssigningId] = useState(null);
+  const [reassigningId, setReassigningId] = useState(null);
   const [confirmingId, setConfirmingId] = useState(null);
   const [deferringId, setDeferringId] = useState(null);
   const [addingSubIssue, setAddingSubIssue] = useState(false);
@@ -5515,18 +5826,16 @@ function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, on
           <div>
             <span className="ticket-detail-id">Ticket #{ticket.ticket_id}</span>
             <h3 className="ticket-detail-title">{ticket.ticket_title}</h3>
+            {/* Tier 1 — real status chips only: the ticket's state, its
+                priority, and any genuine warnings (aging / recurring). Routine
+                facts (age, created date, progress) drop to the quiet metadata
+                line below so nothing competes with the two states that matter. */}
             <div className="ticket-detail-meta">
               <TicketStatusBadge value={ticket.status} size="large" />
               <TicketStatusBadge value={ticket.priority} />
-              {progress.total > 0 && (
-                <span className={`status-badge ${progress.done === progress.total ? 'ticket-done' : 'ticket-repair'}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                  <Icon name="checkCircle" size={12} /> {progress.done}/{progress.total} Done
-                  {progress.deferred > 0 && <> · {progress.deferred} Deferred</>}
-                </span>
-              )}
-              {typeof daysOpen === 'number' && (
-                <span className={`status-badge ${isAging ? 'ticket-cancelled' : 'ticket-open'}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }} title={isAging ? 'This ticket has been open a long time — resolve or close it.' : undefined}>
-                  <Icon name={isAging ? 'alert' : 'calendar'} size={12} /> Open {daysOpen} day{daysOpen === 1 ? '' : 's'}{isAging ? ' — aging' : ''}
+              {isAging && (
+                <span className="status-badge ticket-cancelled" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }} title="This ticket has been open a long time — resolve or close it.">
+                  <Icon name="alert" size={12} /> Aging — open {daysOpen} days
                 </span>
               )}
               {ticket.recurrence_count > 0 && (
@@ -5535,9 +5844,20 @@ function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, on
                   {['st', 'nd', 'rd'][ticket.recurrence_count] ?? 'th'} time
                 </span>
               )}
+            </div>
+
+            {/* Tier 2 — quiet reference metadata: no pills, muted text with dot
+                separators, read as a caption under the status chips. */}
+            <div className="ticket-detail-subline">
+              {typeof daysOpen === 'number' && !isAging && (
+                <span><Icon name="calendar" size={12} /> {daysOpen === 0 ? 'Opened today' : `Opened ${daysOpen} day${daysOpen === 1 ? '' : 's'} ago`}</span>
+              )}
               {ticket.created_at && (
-                <span className="status-badge" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                  <Icon name="calendar" size={12} /> Created {formatDate(ticket.created_at)}
+                <span><Icon name="clipboard" size={12} /> Created {formatDate(ticket.created_at)}</span>
+              )}
+              {progress.total > 0 && (
+                <span className={progress.done === progress.total ? 'is-complete' : undefined}>
+                  <Icon name="checkCircle" size={12} /> {progress.done} of {progress.total} done{progress.deferred > 0 ? ` · ${progress.deferred} deferred` : ''}
                 </span>
               )}
             </div>
@@ -5584,8 +5904,8 @@ function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, on
 
         <div className="ticket-detail-body ticket-detail-body-columns">
           <div className="ticket-detail-col-left">
-            <section className="ticket-section" style={{ padding: '0 12px 10px' }}>
-              <h4 style={{ margin: '0 -12px 8px', padding: '7px 12px', fontSize: '0.75rem' }}><Icon name="vehicle" size={14} /> Overview</h4>
+            <section className="ticket-section">
+              <h4><Icon name="vehicle" size={14} /> Overview</h4>
               <div className="ticket-detail-vehicle-layout" style={{ marginBottom: 6, padding: 8, gap: 10 }}>
                 {ticket.vehicle?.photo_url && (
                   <div className="ticket-detail-vehicle-photo" style={{ width: 44, height: 44 }}>
@@ -5604,8 +5924,8 @@ function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, on
             </section>
 
             {ticket.assigned_custodian_id && (
-              <section className="ticket-section" style={{ padding: '0 12px 10px' }}>
-                <h4 style={{ margin: '0 -12px 8px', padding: '7px 12px', fontSize: '0.75rem' }}><Icon name="search" size={14} /> Custodian Inspection</h4>
+              <section className="ticket-section">
+                <h4><Icon name="search" size={14} /> Custodian Inspection</h4>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: (ticket.inspection_notes ? 8 : 0) }}>
                   <div>
                     <span style={{ display: 'block', fontSize: '0.66rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 2 }}>Assigned To</span>
@@ -5626,7 +5946,7 @@ function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, on
                   {ticket.inspected_at && (
                     <div>
                       <span style={{ display: 'block', fontSize: '0.66rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 2 }}>Date</span>
-                      <DateBadge value={ticket.inspected_at} />
+                      <QuietDate value={ticket.inspected_at} />
                     </div>
                   )}
                 </div>
@@ -5637,8 +5957,8 @@ function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, on
             {/* Recaps the ticket's own lifecycle dates in one place — also
                 fills the left column so it doesn't end in a large empty gap
                 below the (usually taller) Sub-Issues column on the right. */}
-            <section className="ticket-section" style={{ padding: '0 12px 10px' }}>
-              <h4 style={{ margin: '0 -12px 8px', padding: '7px 12px', fontSize: '0.75rem' }}><Icon name="calendar" size={14} /> Ticket Timeline</h4>
+            <section className="ticket-section">
+              <h4><Icon name="calendar" size={14} /> Ticket Timeline</h4>
               <div style={{ display: 'flex', flexDirection: 'column' }}>
                 {[
                   { label: 'Created', at: ticket.created_at, by: ticket.created_by, icon: 'clipboard' },
@@ -5653,10 +5973,12 @@ function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, on
                       </span>
                       {i < all.length - 1 && <span style={{ width: 2, flex: 1, minHeight: 18, background: '#e2e8f0', marginTop: 2 }} />}
                     </div>
-                    <div style={{ paddingBottom: 10 }}>
-                      <p style={{ margin: '0 0 3px', fontSize: '0.82rem', fontWeight: 700, color: '#0f172a' }}>{ev.label}</p>
-                      {ev.by?.name && <p className="muted" style={{ margin: '0 0 4px', fontSize: '0.76rem' }}>by {ev.by.name}</p>}
-                      <DateBadge value={ev.at} />
+                    <div style={{ paddingBottom: i < all.length - 1 ? 16 : 2 }}>
+                      <p style={{ margin: '0 0 3px', fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-strong, #0f172a)' }}>{ev.label}</p>
+                      <div className="muted" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '2px 8px', fontSize: '0.76rem' }}>
+                        {ev.by?.name && <span>by {ev.by.name}</span>}
+                        <QuietDate value={ev.at} />
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -5666,8 +5988,8 @@ function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, on
 
           <div className="ticket-detail-col-right">
           {ticket.status !== 'Open' && (
-            <section className="ticket-section" style={{ padding: '0 12px 10px' }}>
-              <h4 style={{ margin: '0 -12px 8px', padding: '7px 12px', fontSize: '0.75rem' }}><Icon name="wrench" size={14} /> Sub-Issues under "{ticket.ticket_title}"</h4>
+            <section className="ticket-section">
+              <h4><Icon name="wrench" size={14} /> Sub-Issues under "{ticket.ticket_title}"</h4>
               <p className="muted" style={{ marginTop: -4, marginBottom: 8, fontSize: '0.82rem' }}>Keep sub-issues and the mechanic's Maintenance Type scoped to this Main Issue — an unrelated repair belongs on its own ticket instead.</p>
 
               {progress.total > 0 && (
@@ -5730,8 +6052,10 @@ function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, on
                       verification step between the mechanic's repair and the
                       Admin's final confirmation, so it never looks skipped. */}
                   {stageBanner && (
-                    <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: stageBanner.bg, borderLeft: `3px solid ${stageBanner.color}`, borderRadius: 6, fontSize: '0.82rem', color: stageBanner.text }}>
-                      <Icon name={stageBanner.icon} size={14} /> {stageBanner.label}
+                    <div style={{ marginTop: 8 }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 11px', background: stageBanner.bg, border: `1px solid ${stageBanner.color}40`, borderRadius: 999, fontSize: '0.76rem', fontWeight: 600, color: stageBanner.text }}>
+                        <Icon name={stageBanner.icon} size={12} /> {stageBanner.label}
+                      </span>
                     </div>
                   )}
 
@@ -5831,6 +6155,31 @@ function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, on
                     )
                   )}
 
+                  {/* Hand an in-progress work order to a different mechanic
+                      (e.g. the assigned one is unavailable) so it isn't frozen. */}
+                  {isAdmin && si.status === 'Under Repair' && (
+                    reassigningId === si.sub_issue_id ? (
+                      <div className="ticket-inline-form" style={{ marginTop: 8, padding: '10px 12px' }}>
+                        <p className="muted" style={{ marginBottom: 8, fontSize: '0.8rem' }}>Hand this work order to a different mechanic (e.g. the current one is unavailable).</p>
+                        <SmartForm
+                          fields={[
+                            { label: 'Reassign to Mechanic', name: 'assigned_mechanic_id', options: (lookups.maintenance_personnel ?? []).filter((m) => m.id !== si.assigned_mechanic_id).map((m) => ({ value: m.id, label: m.name })), required: true, type: 'select' },
+                            { label: 'Reason for reassigning', name: 'reassign_reason', required: true, type: 'textarea', rows: 2 },
+                          ]}
+                          key={`reassign-${si.sub_issue_id}`}
+                          onCancel={() => setReassigningId(null)}
+                          onSubmit={(payload) => onReassignMechanic(ticket, si, payload).then(() => setReassigningId(null))}
+                          submitLabel="Reassign Work Order"
+                          title=""
+                        />
+                      </div>
+                    ) : (
+                      <button className="btn-edit-action" style={{ marginTop: 10 }} type="button" onClick={() => { setReassigningId(si.sub_issue_id); setDeferringId(null); setConfirmingId(null); }}>
+                        <Icon name="undo" size={14} /> Reassign Mechanic
+                      </button>
+                    )
+                  )}
+
                   {/* Escape hatch for a line item that can't be finished (no
                       budget, part unavailable). Available while unresolved. */}
                   {isAdmin && ticket.status === 'Active' && !isResolvedStatus(si.status) && deferringId !== si.sub_issue_id && (
@@ -5912,19 +6261,19 @@ function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, on
           )}
 
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-            {ticket.status === 'Cancelled' && onUncancel && (
+            {isAdmin && ticket.status === 'Cancelled' && onUncancel && (
               <button className="primary-button" type="button" onClick={() => onUncancel(ticket)}>Restore Ticket</button>
             )}
             {isAdmin && canClose && (
               <button className="primary-button" type="button" onClick={() => onCloseTicket(ticket, {})}>Close Ticket</button>
             )}
-            {ticket.status !== 'Closed' && ticket.status !== 'Cancelled' && (
+            {isAdmin && ticket.status !== 'Closed' && ticket.status !== 'Cancelled' && (
               <button className="ghost-button" type="button" onClick={() => onCancel(ticket)}>Cancel Ticket</button>
             )}
             {/* Once every sub-issue is resolved (ready to close) or the ticket
                 is already Closed, there's real work on record — Delete is only
                 for genuine mistakes, not for discarding finished repairs. */}
-            {ticket.status !== 'Closed' && !canClose && (
+            {isAdmin && ticket.status !== 'Closed' && !canClose && (
               <button className="danger-button" type="button" onClick={requestDelete}>Delete Ticket</button>
             )}
           </div>
@@ -5977,6 +6326,7 @@ function TicketProfilePage({ ticketId, role, userId, ticketLookups, onBack, onDe
       ticket={ticket}
       lookups={ticketLookups}
       onAssignMechanic={(t, subIssue, payload) => sendTicketAction(`/tickets/${t.ticket_id}/sub-issues/${subIssue.sub_issue_id}/assign-mechanic`, payload, 'Mechanic assigned — work order dispatched.').then(loadTicket)}
+      onReassignMechanic={(t, subIssue, payload) => sendTicketAction(`/tickets/${t.ticket_id}/sub-issues/${subIssue.sub_issue_id}/reassign-mechanic`, payload, 'Work order reassigned.').then(loadTicket)}
       onConfirm={(t, subIssue, payload) => sendTicketAction(`/tickets/${t.ticket_id}/sub-issues/${subIssue.sub_issue_id}/confirm`, payload, 'Confirmation verdict submitted.').then(loadTicket)}
       onAddSubIssue={(t, payload) => sendTicketAction(`/tickets/${t.ticket_id}/sub-issues`, payload, 'Sub-issue added.', 'post').then(loadTicket)}
       onDeferSubIssue={(t, subIssue, payload) => sendTicketAction(`/tickets/${t.ticket_id}/sub-issues/${subIssue.sub_issue_id}/defer`, payload, 'Sub-issue deferred — a follow-up issue report was opened.').then(loadTicket)}
@@ -6082,14 +6432,7 @@ function TicketModule({
 
   return (
     <div className="module-grid">
-      <div className="info-callout">
-        <svg className="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="12" cy="12" r="10"></circle>
-          <line x1="12" y1="16" x2="12" y2="12"></line>
-          <line x1="12" y1="8" x2="12.01" y2="8"></line>
-        </svg>
-        <p className="module-description">Central Ticket Ledger — create tickets, assign custodians for inspection, dispatch mechanics, and confirm closures through the 5-phase workflow.</p>
-      </div>
+      <DismissibleHint description="Central Ticket Ledger — create tickets, assign custodians for inspection, dispatch mechanics, and confirm closures through the 5-phase workflow." />
       <ModuleStatCards
         totalLabel="Total Tickets"
         total={ticketStats.total}
@@ -6151,7 +6494,7 @@ function TicketModule({
         {tickets.length === 0
           ? <p className="empty-state">No tickets yet. Create one to begin the workflow.</p>
           : ticketViewMode === 'table'
-            ? <DataTable columns={ticketTableColumns()} rows={tickets} onRowClick={onViewTicket} />
+            ? <PaginatedTable columns={ticketTableColumns()} rows={tickets} onRowClick={onViewTicket} />
             : (
               <div className="ticket-card-grid">
                 {tickets.map((t) => (
@@ -6266,13 +6609,11 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, canManage = false, ca
     setTabLoading(true);
     const get = (url) => api.get(url).then((r) => r.data).catch(() => []);
     Promise.all([
-      get('/locations'),
       get('/maintenance-records'),
       get('/tickets'),
-      get('/histories'),
       get('/issues'),
-    ]).then(([location, maintenance, tickets, history, issues]) => {
-      if (!cancelled) setTabData({ location, maintenance, tickets, history, issues });
+    ]).then(([maintenance, tickets, issues]) => {
+      if (!cancelled) setTabData({ maintenance, tickets, issues });
     }).finally(() => {
       if (!cancelled) setTabLoading(false);
     });
@@ -6360,7 +6701,6 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, canManage = false, ca
   const vehMaintenance = rowsFor('maintenance', (r) => Number(r.vehicle?.vehicle_id) === numericId);
   const vehTickets = rowsFor('tickets', (r) => Number(r.vehicle?.vehicle_id) === numericId);
   const vehIssues = rowsFor('issues', (r) => Number(r.vehicle?.vehicle_id ?? r.vehicle_id) === numericId);
-  const vehHistory = rowsFor('history', (r) => Number(r.vehicle?.vehicle_id) === numericId);
   const openTickets = vehTickets.filter((t) => !['Done', 'Cancelled'].includes(t.status)).length;
   const openIssues = vehIssues.filter((i) => i.status !== 'Resolved').length;
   // Done tickets auto-copy their cost into a maintenance record, so count
@@ -6377,7 +6717,7 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, canManage = false, ca
     ...(vehicle.photo_url ? [{ label: 'Vehicle Photo', url: vehicle.photo_url }] : []),
     ...vehIssues.filter((i) => i.photo_url).map((i) => ({ label: `Issue #${i.issue_report_id} — ${i.issue_type}`, url: i.photo_url })),
   ];
-  // Pie/donut breakdown of this vehicle's activity for the Analytics panel.
+  // Activity breakdown (maintenance vs tickets vs issues) for the Analytics donut.
   const activitySegments = [
     { label: 'Maintenance', value: vehMaintenance.length, color: '#2563eb' },
     { label: 'Tickets', value: vehTickets.length, color: '#f97316' },
@@ -6386,7 +6726,7 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, canManage = false, ca
   const activityTotal = activitySegments.reduce((sum, s) => sum + s.value, 0);
 
   return (
-    <ModulePanel description="Full profile, location history, maintenance, tickets, and activity for this vehicle.">
+    <ModulePanel description="Full profile, maintenance, and tickets for this vehicle.">
       <div className="vehicle-profile-header">
         <button className="ghost-button btn-exit-action" type="button" onClick={onBack}><Icon name="arrowLeft" size={18} /></button>
         <div className="vehicle-profile-identity">
@@ -6513,8 +6853,8 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, canManage = false, ca
               {vehicle.estimated_return_date && (
                 <div><dt>Est. Return Date</dt><dd>{formatForecastDate(vehicle.estimated_return_date)}</dd></div>
               )}
-              <div><dt>Date Added</dt><dd>{vehicle.created_at ? <DateBadge value={vehicle.created_at} /> : '-'}</dd></div>
-              <div><dt>Last Updated</dt><dd>{vehicle.updated_at ? <DateBadge value={vehicle.updated_at} /> : '-'}</dd></div>
+              <div><dt>Date Added</dt><dd>{vehicle.created_at ? <QuietDate value={vehicle.created_at} /> : '-'}</dd></div>
+              <div><dt>Last Updated</dt><dd>{vehicle.updated_at ? <QuietDate value={vehicle.updated_at} /> : '-'}</dd></div>
             </dl>
             <p className="veh-hint">Availability = can it be dispatched now. Condition = its physical state. Tracked independently.</p>
           </section>
@@ -6586,22 +6926,6 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, canManage = false, ca
         </div>
 
         <section className="veh-card veh-section">
-          <div className="veh-card-head"><Icon name="pin" size={16} /><h4>Location History</h4></div>
-          {tabLoading ? <ModuleLoader label="Loading location history" /> : (
-            <DataTable
-              columns={[
-                { label: 'Current Location', render: (r) => r.current_location ?? '-' },
-                { label: 'Address / Area', render: (r) => r.address_area ?? '-' },
-                { label: 'Updated By', render: (r) => <UserAvatarName user={r.updated_by} /> },
-                { label: 'Date Updated', render: (r) => <DateBadge value={r.updated_at} /> },
-                { label: 'Time', render: (r) => formatTime(r.updated_at) },
-              ]}
-              rows={rowsFor('location', (r) => Number(r.vehicle_id) === numericId)}
-            />
-          )}
-        </section>
-
-        <section className="veh-card veh-section">
           <div className="veh-card-head"><Icon name="wrench" size={16} /><h4>Maintenance Records</h4></div>
           {tabLoading ? <ModuleLoader label="Loading maintenance records" /> : (
             <DataTable
@@ -6636,21 +6960,6 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, canManage = false, ca
           )}
         </section>
 
-        <section className="veh-card veh-section">
-          <div className="veh-card-head"><Icon name="calendar" size={16} /><h4>Activity History</h4></div>
-          {tabLoading ? <ModuleLoader label="Loading activity history" /> : (
-            <DataTable
-              columns={[
-                { label: 'Activity', render: (r) => r.activity_type },
-                { label: 'Description', className: 'cell-text', render: (r) => <ExpandableText text={r.description} /> },
-                { label: 'Updated By', render: (r) => <UserAvatarName user={r.updated_by} /> },
-                { label: 'Date', render: (r) => <DateBadge value={r.created_at} /> },
-                { label: 'Time', render: (r) => formatTime(r.created_at) },
-              ]}
-              rows={vehHistory}
-            />
-          )}
-        </section>
       </>
       )}
     </ModulePanel>
@@ -6736,14 +7045,7 @@ function CustodianInspectionModule({
 
   return (
     <div className="module-grid">
-      <div className="info-callout">
-        <svg className="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="12" cy="12" r="10"></circle>
-          <line x1="12" y1="16" x2="12" y2="12"></line>
-          <line x1="12" y1="8" x2="12.01" y2="8"></line>
-        </svg>
-        <p className="module-description">Phase 2 — Vehicle Evaluation. Review tickets assigned to you, submit physical inspection findings, and check back here to see what you've already inspected.</p>
-      </div>
+      <DismissibleHint description="Phase 2 — Vehicle Evaluation. Review tickets assigned to you, submit physical inspection findings, and check back here to see what you've already inspected." />
       <ModuleStatCards
         totalLabel="Total Assigned"
         total={stats.total}
@@ -6925,14 +7227,7 @@ function CustodianVerificationModule({
   const isPendingView = activeFilter !== 'Verified';
   return (
     <div className="module-grid">
-      <div className="info-callout">
-        <svg className="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="12" cy="12" r="10"></circle>
-          <line x1="12" y1="16" x2="12" y2="12"></line>
-          <line x1="12" y1="8" x2="12.01" y2="8"></line>
-        </svg>
-        <p className="module-description">Phase 4 Tier 1 — Repair Integrity Verification. Review mechanic work, issue your inspection verdict before Admin confirmation, and check back here to see what you've already verified.</p>
-      </div>
+      <DismissibleHint description="Phase 4 Tier 1 — Repair Integrity Verification. Review mechanic work, issue your inspection verdict before Admin confirmation, and check back here to see what you've already verified." />
       <ModuleStatCards
         totalLabel="Total Assigned"
         total={stats.total}
@@ -6959,7 +7254,8 @@ function CustodianVerificationModule({
           : (
             <DataTable
               columns={[
-                { label: 'Ticket', render: (r) => `#${r.ticket_id} — ${r.ticket_title}` },
+                { label: 'Ticket ID', render: (r) => r.ticket_id },
+                { label: 'Ticket Title', render: (r) => r.ticket_title },
                 { label: 'Vehicle', render: (r) => <VehicleCell vehicle={r.vehicle} /> }, { label: 'Plate', render: (r) => r.vehicle?.plate_number ?? '-' },
                 { label: 'Sub-Issue', render: (r) => r.title },
                 { label: 'Mechanic', render: (r) => r.assigned_mechanic?.name ?? '—' },
@@ -7041,17 +7337,17 @@ function CustodianVerificationModule({
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
             <div>
               <h4 style={{ margin: '0 0 4px 0', fontSize: '0.9rem', color: 'var(--text-muted)' }}>Repair Start Date</h4>
-              <div>{viewLogsTarget?.repair_start_date ?? '—'}</div>
+              <div>{viewLogsTarget?.repair_started_at ? formatDate(viewLogsTarget.repair_started_at) : '—'}</div>
             </div>
             <div>
               <h4 style={{ margin: '0 0 4px 0', fontSize: '0.9rem', color: 'var(--text-muted)' }}>Repair Completion Date</h4>
-              <div>{viewLogsTarget?.repair_completed_at ?? viewLogsTarget?.repair_completion_date ?? '—'}</div>
+              <div>{viewLogsTarget?.repair_completed_at ? formatDate(viewLogsTarget.repair_completed_at) : '—'}</div>
             </div>
           </div>
           <div>
             <h4 style={{ margin: '0 0 6px 0', fontSize: '0.9rem', color: 'var(--text-muted)' }}>Repair Cost / Expenses</h4>
             <div style={{ fontWeight: 600, color: 'var(--text-success)', fontSize: '1.1rem' }}>
-              {viewLogsTarget?.repair_cost ? `₱${Number(viewLogsTarget.repair_cost).toLocaleString('en-US', { minimumFractionDigits: 2 })}` : '₱0.00'}
+              {viewLogsTarget?.maintenance_cost ? `₱${Number(viewLogsTarget.maintenance_cost).toLocaleString('en-US', { minimumFractionDigits: 2 })}` : '₱0.00'}
             </div>
           </div>
         </div>
@@ -7087,14 +7383,7 @@ function MechanicWorkOrderModule({
 
   return (
     <div className="module-grid">
-      <div className="info-callout">
-        <svg className="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="12" cy="12" r="10"></circle>
-          <line x1="12" y1="16" x2="12" y2="12"></line>
-          <line x1="12" y1="8" x2="12.01" y2="8"></line>
-        </svg>
-        <p className="module-description">Phase 3 — Work Orders assigned to you. Execute vehicle repairs, submit your repair logs to send the ticket for Custodian inspection, and check back here to see what you've already logged.</p>
-      </div>
+      <DismissibleHint description="Phase 3 — Work Orders assigned to you. Execute vehicle repairs, submit your repair logs to send the ticket for Custodian inspection, and check back here to see what you've already logged." />
       <ModuleStatCards
         totalLabel="Total Assigned"
         total={stats.total}
@@ -7122,7 +7411,8 @@ function MechanicWorkOrderModule({
           : (
             <DataTable
               columns={[
-                { label: 'Ticket', render: (r) => `#${r.ticket_id} — ${r.ticket_title}` },
+                { label: 'Ticket ID', render: (r) => r.ticket_id },
+                { label: 'Ticket Title', render: (r) => r.ticket_title },
                 { label: 'Vehicle', render: (r) => <VehicleCell vehicle={r.vehicle} /> }, { label: 'Plate', render: (r) => r.vehicle?.plate_number ?? '-' },
                 {
                   label: 'Work Order',
@@ -7386,22 +7676,6 @@ const PHASE_STEP_COLORS = {
   'Closed': '#16a34a',
 };
 
-function phaseIsPast(currentStatus, checkStatus) {
-  const cur = phaseOrder.indexOf(currentStatus);
-  const chk = phaseOrder.indexOf(checkStatus);
-  return chk < cur;
-}
-
-function ticketPhaseLabel(status) {
-  const labels = {
-    'Open': 'Awaiting Custodian Inspection',
-    'Active': 'In Progress — sub-issues being worked',
-    'Closed': 'Closed & Archived',
-    'Cancelled': 'Cancelled',
-  };
-  return labels[status] ?? status;
-}
-
 function FilterBar({
   categories = [],
   vehicles = [],
@@ -7584,8 +7858,9 @@ function LocalSearchInput({ value, onChange, placeholder = "Search...", onExport
         )}
       </div>
       {onAdd && (
-        <button className="icon-add-btn" onClick={onAdd} type="button" title={addLabel} aria-label={addLabel}>
+        <button className="icon-add-btn has-label" onClick={onAdd} type="button" title={addLabel} aria-label={addLabel}>
           <Icon name="plus" size={18} />
+          <span className="icon-add-btn-label">{addLabel}</span>
         </button>
       )}
       {onExport && (

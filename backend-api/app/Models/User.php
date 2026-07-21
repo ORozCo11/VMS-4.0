@@ -42,6 +42,14 @@ class User extends Authenticatable
         'roles'     => 'array',
     ];
 
+    // Matches the migration's DB-level default. Without this, a User
+    // instance built in PHP without an explicit is_active (e.g. a factory
+    // in tests) casts its unset attribute to `false`, not the DB's `true` —
+    // a silent mismatch between what's in memory and what's actually stored.
+    protected $attributes = [
+        'is_active' => true,
+    ];
+
     /**
      * Multi-role support. `role` remains the user's PRIMARY role (used for
      * routing, dashboards, badges); `roles` is the full set of hats the
@@ -51,14 +59,10 @@ class User extends Authenticatable
      */
     public function hasRole(string $role): bool
     {
-        $roles = $this->roles;
-        // Fall back to the primary role when the roles list isn't populated
-        // (e.g. legacy rows or factory-made users created with only `role`).
-        if (empty($roles)) {
-            return $this->role === $role;
-        }
-
-        return in_array($role, $roles, true);
+        // Delegate to allRoles() so the primary `role` always counts even if
+        // `roles` is populated but happens not to list it — hasRole(),
+        // allRoles(), and scopeHavingRole() must always agree on membership.
+        return in_array($role, $this->allRoles(), true);
     }
 
     public function hasAnyRole(array $roles): bool

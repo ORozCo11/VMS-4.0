@@ -127,6 +127,9 @@ class UserController extends Controller
         abort_if($user->id === $request->user()->id, 422, 'You cannot deactivate your own account.');
 
         $user->update(['is_active' => false]);
+        // Revoke every existing token immediately — otherwise a session
+        // already in progress keeps working until it happens to expire.
+        $user->tokens()->delete();
 
         return response()->json(['message' => 'User deactivated.']);
     }

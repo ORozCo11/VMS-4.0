@@ -1,14 +1,144 @@
 /* AUTH */
+/* Full-page shell — header, the dark hero (Aurora + card), and the shared
+   WorkspaceFooter, so the sign-in screen reads as the same site as the
+   authenticated app rather than a disconnected standalone page. */
+.auth-page-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+.auth-page-header {
+  /* Deeper, richer blue — closer to the reference than the app's usual
+     brand blue, which read lighter/thinner next to it. */
+  background: #1d4ed8;
+  flex-shrink: 0;
+}
+.auth-page-header-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  /* Taller bar — the reference gives the logo/nav noticeably more vertical
+     breathing room than a typical compact toolbar. */
+  padding: 26px 32px;
+}
+.auth-page-header-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #ffffff;
+  text-decoration: none;
+  flex-shrink: 0;
+}
+.auth-page-header-gear {
+  stroke: #ffffff;
+  color: #ffffff;
+  flex-shrink: 0;
+  animation: vms-gear-spin 4s linear infinite;
+  /* White gear on the blue header — draw the center ring in the header's own
+     blue so the cutout hole actually shows instead of blending into the gear. */
+  --gear-ring: #1d4ed8;
+}
+/* Big — matches the reference's prominent wordmark scale, sized well above
+   the app's usual small/medium wordmark variants. Scoped under the brand
+   link (2 classes) so it reliably beats the base .vms-wordmark's blue color
+   rule (1 class) regardless of which one is declared later in this file —
+   plain equal-specificity color:#fff here was losing that fight, rendering
+   invisible blue-on-blue against the header. */
+.auth-page-header-brand-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1;
+}
+.auth-page-header-brand .vms-wordmark {
+  color: #ffffff;
+  font-size: 2.9rem;
+  line-height: 1;
+}
+.auth-page-header-subtext {
+  margin-top: 3px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.82);
+}
+/* vms brand pinned far left (via space-between on the parent row); nav +
+   Login button grouped together and pinned far right as one unit. */
+.auth-page-header-right {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+}
+.auth-page-nav {
+  display: flex;
+  align-items: center;
+  gap: 26px;
+}
+.auth-page-nav a {
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 0.92rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+.auth-page-nav a:hover { color: #ffffff; text-decoration: underline; }
+.auth-page-header-login-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 38px;
+  padding: 0 20px;
+  border-radius: 8px;
+  border: 1.5px solid #ffffff;
+  color: #ffffff;
+  font-size: 0.88rem;
+  font-weight: 700;
+  text-decoration: none;
+  flex-shrink: 0;
+  transition: background 0.15s ease;
+}
+.auth-page-header-login-btn:hover { background: rgba(255, 255, 255, 0.14); }
+@media (max-width: 640px) {
+  .auth-page-header-inner { flex-wrap: wrap; gap: 12px 20px; padding: 14px 20px; }
+  .auth-page-header-right { flex-wrap: wrap; gap: 12px 20px; width: 100%; }
+  .auth-page-nav { gap: 16px; }
+}
+
+/* A fixed dark, moody brand background (matching the reference) — deliberately
+   independent of the in-app light/dark theme toggle, since that preference
+   doesn't exist yet at the sign-in screen. The Aurora component supplies the
+   soft blurred color blobs on top of this near-black base. */
 .auth-page {
   position: relative;
-  min-height: 100vh;
+  /* Slightly LESS than a full viewport (minus roughly the header's own
+     height, plus a little extra) — so the footer's top edge peeks in at
+     the bottom of the default, unscrolled view (like the reference), while
+     most of the footer still requires scrolling to reveal. Using 100vh
+     outright pushed the footer fully below the fold with no peek at all. */
+  min-height: calc(100vh - 140px);
   display: grid;
   place-items: center;
-  background: linear-gradient(135deg, #1e3a5f 0%, #0f172a 100%);
+  background: #05070d;
   padding: 40px 20px;
   overflow: hidden;
 }
 .auth-page .auth-card { position: relative; z-index: 1; }
+/* The card itself always stays a clean white, regardless of the in-app
+   light/dark theme cascade further down this file — !important because
+   several later theme-scoped rules of equal-or-higher specificity would
+   otherwise flip it dark depending on the persisted theme preference. */
+.auth-page .auth-card {
+  background: #ffffff !important;
+  border: none !important;
+}
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
 .auth-card {
   width: min(100%, 440px);
   background: #ffffff;
@@ -112,39 +242,149 @@
   to   { transform: translate(6%, -10%) scale(1.1); }
 }
 
-.demo-account-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-  margin: 18px 0 20px;
-}
-.demo-account-button {
-  align-items: center;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  color: #fff;
-  cursor: pointer;
+/* Dedicated login form shell — distinct from the CRUD .smart-form (which
+   carries admin-panel Orbitron/Space Grotesk styling) so the sign-in card
+   reads as a clean, focused auth screen. Icon-prefixed inputs for a more
+   organized, professional first impression. */
+.auth-form {
   display: flex;
   flex-direction: column;
-  font-size: 0.78rem;
+  gap: 18px;
+}
+.auth-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.auth-field > span {
+  font-size: 0.76rem;
   font-weight: 700;
-  gap: 2px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #2563eb;
+}
+.auth-input-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.auth-input-icon {
+  position: absolute;
+  left: 14px;
+  color: var(--text-faint, #94a3b8);
+  pointer-events: none;
+  flex-shrink: 0;
+}
+.auth-input-wrapper input {
+  width: 100%;
+  padding: 13px 16px 13px 42px;
+  border: 1.5px solid var(--border, #d9e2ef);
+  border-radius: 10px;
+  background: var(--surface, #ffffff);
+  /* Hardcoded, not the --text-strong theme variable — that resolves to a
+     near-white color by default (meant for text on dark backgrounds
+     elsewhere in the app), which rendered typed text almost invisible
+     against this field's pale background. This login card is intentionally
+     theme-independent, so its own text color should be too. */
+  color: #0f172a !important;
+  font-size: 0.95rem;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.auth-input-wrapper input::placeholder { color: var(--text-faint, #94a3b8); }
+.auth-input-wrapper input:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.14);
+}
+.auth-input-wrapper .password-toggle-btn { right: 12px; }
+.auth-input-wrapper:has(.password-toggle-btn) input { padding-right: 42px; }
+.auth-submit-btn {
+  width: 100%;
+  height: 46px;
+  margin-top: 4px;
+  font-size: 0.95rem;
+}
+
+/* Reference-matched heading — plain bold blue "Login", replacing the
+   VMS-specific "Welcome back" + subtitle copy for this redesign. */
+.auth-login-heading {
+  font-size: 1.5rem;
+  font-weight: 800;
+  color: #2563eb !important;
+  margin: 6px 0 0;
+}
+
+/* No-icon input variant (reference has plain fields, no icon prefix) —
+   normal left padding instead of the icon-reserved 42px, pale blue fill. */
+.auth-input-plain input {
+  padding-left: 16px;
+  background: #eef4fc;
+  border-color: #dce8f8;
+}
+.auth-input-plain:has(.password-toggle-btn) input { padding-left: 16px; }
+
+.auth-remember {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: -6px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-muted, #64748b);
+  cursor: pointer;
+}
+.auth-remember input {
+  width: 16px;
+  height: 16px;
+  accent-color: #2563eb;
+  cursor: pointer;
+}
+
+/* About Us / Developers — static content pages reached from the header nav.
+   Wider and left-aligned, unlike the narrow centered sign-in card. */
+.auth-page-static { align-items: flex-start; padding: 48px 20px; }
+.auth-static-card {
+  width: min(100%, 720px);
+  text-align: left;
+}
+.auth-static-card h1 { font-size: 1.6rem; font-weight: 800; color: #0f172a; margin: 6px 0 16px; }
+.auth-static-card h3 { font-size: 1rem; font-weight: 700; color: #0f172a; margin: 20px 0 8px; }
+.auth-static-card p { font-size: 0.92rem; line-height: 1.7; color: #334155; margin: 0 0 10px; }
+.auth-static-card ul { margin: 0 0 10px; padding-left: 20px; }
+.auth-static-card li { font-size: 0.92rem; line-height: 1.7; color: #334155; margin-bottom: 4px; }
+
+.dev-team-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 16px;
+  margin: 20px 0 8px;
+}
+.dev-team-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 20px 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+.dev-team-avatar {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: #2563eb;
+  color: #ffffff;
+  font-weight: 800;
+  font-size: 1.1rem;
+  display: flex;
+  align-items: center;
   justify-content: center;
-  letter-spacing: 0.02em;
-  min-height: 50px;
-  padding: 7px 8px;
-  transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+  margin-bottom: 10px;
 }
-.demo-account-button small {
-  color: inherit;
-  font-size: 0.68rem;
-  font-weight: 700;
-  opacity: 0.72;
-}
-.demo-account-button:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(15, 23, 42, 0.12); }
-.demo-account-button.admin { background: linear-gradient(90deg, #1d4ed8, #2563eb); }
-.demo-account-button.custodian { background: linear-gradient(90deg, #059669, #10b981); }
-.demo-account-button.maintenance { background: linear-gradient(90deg, #7c3aed, #8b5cf6); }
+.dev-team-name { font-size: 0.9rem; font-weight: 700; color: #0f172a; margin: 0; }
+.dev-team-role { font-size: 0.78rem; color: #64748b; margin: 2px 0 0; }
+
 .primary-link {
   display: inline-flex; align-items: center; justify-content: center;
   height: 42px; padding: 0 20px; border-radius: 8px;
@@ -392,10 +632,6 @@
    Rendered only under import.meta.env.DEV, absent from production builds. */
 .dev-impersonate {
   display: flex; align-items: center; gap: 8px;
-  padding: 4px 6px;
-  border: 1px solid rgba(37, 99, 235, 0.22);
-  border-radius: 6px;
-  background: rgba(37, 99, 235, 0.06);
 }
 .dev-impersonate select {
   border: 1px solid rgba(37, 99, 235, 0.28); border-radius: 6px;
@@ -584,6 +820,94 @@
   .workspace-footer-copyright {
     white-space: normal;
   }
+}
+
+/* AuthFooter — public-page footer (Login, About Us, Developers). No logo
+   (the header already carries the brand); a large tagline + socials on the
+   left, real site links on the right, copyright/legal along the bottom. */
+.auth-footer {
+  margin-top: auto;
+  background: #1d4ed8;
+  padding: 48px 40px 0;
+}
+.auth-footer-main {
+  display: flex;
+  justify-content: space-between;
+  gap: 32px;
+  flex-wrap: wrap;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding-bottom: 32px;
+}
+.auth-footer-brand { max-width: 420px; }
+.auth-footer-tagline {
+  font-size: 1.5rem;
+  font-weight: 800;
+  line-height: 1.3;
+  color: #ffffff;
+  margin: 0 0 20px;
+}
+.auth-footer-social {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.auth-footer-social a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.14);
+  color: #ffffff;
+  transition: background 0.15s ease;
+}
+.auth-footer-social a:hover { background: rgba(255, 255, 255, 0.26); }
+.auth-footer-links {
+  display: flex;
+  gap: 56px;
+}
+.auth-footer-col {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.auth-footer-col a {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.85);
+}
+.auth-footer-col a:hover { color: #ffffff; text-decoration: underline; }
+.auth-footer-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 20px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.22);
+}
+.auth-footer-copyright {
+  margin: 0;
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.75);
+}
+.auth-footer-legal {
+  display: flex;
+  gap: 24px;
+}
+.auth-footer-legal a {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #ffffff;
+}
+.auth-footer-legal a:hover { text-decoration: underline; }
+@media (max-width: 720px) {
+  .auth-footer-main { flex-direction: column; }
+  .auth-footer-bottom { justify-content: center; text-align: center; }
 }
 
 /* NOTICES */
@@ -840,7 +1164,16 @@ html[data-theme="light"] .toast-notice.error {
   border-radius: 10px; padding: 12px 16px; margin-bottom: 0;
 }
 .callout-icon { width: 16px; height: 16px; stroke: #1d4ed8; flex-shrink: 0; margin-top: 2px; }
-.module-description { font-size: 0.85rem; color: #1e3a8a; font-weight: 600; line-height: 1.5; }
+.module-description { font-size: 0.85rem; color: #1e3a8a; font-weight: 600; line-height: 1.5; flex: 1; }
+.info-callout-dismiss {
+  flex-shrink: 0; margin: -2px -4px 0 auto;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; padding: 0;
+  background: transparent; border: none; border-radius: 6px;
+  color: #1d4ed8; cursor: pointer; opacity: 0.6;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+.info-callout-dismiss:hover { opacity: 1; background: rgba(37, 99, 235, 0.12); }
 
 /* MODULE GRID — always full width; forms open as modals */
 .module-grid { display: grid; grid-template-columns: 1fr; gap: 24px; align-items: start; }
@@ -870,6 +1203,9 @@ html[data-theme="light"] .toast-notice.error {
 .metric-card-iconic::before { display: none; }
 .metric-card-iconic .metric-card-icon { display: flex; align-items: center; justify-content: center; flex-shrink: 0; width: 40px; height: 40px; border-radius: 10px; line-height: 0; margin: 0; }
 .metric-card-icon svg { display: block; margin: auto; }
+/* Total/summary card icon — theme-aware blue tint instead of a hardcoded
+   pale-blue that only worked in light mode. */
+.metric-card-icon.is-total { background: rgba(37, 99, 235, 0.12); color: var(--primary, #2563eb); }
 .metric-card-iconic .metric-card-body { display: flex; flex-direction: column; text-align: left; }
 .metric-card-iconic .metric-card-body span { margin-bottom: 4px; }
 .metric-card-iconic .metric-card-body strong { font-size: 1.5rem; }
@@ -903,6 +1239,12 @@ table {
   border-collapse: collapse;
   font-size: 0.875rem;
   table-layout: auto;
+}
+/* When a table declares explicit column widths (via colgroup), honour them
+   strictly with a fixed layout so columns are proportioned as designed
+   instead of stretching to fit content (which wastes space unevenly). */
+.table-shell.is-fixed table {
+  table-layout: fixed;
 }
 /* Let cells wrap long text instead of forcing horizontal scroll.
    Use overflow-wrap (not word-break) so short words like "Admin" never
@@ -1351,23 +1693,175 @@ button.vehicle-cell-name.cell-link { font-weight: 600; }
   overflow: hidden;
 }
 
-/* Issue view page — photo + info side by side, description below */
+/* Issue view page — the real content (Issue Information + Description) leads
+   in a wider main column; Attachment (often empty) is a slim side card, so an
+   unattached photo no longer stretches into a huge box beside a sparse info
+   card. Matches the ticket/vehicle detail main+rail pattern. */
 .issue-view-dash {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  grid-template-areas: "photo info" "desc desc";
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 300px);
+  align-items: start;
   gap: 16px;
 }
-@media (max-width: 720px) {
-  .issue-view-dash { grid-template-columns: 1fr; grid-template-areas: "photo" "info" "desc"; }
+.issue-view-main,
+.issue-view-side {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
 }
-.issue-view-photo-card { grid-area: photo; }
-.issue-view-info { grid-area: info; }
-.issue-view-desc { grid-area: desc; }
-.issue-view-photo { display: block; padding: 16px; }
-.issue-view-photo img { width: 100%; border-radius: 10px; border: 2px solid var(--primary, #2563eb); display: block; box-shadow: 0 4px 14px rgba(37, 99, 235, 0.18); }
+@media (max-width: 720px) {
+  .issue-view-dash { grid-template-columns: 1fr; }
+  .issue-view-side { order: -1; }
+}
+/* Issue Information — large vehicle photo + identity beside it (Vehicle /
+   Reported By), then a flat "Label: value" facts list underneath. Mirrors
+   the reference design (big photo, plain label:value lines) instead of the
+   old cramped dt/dd micro-label grid. */
+.issue-view-info-body {
+  display: flex;
+  gap: 18px;
+  padding: 16px 18px;
+  flex-wrap: wrap;
+}
+.issue-view-vehicle-photo {
+  width: 200px;
+  height: 150px;
+  border-radius: 10px;
+  overflow: hidden;
+  flex-shrink: 0;
+  border: 2px solid var(--primary, #2563eb);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+}
+.issue-view-vehicle-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.issue-view-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  justify-content: center;
+  min-width: 160px;
+}
+.issue-view-identity-link {
+  display: block;
+  margin: 2px 0 0;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 1rem;
+  font-weight: 700;
+  color: #2563eb;
+  text-align: left;
+}
+.issue-view-identity-link:hover { text-decoration: underline; }
+.issue-view-identity-value { margin: 2px 0 0; font-weight: 700; color: var(--text-strong, #0f172a); }
+/* Sits as a third flex column alongside the photo + identity (same row),
+   using the horizontal space that used to sit empty below them. */
+.issue-view-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  justify-content: center;
+  flex: 1;
+  min-width: 180px;
+  padding-left: 18px;
+  border-left: 1px solid var(--border, #e2e8f0);
+}
+.issue-view-facts p {
+  margin: 0;
+  font-size: 0.88rem;
+  color: var(--text, #334155);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.issue-view-facts strong { color: var(--text-strong, #0f172a); font-weight: 700; min-width: 88px; flex-shrink: 0; }
+@media (max-width: 640px) {
+  .issue-view-facts { border-left: none; padding-left: 0; border-top: 1px solid var(--border, #e2e8f0); padding-top: 12px; }
+}
+/* Severity/Status read as plain colored text here, not pills — the color
+   still comes from the shared .status-badge class, just without the
+   background/border/padding chrome. !important because the color-family
+   rules (.status-badge.priority-medium etc.) are declared later in this
+   file at equal specificity and would otherwise win the cascade. */
+.issue-view-facts .status-badge {
+  background: none !important;
+  border: none !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  font-size: inherit !important;
+  font-weight: 700 !important;
+}
+
+.issue-view-photo { display: block; padding: 12px; }
+.issue-view-photo img { width: 100%; border-radius: 10px; border: 1px solid var(--border, #e2e8f0); display: block; box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08); }
+.issue-view-photo-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 28px 16px;
+  color: var(--text-faint, #94a3b8);
+}
+.issue-view-photo-empty svg { opacity: 0.5; }
+.issue-view-photo-empty p { margin: 0; font-size: 0.82rem; }
+
+.issue-view-timeline { padding: 14px 18px; display: flex; flex-direction: column; }
+.issue-view-timeline-row { display: flex; gap: 10px; }
+.issue-view-timeline-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--primary, #2563eb);
+  flex-shrink: 0;
+  margin-top: 5px;
+  position: relative;
+}
+.issue-view-timeline-row:not(:last-child) .issue-view-timeline-dot::after {
+  content: '';
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 2px;
+  height: 26px;
+  background: var(--border, #e2e8f0);
+}
+.issue-view-timeline-dot.is-last { background: var(--text-faint, #94a3b8); }
+.issue-view-timeline-row:not(:last-child) { padding-bottom: 14px; }
+.issue-view-timeline-label { margin: 0 0 3px; font-size: 0.82rem; font-weight: 700; color: var(--text-strong, #0f172a); }
 .issue-view-text { padding: 16px 18px; }
-.issue-view-text p { margin: 0 0 10px; font-size: 0.9rem; color: var(--text, #334155); line-height: 1.6; }
+.issue-view-text > p { margin: 0; font-size: 0.9rem; color: var(--text, #334155); line-height: 1.6; }
+/* Remarks (often a system-generated audit note, e.g. "auto-created when
+   this repair was deferred") reads as a distinct annotated block instead of
+   quietly running into the description with just a tiny caps label. */
+.issue-view-remarks {
+  margin-top: 14px;
+  padding: 10px 14px;
+  background: var(--surface-2, #f8fafc);
+  border-left: 3px solid var(--primary, #2563eb);
+  border-radius: 0 8px 8px 0;
+  box-shadow: none !important;
+}
+.issue-view-remarks-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--primary, #2563eb);
+}
+.issue-view-remarks p {
+  margin: 5px 0 0;
+  font-size: 0.86rem;
+  color: var(--text, #334155);
+  line-height: 1.6;
+}
 
 /* User profile page (opened from any user link) */
 .user-view-dash { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
@@ -1390,6 +1884,16 @@ button.vehicle-cell-name.cell-link { font-weight: 600; }
   align-items: center;
   gap: 3px;
 }
+/* Muted inline date used in the calm ticket-detail cards, in place of the
+   loud red calendar tile above (which stays for dense tables). */
+.quiet-date {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.78rem;
+  color: var(--text-muted, #64748b);
+}
+.quiet-date svg { opacity: 0.65; flex-shrink: 0; stroke: currentColor; }
 .date-badge-pill {
   display: flex;
   flex-direction: column;
@@ -1600,6 +2104,20 @@ table button.icon-btn svg,
   background: #dc2626;
   border-color: #dc2626;
   box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
+}
+
+/* Reversible actions (archive / deactivate) — amber, NOT red. Red is reserved
+   for truly destructive/permanent actions so users can tell them apart. */
+.row-actions button.btn-archive-action, .DataTable button.btn-archive-action, button.btn-archive-action {
+  background: #f59e0b;
+  border-color: #f59e0b;
+  color: #ffffff !important;
+  box-shadow: 0 2px 6px rgba(245, 158, 11, 0.18);
+}
+.row-actions button.btn-archive-action:hover, .DataTable button.btn-archive-action:hover, button.btn-archive-action:hover {
+  background: #d97706;
+  border-color: #d97706;
+  box-shadow: 0 4px 12px rgba(217, 119, 6, 0.3);
 }
 
 .row-actions button.btn-confirm-action, .DataTable button.btn-confirm-action, button.btn-confirm-action {
@@ -1980,7 +2498,6 @@ button.wizard-step-pill:hover {
   .topbar-search { width: 140px; }
   .metric-grid { grid-template-columns: 1fr 1fr; }
   .auth-card { padding: 32px 24px; }
-  .demo-account-grid { grid-template-columns: 1fr; }
 }
 
 /* =========================================================================
@@ -2070,6 +2587,29 @@ button.wizard-step-pill:hover {
 .ticket-detail-title { font-size: 1.2rem; font-weight: 800; color: #0f172a; margin-bottom: 10px; }
 .ticket-detail-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .ticket-meta-item { font-size: 0.78rem; color: #64748b; display: inline-flex; align-items: center; gap: 5px; }
+
+/* Tier-2 metadata caption under the status chips — muted facts (age, created
+   date, progress) as plain text with dot separators instead of a wall of
+   competing pills. */
+.ticket-detail-subline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  row-gap: 4px;
+  margin-top: 10px;
+  font-size: 0.76rem;
+  color: var(--text-muted, #64748b);
+}
+.ticket-detail-subline > span { display: inline-flex; align-items: center; gap: 5px; }
+.ticket-detail-subline > span:not(:first-child)::before {
+  content: '·';
+  margin: 0 10px;
+  color: var(--border, #cbd5e1);
+  font-weight: 700;
+}
+.ticket-detail-subline svg { opacity: 0.65; flex-shrink: 0; }
+.ticket-detail-subline .is-complete { color: #16a34a; font-weight: 600; }
+.ticket-detail-subline .is-complete svg { opacity: 1; }
 
 /* Phase Progress Bar */
 /* Dot-and-line ticket progress tracker (6 stages) */
@@ -2348,7 +2888,65 @@ button.wizard-step-pill:hover {
   font-size: 0.85rem;
   font-weight: 700;
   flex-shrink: 0;
+  overflow: hidden;
 }
+.profile-menu-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+}
+
+/* My Profile page — clean, card-less layout: identity hero + a constrained
+   password form, separated by a hairline rather than boxed in cards. */
+.profile-page {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  max-width: 760px;
+}
+.profile-hero {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  padding-bottom: 26px;
+  border-bottom: 1px solid var(--border, #e2e8f0);
+}
+.profile-hero-avatar {
+  width: 92px;
+  height: 92px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #2563eb, #1d4ed8);
+  color: #ffffff;
+  font-size: 1.9rem;
+  font-weight: 800;
+  box-shadow: 0 6px 18px rgba(37, 99, 235, 0.28);
+}
+.profile-hero-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.profile-hero-info h2 {
+  font-size: 1.45rem;
+  font-weight: 800;
+  color: var(--text-strong, #0f172a);
+  margin: 0 0 4px;
+}
+.profile-hero-info p { margin: 0 0 10px; font-size: 0.9rem; }
+.profile-hero-roles { display: flex; gap: 6px; flex-wrap: wrap; }
+.profile-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.98rem;
+  font-weight: 800;
+  color: var(--text-strong, #0f172a);
+  margin: 0 0 4px;
+}
+.profile-section-hint { margin: 0 0 16px; font-size: 0.82rem; }
+.profile-form { max-width: 440px; }
 .profile-menu-dropdown {
   position: absolute; top: 48px; right: 0;
   width: 240px;
@@ -2616,25 +3214,37 @@ button.wizard-step-pill:hover {
 .veh-docs { grid-area: docs; }
 .veh-history { grid-area: history; }
 
+/* Calm white cards with a quiet header row + thin divider (the RealCore
+   reference look), matching the ticket-detail sections — replaces the old
+   heavy 2px-blue-border + solid-blue header band. */
 .veh-card {
   background: var(--surface, #fff);
-  border: 2px solid var(--primary, #2563eb);
+  border: 1px solid var(--border, #e2e8f0);
   border-radius: 12px;
   padding: 0;
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.05);
 }
 .veh-card-head {
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 14px 18px;
-  background: var(--primary, #2563eb);
+  padding: 12px 18px;
+  background: rgba(37, 99, 235, 0.05);
+  border-bottom: 1px solid var(--border, #e2e8f0);
 }
-.veh-card-head h4 { margin: 0; font-size: 0.92rem; font-weight: 700; color: #ffffff; }
-.veh-card-head svg { stroke: #ffffff; flex-shrink: 0; }
-.veh-card-head .veh-seeall { color: #ffffff; }
+.veh-card-head h4 {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-strong, #0f172a);
+}
+.veh-card-head svg { stroke: #3b82f6; color: #3b82f6; flex-shrink: 0; }
+.veh-card-head .veh-seeall { color: var(--primary, #2563eb); }
 .veh-seeall {
   margin-left: auto; background: none; border: none; cursor: pointer;
   color: var(--primary, #2563eb); font-size: 0.78rem; font-weight: 700;
@@ -2644,8 +3254,8 @@ button.wizard-step-pill:hover {
 .veh-info-body { display: flex; gap: 18px; padding: 18px; flex-wrap: wrap; }
 .veh-info-photo {
   width: 230px; height: 168px; border-radius: 12px; overflow: hidden;
-  border: 2px solid var(--primary, #2563eb); flex-shrink: 0;
-  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.18);
+  border: 1px solid var(--border, #e2e8f0); flex-shrink: 0;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
 }
 .veh-info-photo .photo-cell, .veh-info-photo .photo-thumb { width: 100%; height: 100%; }
 @media (max-width: 520px) { .veh-info-photo { width: 100%; height: 190px; } }
@@ -2684,7 +3294,7 @@ button.wizard-step-pill:hover {
 }
 .veh-analytics .horizontal-bars, .veh-analytics .empty-state { padding: 0 18px 16px; }
 
-.veh-map-wrap { height: 300px; width: 100%; }
+.veh-map-wrap, .issue-view-map-wrap { height: 300px; width: 100%; }
 .veh-map-canvas { height: 100%; width: 100%; }
 .veh-map-empty, .veh-map-wrap .veh-map-empty {
   height: 100%; display: flex; align-items: center; justify-content: center;
@@ -2862,6 +3472,23 @@ button.wizard-step-pill:hover {
   background: #1d4ed8;
   border-color: #1d4ed8;
   transform: translateY(-1px);
+}
+/* Labeled variant — the primary create action reads as a real button
+   ("＋ Add Vehicle") instead of a bare icon nobody can find. Collapses back
+   to the square icon on narrow screens. */
+.icon-add-btn.has-label {
+  width: auto;
+  gap: 7px;
+  padding: 0 16px 0 13px;
+}
+.icon-add-btn-label {
+  font-size: 0.85rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+@media (max-width: 640px) {
+  .icon-add-btn.has-label { width: 38px; padding: 0; }
+  .icon-add-btn-label { display: none; }
 }
 
 /* Filter Bar Styles */
@@ -3496,6 +4123,59 @@ table button,
   font-size: 0.88rem;
 }
 
+/* Solid pie widget (legend row above, filled pie below) — e.g. the vehicle
+   Issue History card. Distinct from .donut-chart/.chart-legend (hollow ring +
+   vertical value list); this is a filled disc with a horizontal, percentage-
+   led legend, styled like a "Current Obligation"-type analytics widget. */
+.solid-pie-subtitle {
+  margin: -4px 18px 4px;
+  font-size: 0.76rem;
+  color: var(--text-muted, #64748b);
+}
+.solid-pie-chart {
+  aspect-ratio: 1;
+  margin: 4px auto 16px;
+  display: grid;
+  place-items: center;
+}
+.solid-pie-chart svg { width: 100%; height: 100%; overflow: visible; }
+.solid-pie-segment {
+  fill: none;
+  transition: stroke-dasharray 0.24s ease;
+  transform: rotate(-90deg);
+  transform-origin: 60px 60px;
+}
+.solid-pie-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px 20px;
+  padding: 0 18px;
+}
+.solid-pie-legend-item { display: flex; align-items: flex-start; gap: 7px; }
+.solid-pie-legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+  margin-top: 4px;
+}
+.solid-pie-legend-label {
+  margin: 0;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+.solid-pie-legend-pct {
+  margin: 2px 0 0;
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: var(--text-strong, #0f172a);
+}
+.solid-pie-legend-count {
+  margin: 0;
+  font-size: 0.7rem;
+  color: var(--text-muted, #64748b);
+}
+
 .horizontal-bars {
   display: flex;
   flex-direction: column;
@@ -4116,24 +4796,33 @@ table button,
   border-radius: 7px;
 }
 
-/* Ticket detail sections — a solid blue header band + blue-bordered card,
-   matching the .panel-header-bar look used elsewhere (e.g. the Issue Reports
-   panel) — Overview / Custodian Inspection / Ticket Timeline / Sub-Issues
-   all use this treatment per explicit request to match that reference. */
+/* Ticket detail sections — calm white cards with a quiet header row and a
+   thin divider (the RealCore reference look), replacing the old heavy solid
+   blue header bands. Header text stays dark with a blue icon accent and a
+   faint blue-tinted header strip, so the blue identity is kept without the
+   band shouting over the content. */
 .ticket-section {
-  padding: 0 18px 16px;
+  padding: 0 16px 16px;
   background: var(--surface);
-  border: 1.5px solid #93c5fd;
+  border: 1px solid var(--border, #e2e8f0);
   border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.05);
   overflow: hidden;
 }
 .ticket-section h4 {
-  margin: 0 -18px 14px;
-  padding: 10px 18px;
-  background: var(--primary);
-  color: #ffffff !important;
+  margin: 0 -16px 14px;
+  padding: 11px 16px;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: rgba(37, 99, 235, 0.05);
+  border-bottom: 1px solid var(--border, #e2e8f0);
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
-.ticket-section h4 svg { stroke: #ffffff; }
+.ticket-section h4 svg { stroke: #3b82f6; color: #3b82f6; }
 
 .value-list li:hover {
   background: rgba(37, 99, 235, 0.06);
@@ -4366,11 +5055,10 @@ table a:hover,
 .status-badge.for-repair,
 .status-badge.under-repair,
 .status-badge.needs-inspection,
+.status-badge.under-review,
 .status-badge.ticket-open,
 .status-badge.ticket-formaint,
 .status-badge.ticket-repair,
-.status-badge.ticket-forinspect,
-.status-badge.ticket-forconfirm,
 .status-badge.ticket-deferred,
 .status-badge.priority-medium,
 .status-badge.priority-high {
@@ -4378,14 +5066,24 @@ table a:hover,
   border-color: rgba(255, 186, 74, 0.26);
   color: #ffd27a;
 }
+/* These two are distinct workflow stages, not "in progress / caution" — keep
+   For Inspection green and For Confirmation purple so status colour stays
+   meaningful instead of four stages all reading amber. For Verification
+   (maintenance records) is the same "pending someone's confirmation" stage
+   as For Confirmation, so it shares the purple treatment. */
+.status-badge.ticket-forinspect { background: rgba(34, 197, 94, 0.14); border-color: rgba(34, 197, 94, 0.30); color: #86efac; }
+.status-badge.ticket-forconfirm,
+.status-badge.for-verification { background: rgba(168, 85, 247, 0.16); border-color: rgba(168, 85, 247, 0.34); color: #d8b4fe; }
 
 .status-badge.inactive,
 .status-badge.decommissioned,
+.status-badge.damaged,
 .status-badge.rejected,
 .status-badge.failed,
 .status-badge.overdue,
 .status-badge.needs-repair,
 .status-badge.ticket-cancelled,
+.status-badge.cancelled,
 .status-badge.priority-critical,
 .status-badge.rework-danger {
   background: rgba(255, 92, 92, 0.12);
@@ -4650,18 +5348,14 @@ button.btn-view-action svg {
 }
 
 .auth-page {
-  background:
-    radial-gradient(circle at 15% 10%, rgba(96, 165, 250, 0.35) 0%, rgba(96, 165, 250, 0) 45%),
-    radial-gradient(circle at 90% 85%, rgba(59, 130, 246, 0.3) 0%, rgba(59, 130, 246, 0) 50%),
-    linear-gradient(135deg, #16305c 0%, #0b1d3a 60%, #060e1f 100%);
+  background: #05070d;
   padding: 32px 20px;
 }
 
 .auth-card {
   width: min(100%, 430px);
   padding: 38px;
-  border-top: 4px solid var(--primary, #2563eb);
-  box-shadow: 0 25px 60px rgba(37, 99, 235, 0.18);
+  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.45);
 }
 
 .auth-card h1 {
@@ -4868,25 +5562,28 @@ button.btn-view-action svg {
   background: #101114;
 }
 
+/* Clean segmented control — a light track with the active tab filled solid
+   blue and the inactive one quiet text, replacing the old blue band wrapping
+   two heavily-bordered pills. */
 .locations-tab-bar {
   display: flex;
-  gap: 10px;
+  gap: 4px;
   margin: 0 0 20px 0;
-  padding: 10px;
-  background: #2563eb;
-  border: none;
+  padding: 4px;
+  background: var(--surface-2, #f1f5f9);
+  border: 1px solid var(--border, #e2e8f0);
   border-radius: 10px;
 }
 
 .locations-tab-button {
-  padding: 10px 16px;
-  background: #eef2ff;
+  padding: 9px 16px;
+  background: transparent;
   border: none;
   cursor: pointer;
   font-weight: 600;
   font-size: 0.82rem;
-  color: #2563eb;
-  border-radius: 8px;
+  color: var(--text-muted, #64748b);
+  border-radius: 7px;
   transition: all 0.18s ease;
   text-align: center;
   display: inline-flex;
@@ -4898,14 +5595,19 @@ button.btn-view-action svg {
 }
 
 .locations-tab-button:hover {
-  background: #ffffff;
+  background: rgba(37, 99, 235, 0.08);
+  color: #2563eb;
 }
 
 .locations-tab-button.active {
-  background: #ffffff;
-  color: #1d4ed8;
+  background: #2563eb;
+  color: #ffffff;
   font-weight: 700;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  box-shadow: 0 1px 3px rgba(37, 99, 235, 0.3);
+}
+.locations-tab-button.active:hover {
+  background: #1d4ed8;
+  color: #ffffff;
 }
 
 .map-container-full {
@@ -4948,8 +5650,10 @@ button.btn-view-action svg {
 }
 
 .location-density-map-shell {
-  background: #2563eb;
-  border-radius: 8px;
+  background: var(--surface, #ffffff);
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.05);
   flex: 1;
   min-height: 520px;
   overflow: hidden;
@@ -4968,7 +5672,7 @@ button.btn-view-action svg {
   border-radius: 0;
   padding: 16px;
   min-height: 100vh;
-  background: #2563eb;
+  background: var(--surface, #ffffff);
   animation: fadeSlide 0.2s ease;
 }
 
@@ -4991,10 +5695,11 @@ button.btn-view-action svg {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  color: #ffffff;
+  color: var(--text-muted, #475569);
   font-size: 0.78rem;
   font-weight: 600;
 }
+.location-density-hint svg { stroke: #2563eb; flex-shrink: 0; }
 
 .location-density-btn {
   display: inline-flex;
@@ -5024,38 +5729,42 @@ button.btn-view-action svg {
 }
 
 .location-density-btn.is-active {
-  background: #2a2f3a;
-  color: #f7f8fb;
-  border-color: #2563eb;
+  background: rgba(37, 99, 235, 0.1);
+  color: #1d4ed8;
+  border-color: #93c5fd;
 }
 .location-density-btn.is-active:hover {
-  background: #353b48;
+  background: rgba(37, 99, 235, 0.16);
 }
 
+/* Quiet light secondary (Download Map / Maximize) — was solid black, which
+   read as broken sitting next to the blue primary. */
 .location-density-btn.is-secondary {
-  background: #171a22;
-  color: #e2e8f0;
-  border-color: #2a2f3a;
+  background: var(--surface, #ffffff);
+  color: var(--text, #334155);
+  border-color: var(--border, #d9e2ef);
 }
 .location-density-btn.is-secondary:hover {
-  background: #232733;
+  background: var(--surface-2, #f1f5f9);
+  border-color: #cbd5e1;
 }
 
 .location-density-btn.is-focus-cancel {
-  border-color: rgba(125, 211, 252, 0.35);
-  color: #7dd3fc;
+  background: var(--surface, #ffffff);
+  border-color: #93c5fd;
+  color: #1d4ed8;
 }
 
 .location-density-btn.is-focus-cancel:hover {
-  background: rgba(14, 165, 233, 0.14);
-  border-color: rgba(125, 211, 252, 0.58);
-  color: #bae6fd;
+  background: rgba(37, 99, 235, 0.1);
+  border-color: #60a5fa;
+  color: #1e40af;
 }
 
 .location-density-legend {
   align-items: center;
-  background: #1d4ed8;
-  border: 1px solid #2563eb;
+  background: var(--surface-2, #f8fafc);
+  border: 1px solid var(--border, #e2e8f0);
   border-radius: 8px;
   display: flex;
   flex-wrap: wrap;
@@ -5066,7 +5775,7 @@ button.btn-view-action svg {
 
 .location-density-legend-item {
   align-items: center;
-  color: #cbd5e1;
+  color: var(--text-muted, #475569);
   display: inline-flex;
   font-size: 0.73rem;
   font-weight: 700;
@@ -5116,7 +5825,7 @@ button.btn-view-action svg {
 }
 
 .legend-symbol-boundary {
-  border-top: 4px solid #2563eb;
+  border-top: 4px solid #facc15;
   height: 0;
   width: 24px;
 }
@@ -5134,15 +5843,15 @@ button.btn-view-action svg {
 }
 
 .location-density-notice.success {
-  background: rgba(34, 197, 94, 0.12);
-  border: 1px solid rgba(134, 239, 172, 0.34);
-  color: #bbf7d0;
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
+  color: #047857;
 }
 
 .location-density-notice.error {
-  background: rgba(220, 38, 38, 0.14);
-  border: 1px solid rgba(248, 113, 113, 0.34);
-  color: #fecaca;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #b91c1c;
 }
 
 .location-density-notice button {
@@ -5315,6 +6024,39 @@ button.btn-view-action svg {
   height: 100%;
   min-height: 520px;
   width: 100%;
+}
+
+/* Google-style Map / Satellite base-layer switch, floating top-left over
+   the map. Sits above Leaflet tiles/panes via z-index. */
+.location-density-basemap-toggle {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 1000;
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 9px;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.18);
+  backdrop-filter: blur(2px);
+}
+.location-density-basemap-toggle button {
+  border: none;
+  background: transparent;
+  padding: 6px 14px;
+  border-radius: 7px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #334155;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.location-density-basemap-toggle button:hover { background: rgba(37, 99, 235, 0.1); }
+.location-density-basemap-toggle button.is-active {
+  background: #2563eb;
+  color: #ffffff;
 }
 
 .location-density-hub-icon {
@@ -6266,12 +7008,13 @@ html[data-theme="light"] .panel {
   padding: 14px 16px;
 }
 
-/* Module content panels (the card wrapping a table + its search/filter bar)
-   get a stronger blue-themed border/shadow so tables read as a distinct,
-   bordered block instead of blending into the page background. */
+/* Module content panels (the card wrapping a table + its search/filter bar) —
+   calm 1px border + soft neutral shadow, matching every other card in the
+   app. Previously a thick blue border + blue-tinted glow, which bled onto
+   any content sitting near the panel's edge (e.g. the Remarks callout). */
 html[data-theme="light"] .module-grid .panel {
-  border: 3px solid #2563eb;
-  box-shadow: 0 10px 24px rgba(37, 99, 235, 0.1);
+  border: 1px solid #cddcf0;
+  box-shadow: 0 6px 16px rgba(31, 75, 122, 0.06);
 }
 
 html[data-theme="light"] .panel-header,
@@ -6637,6 +7380,19 @@ html[data-theme="light"] .table-shell button.btn-delete-action:hover {
   color: #ffffff !important;
 }
 
+html[data-theme="light"] table button.btn-archive-action,
+html[data-theme="light"] .table-shell button.btn-archive-action {
+  background: #f59e0b;
+  border-color: #f59e0b;
+  color: #ffffff !important;
+}
+html[data-theme="light"] table button.btn-archive-action:hover,
+html[data-theme="light"] .table-shell button.btn-archive-action:hover {
+  background: #d97706;
+  border-color: #d97706;
+  color: #ffffff !important;
+}
+
 html[data-theme="light"] table button.btn-confirm-action,
 html[data-theme="light"] .table-shell button.btn-confirm-action {
   background: #16a34a;
@@ -6711,11 +7467,10 @@ html[data-theme="light"] .status-badge.in-maintenance,
 html[data-theme="light"] .status-badge.for-repair,
 html[data-theme="light"] .status-badge.under-repair,
 html[data-theme="light"] .status-badge.needs-inspection,
+html[data-theme="light"] .status-badge.under-review,
 html[data-theme="light"] .status-badge.ticket-open,
 html[data-theme="light"] .status-badge.ticket-formaint,
 html[data-theme="light"] .status-badge.ticket-repair,
-html[data-theme="light"] .status-badge.ticket-forinspect,
-html[data-theme="light"] .status-badge.ticket-forconfirm,
 html[data-theme="light"] .status-badge.ticket-deferred,
 html[data-theme="light"] .status-badge.priority-medium,
 html[data-theme="light"] .status-badge.priority-high,
@@ -6724,14 +7479,20 @@ html[data-theme="light"] .status-badge.rework-warning {
   border-color: #fcd34d;
   color: #92400e;
 }
+/* Light-theme: keep these two stages visually distinct (green / purple). */
+html[data-theme="light"] .status-badge.ticket-forinspect { background: #dcfce7; border-color: #86efac; color: #166534; }
+html[data-theme="light"] .status-badge.ticket-forconfirm,
+html[data-theme="light"] .status-badge.for-verification { background: #ede9fe; border-color: #c4b5fd; color: #5b21b6; }
 
 html[data-theme="light"] .status-badge.inactive,
 html[data-theme="light"] .status-badge.decommissioned,
+html[data-theme="light"] .status-badge.damaged,
 html[data-theme="light"] .status-badge.rejected,
 html[data-theme="light"] .status-badge.failed,
 html[data-theme="light"] .status-badge.overdue,
 html[data-theme="light"] .status-badge.needs-repair,
 html[data-theme="light"] .status-badge.ticket-cancelled,
+html[data-theme="light"] .status-badge.cancelled,
 html[data-theme="light"] .status-badge.priority-critical,
 html[data-theme="light"] .status-badge.rework-danger {
   background: #fee2e2;

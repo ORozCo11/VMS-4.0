@@ -30,6 +30,12 @@ const PATHS = {
       <path d="m10.7 12.3 8.3-8.3M16 6l3 3M14 8l2 2" />
     </>
   ),
+  mail: (
+    <>
+      <rect x="2" y="4" width="20" height="16" rx="2" />
+      <path d="m22 6-10 7L2 6" />
+    </>
+  ),
   calendar: (
     <>
       <rect x="3" y="4" width="18" height="18" rx="2" />
