@@ -18,6 +18,11 @@ class VehicleMaintenanceSchedule extends Model
         'status',
         'created_by',
         'assigned_to',
+        'recurrence_months',
+    ];
+
+    protected $casts = [
+        'recurrence_months' => 'integer',
     ];
 
     public function vehicle()

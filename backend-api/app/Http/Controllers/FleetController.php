@@ -92,7 +92,7 @@ class FleetController extends Controller
         $user = $request->user();
         $latestChecks = $this->latestReadinessChecks();
         $activeIssues = VehicleIssueReport::whereNot('status', 'Resolved')
-            ->whereHas('vehicle', fn ($q) => $q->where('status', '!=', 'Inactive'))
+            ->whereHas('vehicle', fn ($q) => $q->whereNotIn('status', ['Inactive', 'Decommissioned']))
             ->count();
         $upcomingMaintenance = VehicleMaintenanceSchedule::where('status', 'Scheduled')
             ->whereDate('scheduled_date', '>=', now()->toDateString())
@@ -149,7 +149,9 @@ class FleetController extends Controller
             ];
             $metrics[] = [
                 'label' => 'Vehicles Needing Attention',
-                'value' => Vehicle::whereIn('condition', ['Needs Inspection', 'Needs Repair', 'Damaged'])->count(),
+                'value' => Vehicle::whereIn('condition', ['Needs Inspection', 'Needs Repair', 'Damaged'])
+                    ->whereNotIn('status', ['Inactive', 'Decommissioned'])
+                    ->count(),
             ];
         }
 
@@ -174,11 +176,13 @@ class FleetController extends Controller
                 'issues' => ($user->hasRole('Custodian') && !$user->hasRole('Admin'))
                     ? VehicleIssueReport::where('reported_by', $user->id)
                         ->whereNot('status', 'Resolved')
-                        ->whereHas('vehicle', fn ($q) => $q->where('status', '!=', 'Inactive'))
+                        ->whereHas('vehicle', fn ($q) => $q->whereNotIn('status', ['Inactive', 'Decommissioned']))
                         ->count()
                     : $activeIssues,
                 'tickets' => MaintenanceTicket::whereNotIn('status', ['Closed', 'Cancelled'])->count(),
-                'conditions' => Vehicle::whereIn('condition', ['Needs Inspection', 'Needs Repair', 'Damaged'])->count(),
+                'conditions' => Vehicle::whereIn('condition', ['Needs Inspection', 'Needs Repair', 'Damaged'])
+                    ->whereNotIn('status', ['Inactive', 'Decommissioned'])
+                    ->count(),
                 'schedules' => $upcomingMaintenance,
                 'ticketInspections' => MaintenanceTicket::where('assigned_custodian_id', $request->user()->id)
                     ->where('status', 'Open')
@@ -339,9 +343,12 @@ class FleetController extends Controller
     }
 
     /**
-     * Gap B — single-point-of-failure map. A vehicle type with only ONE
-     * operational unit is a standing risk (one breakdown from zero coverage),
-     * flagged even while that lone unit is still healthy.
+     * Gap B — single-point-of-failure map. A vehicle type with at most ONE
+     * currently-READY unit is a standing risk (one breakdown from zero
+     * coverage) — whether that's because only one unit exists at all, or
+     * because several exist but all-but-one are already down for repair.
+     * Keyed off `ready`, not the total fleet size, so a 3-ambulance category
+     * with 2 in the shop still gets flagged.
      */
     private function fragility(): array
     {
@@ -356,9 +363,9 @@ class FleetController extends Controller
                     'category'          => $name,
                     'operational'       => $operational,
                     'ready'             => $ready,
-                    'single_point'      => $operational === 1,
-                    // Worse: the lone unit is not just single, it's currently down.
-                    'critical'          => $operational === 1 && $ready === 0,
+                    'single_point'      => $ready <= 1,
+                    // Worse: not just down to one, but down to zero ready units.
+                    'critical'          => $ready === 0,
                 ];
             })
             ->filter(fn ($r) => $r['single_point'])
@@ -917,10 +924,11 @@ class FleetController extends Controller
 
     public function issues(Request $request)
     {
-        // Issues on archived (Inactive) vehicles are excluded — an inactive
-        // vehicle is out of the fleet, so its reports shouldn't clutter the list.
-        $query = VehicleIssueReport::with(['vehicle.category', 'reportedBy'])
-            ->whereHas('vehicle', fn ($q) => $q->where('status', '!=', 'Inactive'));
+        // Issues on retired (Inactive/Decommissioned) vehicles are excluded —
+        // a retired vehicle is out of the fleet, so its reports shouldn't
+        // clutter the list.
+        $query = VehicleIssueReport::with(['vehicle.category', 'reportedBy', 'maintenanceTicket'])
+            ->whereHas('vehicle', fn ($q) => $q->whereNotIn('status', ['Inactive', 'Decommissioned']));
 
         if ($request->boolean('mine')) {
             $query->where('reported_by', $request->user()->id);
@@ -1351,7 +1359,9 @@ class FleetController extends Controller
             'service_location' => ['nullable', 'string', 'max:255'],
             'notes' => ['nullable', 'string'],
             'assigned_to' => ['nullable', 'exists:users,id'],
-            'status' => ['nullable', Rule::in(['Scheduled', 'Completed', 'Cancelled'])],
+            // null/absent = one-time; otherwise the interval (months) to auto-
+            // schedule the next service when this one is completed.
+            'recurrence_months' => ['nullable', 'integer', 'min:1', 'max:60'],
         ]);
 
         // Guard against double-booking: one active (Scheduled) entry per
@@ -1364,9 +1374,12 @@ class FleetController extends Controller
 
         $schedule = DB::transaction(function () use ($data, $request) {
             $vehicle = Vehicle::findOrFail($data['vehicle_id']);
+            // A new schedule always starts Scheduled — Completed/Cancelled are
+            // only ever reached via completeSchedule()/updateSchedule(), never
+            // picked at creation time.
             $schedule = VehicleMaintenanceSchedule::create($data + [
                 'created_by' => $request->user()->id,
-                'status' => $data['status'] ?? 'Scheduled',
+                'status' => 'Scheduled',
             ]);
 
             $this->history($vehicle, 'Maintenance Scheduled', "{$data['maintenance_type']} was scheduled for {$vehicle->vehicle_name}.", 'vehicle_maintenance_schedules', $schedule->schedule_id, $request);
@@ -1390,7 +1403,13 @@ class FleetController extends Controller
             'service_location' => ['nullable', 'string', 'max:255'],
             'notes' => ['nullable', 'string'],
             'assigned_to' => ['nullable', 'exists:users,id'],
-            'status' => ['nullable', Rule::in(['Scheduled', 'Completed', 'Cancelled'])],
+            // Completed is deliberately NOT a valid value here — marking a
+            // schedule done must go through completeSchedule(), which also
+            // creates the proof-of-work maintenance record and, if recurring,
+            // seeds the next occurrence. Setting status directly would
+            // silently skip both.
+            'status' => ['nullable', Rule::in(['Scheduled', 'Cancelled'])],
+            'recurrence_months' => ['nullable', 'integer', 'min:1', 'max:60'],
         ]);
 
         // Same double-booking guard as create (ignoring this schedule itself).
@@ -1408,6 +1427,80 @@ class FleetController extends Controller
         $this->log($request, 'Edit', 'Vehicle Maintenance Schedule', $schedule->schedule_id, "Updated schedule #{$schedule->schedule_id}");
 
         return $schedule->fresh(['vehicle.category', 'createdBy', 'assignedTo']);
+    }
+
+    /**
+     * Gap 2 — "close the loop" for a scheduled preventive maintenance in ONE
+     * action: mark the schedule Completed, create the linked maintenance
+     * record (so there's always proof of what was done), and — if the
+     * schedule is recurring — auto-create the next due date. Prevents the
+     * two old failure modes: a done PM stuck showing "overdue", and a
+     * forgotten next service.
+     */
+    public function completeSchedule(Request $request, VehicleMaintenanceSchedule $schedule)
+    {
+        $this->requireRole($request, ['Admin', 'Maintenance Personnel']);
+
+        abort_unless($schedule->status === 'Scheduled', 422, "Only a scheduled maintenance can be marked done. Current: {$schedule->status}.");
+
+        $data = $request->validate([
+            'date_completed'           => ['nullable', 'date'],
+            'maintenance_personnel_id' => ['nullable', 'exists:users,id'],
+            'maintenance_cost'         => ['nullable', 'numeric', 'min:0'],
+            'notes'                    => ['nullable', 'string'],
+        ]);
+
+        $completedDate = $data['date_completed'] ?? now()->toDateString();
+        $personnelId   = $data['maintenance_personnel_id'] ?? $schedule->assigned_to ?? $request->user()->id;
+
+        $result = DB::transaction(function () use ($schedule, $data, $request, $completedDate, $personnelId) {
+            $vehicle = $schedule->vehicle;
+
+            // 1) The record — proof of the work, in the unified ledger.
+            $record = VehicleMaintenanceRecord::create([
+                'vehicle_id'               => $schedule->vehicle_id,
+                'maintenance_type'         => $schedule->maintenance_type,
+                'problem_reason'           => 'Scheduled preventive maintenance',
+                'date_started'             => $completedDate,
+                'date_completed'           => $completedDate,
+                'maintenance_personnel_id' => $personnelId,
+                'action_taken'             => $data['notes'] ?? $schedule->notes ?? 'Preventive maintenance performed.',
+                'maintenance_cost'         => $data['maintenance_cost'] ?? null,
+                'progress_status'          => 'Completed',
+                'remarks'                  => "Completed from schedule #{$schedule->schedule_id}.",
+            ]);
+
+            // 2) Close the schedule.
+            $schedule->update(['status' => 'Completed']);
+
+            // 3) If recurring, seed the next one at completed date + interval.
+            $next = null;
+            if ($schedule->recurrence_months) {
+                $next = VehicleMaintenanceSchedule::create([
+                    'vehicle_id'        => $schedule->vehicle_id,
+                    'maintenance_type'  => $schedule->maintenance_type,
+                    'scheduled_date'    => \Illuminate\Support\Carbon::parse($completedDate)->addMonths($schedule->recurrence_months)->toDateString(),
+                    'scheduled_time'    => $schedule->scheduled_time,
+                    'service_location'  => $schedule->service_location,
+                    'notes'             => $schedule->notes,
+                    'status'            => 'Scheduled',
+                    'created_by'        => $request->user()->id,
+                    'assigned_to'       => $schedule->assigned_to,
+                    'recurrence_months' => $schedule->recurrence_months,
+                ]);
+            }
+
+            $this->history($vehicle, 'Preventive Maintenance Completed', "{$schedule->maintenance_type} completed for {$vehicle->vehicle_name}." . ($next ? " Next due {$next->scheduled_date}." : ''), 'vehicle_maintenance_schedules', $schedule->schedule_id, $request);
+            $this->log($request, 'Complete', 'Vehicle Maintenance Schedule', $schedule->schedule_id, "Completed schedule #{$schedule->schedule_id}" . ($next ? " (recurring — next #{$next->schedule_id})" : ''));
+
+            return ['record' => $record, 'next' => $next];
+        });
+
+        return response()->json([
+            'schedule' => $schedule->fresh(['vehicle.category', 'createdBy', 'assignedTo']),
+            'record'   => $result['record'],
+            'next'     => $result['next']?->load(['vehicle.category', 'createdBy', 'assignedTo']),
+        ]);
     }
 
     public function deleteSchedule(Request $request, VehicleMaintenanceSchedule $schedule)
@@ -1519,12 +1612,15 @@ class FleetController extends Controller
             'plate_number' => [
                 'required',
                 'string',
-                'max:255',
-                // Real-world plate shape: a letter block, then a digit block, with an
-                // optional space/dash between and an optional trailing letter — covers
-                // standard, older, motorcycle, and government PH plate series without
-                // being so strict it rejects legitimate variants.
-                'regex:/^[A-Za-z]{2,6}[\s-]?\d{2,6}[A-Za-z]?$/',
+                'max:10',
+                // Shaped after actual PH plate series (LTO private/PUV "ABC 1234",
+                // government "SNA 1234", EV "NBV 1234", diplomatic "001 1234",
+                // motorcycle "123ABC"/"A 123 BC", temporary "AB 123 C") — 1-3
+                // alphanumeric chunks of up to 4 characters, separated by an
+                // optional space or dash, containing at least one digit (no real
+                // PH plate is letters-only). Not locked to one single format so
+                // legitimate variants across series still pass.
+                'regex:/^(?=.*\d)[A-Za-z0-9]{1,4}(?:[\s-]?[A-Za-z0-9]{1,4}){1,2}$/',
                 Rule::unique('vehicles', 'plate_number')->ignore($vehicle?->vehicle_id, 'vehicle_id'),
             ],
             'category_id' => ['required', 'exists:vehicle_categories,category_id'],

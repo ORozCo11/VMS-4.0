@@ -46,6 +46,20 @@ class MultiRoleTest extends TestCase
     }
 
     #[Test]
+    public function has_role_still_counts_the_primary_role_even_if_the_roles_list_omits_it(): void
+    {
+        // A split-brain row (e.g. a manual DB edit or migration artifact):
+        // roles[] is populated but doesn't happen to list the primary role.
+        // hasRole() must still agree with allRoles()/scopeHavingRole(), which
+        // both always count the primary role regardless.
+        $user = User::factory()->create(['role' => 'Admin', 'roles' => ['Custodian']]);
+
+        $this->assertTrue($user->hasRole('Admin'));
+        $this->assertTrue($user->hasRole('Custodian'));
+        $this->assertContains('Admin', $user->allRoles());
+    }
+
+    #[Test]
     public function a_multi_hat_user_is_offered_as_both_a_custodian_and_a_mechanic(): void
     {
         $admin = User::factory()->create(['role' => 'Admin', 'roles' => ['Admin']]);

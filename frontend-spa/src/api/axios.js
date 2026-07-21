@@ -10,7 +10,7 @@ const api = axios.create({
 
 // Automatically intercept every request and append the secure Sanctum token string if it exists
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('token');
+  const token = localStorage.getItem('token') || sessionStorage.getItem('token');
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }

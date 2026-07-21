@@ -31,6 +31,13 @@ function normalizeHub(record) {
 const CARTO_LIGHT_TILE_URL = 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
 const CARTO_ATTRIBUTION = '&copy; OpenStreetMap contributors &copy; CARTO';
 
+// Free satellite/aerial imagery (Esri World Imagery — no API key required),
+// with a transparent labels overlay so street/place names still show on top
+// of the imagery (a "hybrid" view, like Google's Satellite).
+const ESRI_IMAGERY_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
+const ESRI_LABELS_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}';
+const ESRI_ATTRIBUTION = 'Tiles &copy; Esri — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community';
+
 function escapeSvgText(value) {
   return String(value)
     .replace(/&/g, '&amp;')
@@ -204,10 +211,12 @@ async function captureMapToPng(mapEl) {
     // Light fallback fill instead of black/transparent for any tile that
     // fails to capture (cross-origin CDN tiles can silently fail to draw).
     backgroundColor: '#eef2f7',
-    // Skip Leaflet's interactive controls so the export is a clean map snapshot.
+    // Skip Leaflet's interactive controls (and our own Map/Satellite toggle)
+    // so the export is a clean map snapshot.
     filter: (node) => !(node.classList && (
       node.classList.contains('leaflet-control-zoom')
       || node.classList.contains('leaflet-control-attribution')
+      || node.classList.contains('location-density-basemap-toggle')
     )),
   });
 
@@ -286,6 +295,7 @@ function LocationDensityMap({
   const [mapNotice, setMapNotice] = useState(null);
   const [resetViewRequest, setResetViewRequest] = useState(0);
   const [isMaximized, setIsMaximized] = useState(false);
+  const [basemap, setBasemap] = useState('satellite'); // 'map' | 'satellite'
   const mapShellRef = useRef(null);
   const nameInputRef = useRef(null);
 
@@ -605,17 +615,40 @@ function LocationDensityMap({
         zoomControl={false}
       >
         <MapClickHandler addMode={addMode} onPickLocation={handlePickLocation} />
-        <TileLayer attribution={CARTO_ATTRIBUTION} crossOrigin="anonymous" maxZoom={19} url={CARTO_LIGHT_TILE_URL} />
-        {/* Softened from weight:5/opacity:0.95 (a heavy, dominant outline)
-            and a purple fill — now a thinner, calmer blue line with a subtle
-            single-hue wash instead of two competing accent colors. */}
+        {basemap === 'satellite' ? (
+          <>
+            <TileLayer attribution={ESRI_ATTRIBUTION} crossOrigin="anonymous" maxZoom={19} url={ESRI_IMAGERY_URL} />
+            <TileLayer attribution="" crossOrigin="anonymous" maxZoom={19} url={ESRI_LABELS_URL} />
+          </>
+        ) : (
+          <TileLayer attribution={CARTO_ATTRIBUTION} crossOrigin="anonymous" maxZoom={19} url={CARTO_LIGHT_TILE_URL} />
+        )}
+
+        {/* Map / Satellite base-layer toggle — floats over the map like Google.
+            Rendered inside the Leaflet container; disableClickPropagation keeps
+            clicks from panning the map underneath. */}
+        <div
+          className="location-density-basemap-toggle"
+          ref={(el) => { if (el) { L.DomEvent.disableClickPropagation(el); L.DomEvent.disableScrollPropagation(el); } }}
+        >
+          <button type="button" className={basemap === 'map' ? 'is-active' : ''} onClick={() => setBasemap('map')}>Map</button>
+          <button type="button" className={basemap === 'satellite' ? 'is-active' : ''} onClick={() => setBasemap('satellite')}>Satellite</button>
+        </div>
+        {/* Dark casing (halo) drawn UNDER the boundary so the yellow line pops
+            on both the light street map and the dark satellite imagery. */}
+        <Polygon
+          pathOptions={{ color: '#1e293b', weight: 6, opacity: 0.45, fill: false }}
+          positions={PAKNAAN_POLYGON}
+        />
+        {/* Solid yellow boundary on top — high visibility against greens,
+            water, and light streets alike. */}
         <Polygon
           pathOptions={{
-            color: '#2563eb',
-            fillColor: '#2563eb',
-            fillOpacity: 0.04,
-            opacity: 0.55,
-            weight: 2.5,
+            color: '#facc15',
+            fillColor: '#facc15',
+            fillOpacity: 0.05,
+            opacity: 1,
+            weight: 3,
           }}
           positions={PAKNAAN_POLYGON}
         />

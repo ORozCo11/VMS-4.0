@@ -111,7 +111,7 @@ class FleetIntelligenceTest extends TestCase
     {
         $vehicle = $this->vehicle();
 
-        // A previously fixed-and-closed "Overheating" ticket, recent.
+        // A previously fixed-and-closed "Overheating" ticket, recently closed.
         MaintenanceTicket::create([
             'vehicle_id' => $vehicle->vehicle_id,
             'created_by' => $this->admin->id,
@@ -119,6 +119,7 @@ class FleetIntelligenceTest extends TestCase
             'ticket_description' => 'was fixed before',
             'priority' => 'High',
             'status' => 'Closed',
+            'closed_at' => now(),
         ]);
 
         Sanctum::actingAs($this->admin, ['*']);
@@ -131,6 +132,66 @@ class FleetIntelligenceTest extends TestCase
         ])->assertCreated();
 
         $this->assertSame(1, $response->json('recurrence_count'));
+    }
+
+    #[Test]
+    public function a_ticket_opened_long_ago_but_closed_recently_still_counts_as_a_recurrence(): void
+    {
+        $vehicle = $this->vehicle();
+
+        // Opened 120 days ago (outside the 90-day window) but only closed 5
+        // days ago (a long repair delay) — it was JUST fixed, so it should
+        // still count. Keying off when it opened would miss this.
+        $prior = MaintenanceTicket::create([
+            'vehicle_id' => $vehicle->vehicle_id,
+            'created_by' => $this->admin->id,
+            'ticket_title' => 'Overheating',
+            'ticket_description' => 'took forever to fix',
+            'priority' => 'High',
+            'status' => 'Closed',
+            'closed_at' => now()->subDays(5),
+        ]);
+        $prior->forceFill(['created_at' => now()->subDays(120)])->save();
+
+        Sanctum::actingAs($this->admin, ['*']);
+        $response = $this->postJson('/api/tickets', [
+            'vehicle_id' => $vehicle->vehicle_id,
+            'ticket_title' => 'Overheating',
+            'ticket_description' => "it's back again",
+            'priority' => 'High',
+            'assigned_custodian_id' => $this->custodian->id,
+        ])->assertCreated();
+
+        $this->assertSame(1, $response->json('recurrence_count'));
+    }
+
+    #[Test]
+    public function a_ticket_opened_recently_but_closed_over_90_days_ago_does_not_count(): void
+    {
+        $vehicle = $this->vehicle();
+
+        // Edge case guard: a ticket genuinely closed long ago shouldn't count
+        // just because SQLite/Eloquent happened to touch created_at recently.
+        MaintenanceTicket::create([
+            'vehicle_id' => $vehicle->vehicle_id,
+            'created_by' => $this->admin->id,
+            'ticket_title' => 'Overheating',
+            'ticket_description' => 'fixed a long time ago',
+            'priority' => 'High',
+            'status' => 'Closed',
+            'closed_at' => now()->subDays(200),
+        ]);
+
+        Sanctum::actingAs($this->admin, ['*']);
+        $response = $this->postJson('/api/tickets', [
+            'vehicle_id' => $vehicle->vehicle_id,
+            'ticket_title' => 'Overheating',
+            'ticket_description' => "it's back",
+            'priority' => 'High',
+            'assigned_custodian_id' => $this->custodian->id,
+        ])->assertCreated();
+
+        $this->assertSame(0, $response->json('recurrence_count'));
     }
 
     #[Test]
@@ -222,6 +283,27 @@ class FleetIntelligenceTest extends TestCase
             'priority' => 'High',
             'assigned_custodian_id' => $this->custodian->id,
         ])->assertUnprocessable();
+    }
+
+    #[Test]
+    public function a_decommissioned_vehicle_no_longer_counts_toward_needs_attention(): void
+    {
+        $vehicle = $this->vehicle();
+        // A real repair need before retirement...
+        $vehicle->update(['condition' => 'Needs Repair']);
+
+        Sanctum::actingAs($this->admin, ['*']);
+        $before = $this->getJson('/api/dashboard')->assertOk()->json('badge_counts.conditions');
+        $this->assertGreaterThanOrEqual(1, $before);
+
+        // ...decommissioning sets condition to Damaged, but the vehicle is
+        // retired — it shouldn't keep inflating "needs attention" forever.
+        $this->putJson("/api/vehicles/{$vehicle->vehicle_id}/decommission", [
+            'decommission_reason' => 'Beyond economical repair.',
+        ])->assertOk();
+
+        $after = $this->getJson('/api/dashboard')->assertOk()->json('badge_counts.conditions');
+        $this->assertSame($before - 1, $after);
     }
 
     #[Test]
@@ -318,6 +400,43 @@ class FleetIntelligenceTest extends TestCase
         $this->assertNotNull($row);
         $this->assertTrue($row['single_point']);
         $this->assertSame(1, $row['operational']);
+    }
+
+    #[Test]
+    public function a_type_with_several_units_but_only_one_ready_is_also_a_single_point_of_failure(): void
+    {
+        // 3 ambulances total — 2 are in the shop, only 1 is actually ready to
+        // respond. That's exactly the "one breakdown from zero coverage" risk,
+        // even though the category has more than one unit on paper.
+        $ambulance = $this->vehicle('Ambulance');
+        $this->vehicle('Ambulance', ['category_id' => $ambulance->category_id, 'status' => 'Under Maintenance']);
+        $this->vehicle('Ambulance', ['category_id' => $ambulance->category_id, 'status' => 'Under Maintenance']);
+
+        Sanctum::actingAs($this->admin, ['*']);
+        $fragility = collect($this->getJson('/api/dashboard')->assertOk()->json('fragility'));
+
+        $row = $fragility->firstWhere('category', $ambulance->fresh()->category->category_name);
+        $this->assertNotNull($row);
+        $this->assertSame(3, $row['operational']);
+        $this->assertSame(1, $row['ready']);
+        $this->assertTrue($row['single_point']);
+        $this->assertFalse($row['critical'], 'Not critical yet — one unit is still ready.');
+    }
+
+    #[Test]
+    public function a_type_with_zero_ready_units_is_flagged_critical(): void
+    {
+        $ambulance = $this->vehicle('Ambulance', ['status' => 'Under Maintenance']);
+        $this->vehicle('Ambulance', ['category_id' => $ambulance->category_id, 'status' => 'Under Maintenance']);
+
+        Sanctum::actingAs($this->admin, ['*']);
+        $fragility = collect($this->getJson('/api/dashboard')->assertOk()->json('fragility'));
+
+        $row = $fragility->firstWhere('category', $ambulance->fresh()->category->category_name);
+        $this->assertNotNull($row);
+        $this->assertSame(0, $row['ready']);
+        $this->assertTrue($row['single_point']);
+        $this->assertTrue($row['critical']);
     }
 
     // ---- Gap C: Fleet-wide failure patterns ------------------------------

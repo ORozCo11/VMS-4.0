@@ -8,6 +8,7 @@ use App\Http\Controllers\HubController;
 use App\Http\Controllers\TicketController;
 use App\Http\Controllers\NotificationController;
 use App\Http\Controllers\UserController;
+use App\Http\Middleware\EnsureUserIsActive;
 
 /*
 |--------------------------------------------------------------------------
@@ -22,7 +23,7 @@ Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:10
 | Protected Routes (Requires a Valid Sanctum Token in Header)
 |--------------------------------------------------------------------------
 */
-Route::middleware('auth:sanctum')->group(function () {
+Route::middleware(['auth:sanctum', EnsureUserIsActive::class])->group(function () {
     
     // Session termination route
     Route::post('/logout', [AuthController::class, 'logout']);
@@ -92,6 +93,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/maintenance-schedules', [FleetController::class, 'schedules']);
     Route::post('/maintenance-schedules', [FleetController::class, 'storeSchedule']);
     Route::put('/maintenance-schedules/{schedule}', [FleetController::class, 'updateSchedule']);
+    Route::put('/maintenance-schedules/{schedule}/complete', [FleetController::class, 'completeSchedule']);
     Route::delete('/maintenance-schedules/{schedule}', [FleetController::class, 'deleteSchedule']);
 
     Route::get('/histories', [FleetController::class, 'histories']);
@@ -120,6 +122,9 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Phase 3 — Admin: Dispatch work order to a mechanic, per sub-issue
     Route::put('/tickets/{ticket}/sub-issues/{subIssue}/assign-mechanic', [TicketController::class, 'assignMechanic']);
+
+    // Admin: Reassign an in-progress work order to a different mechanic
+    Route::put('/tickets/{ticket}/sub-issues/{subIssue}/reassign-mechanic', [TicketController::class, 'reassignMechanic']);
 
     // Phase 3 — Mechanic: Log physical repairs on a sub-issue
     Route::put('/tickets/{ticket}/sub-issues/{subIssue}/log-repairs', [TicketController::class, 'logRepairs']);

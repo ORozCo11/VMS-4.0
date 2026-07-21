@@ -2,6 +2,9 @@ import { useContext, useState } from 'react';
 import { Link, Navigate, useNavigate } from 'react-router-dom';
 import api from '../api/axios';
 import Icon from '../components/Icon';
+import Aurora from '../components/Aurora';
+import AuthHeader from '../components/AuthHeader';
+import AuthFooter from '../components/AuthFooter';
 import { AuthContext } from '../context/AuthContextObject';
 
 const roleRoutes = {
@@ -17,27 +20,10 @@ function Login() {
     email: '',
     password: '',
   });
+  const [rememberMe, setRememberMe] = useState(true);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
-
-  const demoAccounts = {
-    Admin: {
-      name: 'Roel Degulacion',
-      email: 'admin@barangay.gov',
-      password: 'admin123',
-    },
-    Custodian: {
-      name: 'Nicole',
-      email: 'custodian@barangay.gov',
-      password: 'custodian123',
-    },
-    'Maintenance Personnel': {
-      name: 'Toto Bongo',
-      email: 'maintenance@barangay.gov',
-      password: 'maintenance123',
-    },
-  };
 
   if (token && user) {
     return <Navigate to={roleRoutes[user.role] ?? '/unauthorized'} replace />;
@@ -51,12 +37,6 @@ function Login() {
     }));
   };
 
-  const loadDemoAccount = (role) => {
-    setError('');
-    const { email, password } = demoAccounts[role];
-    setCredentials({ email, password });
-  };
-
   const handleSubmit = async (event) => {
     event.preventDefault();
     setError('');
@@ -66,7 +46,7 @@ function Login() {
       const response = await api.post('/login', credentials);
       const { user: authenticatedUser, access_token: accessToken } = response.data;
 
-      login(authenticatedUser, accessToken);
+      login(authenticatedUser, accessToken, rememberMe);
       navigate(roleRoutes[authenticatedUser.role] ?? '/unauthorized', { replace: true });
     } catch (requestError) {
       setError(
@@ -79,54 +59,40 @@ function Login() {
   };
 
   return (
-    <main className="auth-page">
+    <div className="auth-page-shell">
+      <AuthHeader />
+
+      <main className="auth-page">
+      <Aurora colorStops={['#0b1220', '#1e3a5f', '#0f172a']} amplitude={0.6} blend={0.55} />
       <section className="auth-card" aria-labelledby="login-title">
         <div className="auth-logo-header">
-          <div className="auth-logo-cluster">
-            <Icon name="gear" size={40} className="auth-gear-icon" filled />
-            <span className="vms-wordmark vms-wordmark-xl">vms</span>
-          </div>
-          <p className="eyebrow">Barangay Vehicle Management System</p>
-          <h1 id="login-title">Sign in</h1>
+          <h1 id="login-title" className="auth-login-heading">Login</h1>
         </div>
 
-        <div className="demo-account-grid" aria-label="Demo account shortcuts">
-          <button className="demo-account-button admin" onClick={() => loadDemoAccount('Admin')} type="button">
-            <span>Admin</span>
-            <small>{demoAccounts.Admin.name}</small>
-          </button>
-          <button className="demo-account-button custodian" onClick={() => loadDemoAccount('Custodian')} type="button">
-            <span>Custodian</span>
-            <small>{demoAccounts.Custodian.name}</small>
-          </button>
-          <button className="demo-account-button maintenance" onClick={() => loadDemoAccount('Maintenance Personnel')} type="button">
-            <span>Maintenance</span>
-            <small>{demoAccounts['Maintenance Personnel'].name}</small>
-          </button>
-        </div>
-
-        <form className="smart-form" autoComplete="off" onSubmit={handleSubmit}>
-          <label>
-            <span>Email Address</span>
-            <input
-              autoComplete="off"
-              name="email"
-              onChange={handleChange}
-              placeholder="name@barangay.gov"
-              required
-              type="email"
-              value={credentials.email}
-            />
+        <form className="auth-form" autoComplete="off" onSubmit={handleSubmit}>
+          <label className="auth-field">
+            <span className="sr-only">Email Address</span>
+            <div className="auth-input-wrapper auth-input-plain">
+              <input
+                autoComplete="off"
+                name="email"
+                onChange={handleChange}
+                placeholder="Email address"
+                required
+                type="email"
+                value={credentials.email}
+              />
+            </div>
           </label>
 
-          <label>
-            <span>Password</span>
-            <div className="password-field-wrapper">
+          <label className="auth-field">
+            <span className="sr-only">Password</span>
+            <div className="auth-input-wrapper auth-input-plain">
               <input
                 autoComplete="off"
                 name="password"
                 onChange={handleChange}
-                placeholder="••••••••"
+                placeholder="Password"
                 required
                 type={showPassword ? 'text' : 'password'}
                 value={credentials.password}
@@ -143,9 +109,18 @@ function Login() {
             </div>
           </label>
 
+          <label className="auth-remember">
+            <input
+              type="checkbox"
+              checked={rememberMe}
+              onChange={(e) => setRememberMe(e.target.checked)}
+            />
+            Remember Me
+          </label>
+
           {error ? <p className="notice error">{error}</p> : null}
 
-          <button className="primary-button" disabled={submitting} type="submit">
+          <button className="primary-button auth-submit-btn" disabled={submitting} type="submit">
             {submitting ? (
               <span className="btn-loading">
                 <span className="btn-spinner" aria-hidden="true" />
@@ -161,7 +136,10 @@ function Login() {
           <Link to="/terms">Terms</Link>
         </p>
       </section>
-    </main>
+      </main>
+
+      <AuthFooter />
+    </div>
   );
 }
 
