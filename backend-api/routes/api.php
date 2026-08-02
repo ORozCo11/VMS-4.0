@@ -59,6 +59,8 @@ Route::middleware(['auth:sanctum', EnsureUserIsActive::class])->group(function (
     Route::get('/vehicles/{vehicle}/reliability', [FleetController::class, 'vehicleReliability']);
     Route::get('/vehicles/{vehicle}/readiness', [FleetController::class, 'vehicleReadiness']);
     Route::post('/vehicles/{vehicle}/readiness-check', [FleetController::class, 'storeReadinessCheck']);
+    Route::get('/vehicles/{vehicle}/open-tickets', [TicketController::class, 'openTicketsForVehicle']);
+    Route::get('/vehicles/{vehicle}/recurrence', [FleetController::class, 'checkVehicleRecurrence']);
 
     Route::get('/locations', [FleetController::class, 'locations']);
     Route::post('/locations', [FleetController::class, 'storeLocation']);
@@ -80,20 +82,25 @@ Route::middleware(['auth:sanctum', EnsureUserIsActive::class])->group(function (
     Route::delete('/conditions/{condition}', [FleetController::class, 'deleteCondition']);
 
     Route::get('/issues', [FleetController::class, 'issues']);
+    Route::get('/vehicles/{vehicle}/open-issues', [FleetController::class, 'openIssuesForVehicle']);
+    Route::get('/issues/{issue}', [FleetController::class, 'showIssue']);
     Route::post('/issues', [FleetController::class, 'storeIssue']);
     Route::put('/issues/{issue}', [FleetController::class, 'updateIssue']);
     Route::delete('/issues/{issue}', [FleetController::class, 'destroyIssue']);
 
     Route::get('/maintenance-records', [FleetController::class, 'maintenanceRecords']);
+    Route::get('/maintenance-records/{record}', [FleetController::class, 'showMaintenanceRecord']);
     Route::post('/maintenance-records', [FleetController::class, 'storeMaintenanceRecord']);
     Route::put('/maintenance-records/{record}', [FleetController::class, 'updateMaintenanceRecord']);
     Route::put('/maintenance-records/{record}/verify', [FleetController::class, 'verifyMaintenance']);
     Route::put('/maintenance-records/{record}/confirm', [FleetController::class, 'confirmMaintenance']);
+    Route::put('/maintenance-records/{record}/decision-close', [FleetController::class, 'decisionCloseMaintenance']);
 
     Route::get('/maintenance-schedules', [FleetController::class, 'schedules']);
     Route::post('/maintenance-schedules', [FleetController::class, 'storeSchedule']);
     Route::put('/maintenance-schedules/{schedule}', [FleetController::class, 'updateSchedule']);
     Route::put('/maintenance-schedules/{schedule}/complete', [FleetController::class, 'completeSchedule']);
+    Route::post('/maintenance-schedules/{schedule}/restore', [FleetController::class, 'restoreSchedule']);
     Route::delete('/maintenance-schedules/{schedule}', [FleetController::class, 'deleteSchedule']);
 
     Route::get('/histories', [FleetController::class, 'histories']);
@@ -126,6 +133,11 @@ Route::middleware(['auth:sanctum', EnsureUserIsActive::class])->group(function (
     // Admin: Reassign an in-progress work order to a different mechanic
     Route::put('/tickets/{ticket}/sub-issues/{subIssue}/reassign-mechanic', [TicketController::class, 'reassignMechanic']);
 
+    // Unsticks a ticket whose assigned Custodian became unavailable — they are
+    // hard-locked as both inspector and verifier, so without this the ticket
+    // is unworkable and (if still Open) not even closable.
+    Route::put('/tickets/{ticket}/reassign-custodian', [TicketController::class, 'reassignCustodian']);
+
     // Phase 3 — Mechanic: Log physical repairs on a sub-issue
     Route::put('/tickets/{ticket}/sub-issues/{subIssue}/log-repairs', [TicketController::class, 'logRepairs']);
 
@@ -134,6 +146,9 @@ Route::middleware(['auth:sanctum', EnsureUserIsActive::class])->group(function (
 
     // Phase 4 Tier 2 — Admin: Confirm or rework a sub-issue
     Route::put('/tickets/{ticket}/sub-issues/{subIssue}/confirm', [TicketController::class, 'confirmSubIssue']);
+
+    // Admin: Reopen a confirmed sub-issue (send back for re-verification)
+    Route::put('/tickets/{ticket}/sub-issues/{subIssue}/reopen-confirmed', [TicketController::class, 'reopenConfirmedSubIssue']);
 
     // Admin: Defer a sub-issue that can't be finished now (records the
     // decision + opens a breadcrumb Issue Report so it isn't forgotten)

@@ -22,47 +22,63 @@ const roleRoutes = {
   'Maintenance Personnel': '/maintenance',
 };
 
+// Sidebar structure, grouped into collapsible sections. `section: null` means
+// the items render at the top with no header (Dashboard) — everything else
+// sits under a labelled, collapsible group. The groupings themselves aren't
+// new: they existed as comments here long before they were rendered.
 const modulesByRole = {
   Admin: [
-    ['dashboard', 'Dashboard'],
-    // Operations & Active Workflows
-    ['issues', 'Issue Reports'],
-    ['tickets', 'Maintenance Tickets'],
-    ['ticketArchives', 'Ticket Archives'],
-    // Fleet Inventory & Assets
-    ['vehicles', 'Vehicle Management'],
-    ['categories', 'Vehicle Types'],
-    ['locations', 'Vehicle Location'],
-    ['histories', 'Vehicle History'],
-    // Monitoring & Schedules
-    ['conditions', 'Condition Monitoring'],
-    ['schedules', 'Maintenance Schedule'],
-    ['maintenance', 'Maintenance Records'],
-    // Administration
-    ['users', 'Users'],
-    ['reports', 'Reports'],
-    ['logs', 'Logs'],
+    { section: null, items: [['dashboard', 'Dashboard']] },
+    { section: 'Operations', items: [
+      ['issues', 'Issue Reports'],
+      ['tickets', 'Maintenance Tickets'],
+      ['ticketArchives', 'Ticket Archives'],
+    ] },
+    { section: 'Fleet & Assets', items: [
+      ['vehicles', 'Vehicle Management'],
+      ['categories', 'Vehicle Types'],
+      ['locations', 'Vehicle Location'],
+      ['histories', 'Vehicle History'],
+    ] },
+    { section: 'Monitoring & Schedules', items: [
+      ['conditions', 'Condition Monitoring'],
+      ['schedules', 'Maintenance Schedule'],
+      ['maintenance', 'Maintenance Records'],
+    ] },
+    { section: 'Administration', items: [
+      ['users', 'Users'],
+      ['reports', 'Reports'],
+      ['logs', 'Logs'],
+    ] },
   ],
   Custodian: [
-    ['dashboard', 'Dashboard'],
-    ['vehicles', 'View Vehicles'],
-    // Daily Operations Tasks
-    ['issues', 'Report Vehicle Issue'],
-    ['ticketInspections', 'Assigned Inspections'],
-    ['ticketVerifications', 'Repair Verifications'],
-    // Fleet Reference & Logs
-    ['conditions', 'Condition Monitoring'],
-    ['maintenanceStatus', 'Maintenance Status'],
+    { section: null, items: [['dashboard', 'Dashboard']] },
+    { section: 'Daily Tasks', items: [
+      ['issues', 'Report Vehicle Issue'],
+      ['ticketInspections', 'Assigned Inspections'],
+      ['ticketVerifications', 'Repair Verifications'],
+      ['workTracker', 'Work Tracker'],
+    ] },
+    { section: 'Fleet & Assets', items: [
+      ['vehicles', 'View Vehicles'],
+    ] },
+    { section: 'Monitoring & Schedules', items: [
+      ['conditions', 'Condition Monitoring'],
+      ['maintenanceStatus', 'Maintenance Status'],
+    ] },
   ],
   'Maintenance Personnel': [
-    ['dashboard', 'Dashboard'],
-    // Work Orders & Repairs
-    ['ticketWorkOrders', 'My Work Orders'],
-    ['issues', 'View Vehicle Issues'],
-    ['schedules', 'Maintenance Schedule'],
-    // Reference Logs & History
-    ['maintenanceHistory', 'Maintenance History'],
-    ['maintenance', 'Maintenance Records'],
+    { section: null, items: [['dashboard', 'Dashboard']] },
+    { section: 'Work Orders & Repairs', items: [
+      ['ticketWorkOrders', 'My Work Orders'],
+      ['workTracker', 'Work Tracker'],
+      ['issues', 'View Vehicle Issues'],
+      ['schedules', 'Maintenance Schedule'],
+    ] },
+    { section: 'Monitoring & Schedules', items: [
+      ['maintenanceHistory', 'Maintenance History'],
+      ['maintenance', 'Maintenance Records'],
+    ] },
   ],
 };
 
@@ -88,14 +104,39 @@ function userRoles(user) {
 
 // The sidebar a user sees is the UNION of every module across all their
 // roles — a Custodian + Maintenance person gets both portals' modules.
-function resolveModules(user) {
-  const seen = new Set();
-  const merged = [];
-  userRoles(user).forEach((r) => (modulesByRole[r] ?? []).forEach((m) => {
-    if (!seen.has(m[0])) { seen.add(m[0]); merged.push(m); }
+// Sections with the same label merge into one group rather than appearing
+// twice. First occurrence of a module key wins, and userRoles() puts the
+// primary role first, so a module defined by two roles keeps the label from
+// the user's primary portal (e.g. "Report Vehicle Issue" vs "View Vehicle
+// Issues" for a Custodian+Maintenance account).
+function resolveModuleGroups(user) {
+  const roles = userRoles(user);
+  const source = roles.length ? roles : [user?.role].filter(Boolean);
+  const seenKeys = new Set();
+  const order = [];
+  const bySection = new Map();
+
+  source.forEach((r) => (modulesByRole[r] ?? []).forEach(({ section, items }) => {
+    if (!bySection.has(section)) { bySection.set(section, []); order.push(section); }
+    const bucket = bySection.get(section);
+    items.forEach((item) => {
+      if (seenKeys.has(item[0])) return;
+      seenKeys.add(item[0]);
+      bucket.push(item);
+    });
   }));
-  return merged.length ? merged : (modulesByRole[user?.role] ?? []);
+
+  // A section can end up empty when every module in it was already claimed by
+  // an earlier role's section — don't render a header with nothing under it.
+  return order
+    .map((section) => ({ section, items: bySection.get(section) }))
+    .filter((g) => g.items.length > 0);
 }
+
+// NOTE: the flat [key, label] list that everything outside the sidebar render
+// consumes (default landing module, breadcrumb lookup) is derived from these
+// groups in the component via `moduleGroups.flatMap(g => g.items)` — grouping
+// the sidebar therefore didn't change any of those call sites.
 
 const moduleEndpoints = {
   vehicles: '/vehicles',
@@ -113,6 +154,7 @@ const moduleEndpoints = {
   ticketInspections: '/tickets',
   ticketVerifications: '/tickets',
   ticketWorkOrders: '/tickets',
+  workTracker: '/tickets',
   ticketArchives: '/ticket-archives',
   users: '/users',
 };
@@ -219,6 +261,14 @@ const moduleIcons = {
       <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
     </svg>
   ),
+  workTracker: (
+    <svg className="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9 11H3v10h6V11z" />
+      <path d="M15 3H9v18h6V3z" />
+      <path d="M21 7h-6v14h6V7z" />
+      <path d="m8 8 1.5 1.5L12 7" />
+    </svg>
+  ),
   histories: (
     <svg className="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M12 8v4l3 3" />
@@ -270,6 +320,7 @@ function Workspace() {
   const editConditionId = location.pathname.match(/\/conditions\/(\d+)\/edit$/)?.[1] ?? null;
   const isNewMaintenancePage = /\/maintenance\/new$/.test(location.pathname);
   const editMaintenanceId = location.pathname.match(/\/maintenance\/(\d+)\/edit$/)?.[1] ?? null;
+  const maintenanceProfileId = location.pathname.match(/\/maintenance\/(\d+)$/)?.[1] ?? null;
   const isNewUserPage = /\/users\/new$/.test(location.pathname);
   const editUserId = location.pathname.match(/\/users\/(\d+)\/edit$/)?.[1] ?? null;
   const viewUserId = location.pathname.match(/\/users\/(\d+)$/)?.[1] ?? null;
@@ -282,18 +333,73 @@ function Workspace() {
     isNewVehiclePage || vehicleProfileId || isNewTicketPage || ticketProfileId
     || isNewCategoryPage || editCategoryId || isNewSchedulePage || editScheduleId
     || isNewIssuePage || editIssueId || viewIssueId || isNewConditionPage || editConditionId
-    || isNewMaintenancePage || editMaintenanceId || isNewUserPage || editUserId || viewUserId
+    || isNewMaintenancePage || editMaintenanceId || maintenanceProfileId || isNewUserPage || editUserId || viewUserId
     || logRepairsTicketId || inspectTicketId || isProfilePage
   );
+  // The bold page title for whichever create/edit/view sub-page is active —
+  // null when just looking at a module's own list, in which case the heading
+  // falls back to plain "{Module Name}" with no breadcrumb line above it.
+  const subPageTitle =
+    (isNewVehiclePage && 'Add Vehicle')
+    || (vehicleProfileId && 'Vehicle Profile')
+    || (isNewTicketPage && 'Create New Ticket')
+    || (ticketProfileId && 'Ticket Details')
+    || (isNewCategoryPage && 'Add Vehicle Type')
+    || (editCategoryId && 'Edit Vehicle Type')
+    || (isNewSchedulePage && 'Add Maintenance Schedule')
+    || (editScheduleId && 'Update Schedule')
+    || (isNewIssuePage && 'Report Vehicle Issue')
+    || (editIssueId && 'Update Issue Status')
+    || (viewIssueId && 'Issue Details')
+    || (isNewConditionPage && 'Add Condition Check')
+    || (editConditionId && 'Edit Condition Check')
+    || (isNewMaintenancePage && 'Add Maintenance Record')
+    || (editMaintenanceId && 'Update Maintenance Record')
+    || (maintenanceProfileId && 'Maintenance Record')
+    || (isNewUserPage && 'Add User')
+    || (editUserId && 'Update User')
+    || (viewUserId && 'User Profile')
+    || (logRepairsTicketId && 'Log Repairs')
+    || (inspectTicketId && 'Inspect Vehicle')
+    || (isProfilePage && 'My Profile')
+    || null;
   const { user, logout, refreshUser } = useContext(AuthContext);
-  const modules = useMemo(() => resolveModules(user), [user.role, user.roles]);
+  const moduleGroups = useMemo(() => resolveModuleGroups(user), [user.role, user.roles]);
+  const modules = useMemo(() => moduleGroups.flatMap((g) => g.items), [moduleGroups]);
   const [activeModule, setActiveModule] = useState(modules[0]?.[0] ?? 'dashboard');
+  // Which sidebar sections the user has folded away, remembered per browser.
+  // Stored as the collapsed set (not expanded) so a brand-new section added in
+  // a future release defaults to visible rather than silently hidden.
+  const [collapsedNavGroups, setCollapsedNavGroups] = useState(() => {
+    try {
+      const raw = JSON.parse(localStorage.getItem('vms_nav_collapsed_groups') ?? '[]');
+      return Array.isArray(raw) ? raw : [];
+    } catch {
+      return [];
+    }
+  });
+  const toggleNavGroup = (section) => {
+    setCollapsedNavGroups((current) => {
+      const next = current.includes(section) ? current.filter((s) => s !== section) : [...current, section];
+      localStorage.setItem('vms_nav_collapsed_groups', JSON.stringify(next));
+      return next;
+    });
+  };
+  // A ticket profile can be reached from places that never touch
+  // setActiveModule — a notification click, a shared link opened in a new
+  // tab, a direct URL/refresh — so `activeModule` itself can't be trusted
+  // here. Computed directly (not synced via an effect) so the breadcrumb is
+  // never wrong even for a single frame.
+  const breadcrumbModule = ticketProfileId
+    ? (user.role === 'Admin' ? 'tickets' : 'workTracker')
+    : maintenanceProfileId ? 'maintenance' : activeModule;
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(
     () => localStorage.getItem('vms_sidebar_collapsed') === '1'
   );
   const [lookups, setLookups] = useState(emptyLookups);
   const [ticketLookups, setTicketLookups] = useState(emptyTicketLookups);
   const [records, setRecords] = useState({});
+  const [prefilledScheduleData, setPrefilledScheduleData] = useState(null);
   // Memoized so the object reference stays stable across unrelated re-renders
   // — SmartForm resets its values whenever this reference changes, which
   // would otherwise wipe out whatever the user has already typed.
@@ -302,16 +408,46 @@ function Workspace() {
       ? (records.schedules ?? []).find((s) => String(s.schedule_id) === String(editScheduleId))
       // Default to tomorrow — a schedule is always plotted ahead, so this
       // saves a click for the common case; still fully editable.
-      : { scheduled_date: new Date(Date.now() + 86400000).toISOString().slice(0, 10) }
-  ), [editScheduleId, records.schedules]);
+      : { scheduled_date: new Date(Date.now() + 86400000).toISOString().slice(0, 10), ...(prefilledScheduleData ?? {}) }
+  ), [editScheduleId, records.schedules, prefilledScheduleData]);
   const [dashboard, setDashboard] = useState(null);
   const [editTarget, setEditTarget] = useState(null);
   const [completeScheduleTarget, setCompleteScheduleTarget] = useState(null);
+  // After a Custodian passes a verification they're already standing at the
+  // vehicle — offer the Readiness Check right then instead of making them
+  // come back for a second visit. Holds the vehicle to check, or null.
+  const [readinessPromptTarget, setReadinessPromptTarget] = useState(null);
+  // Card/List toggle for Maintenance Records, remembered per browser the same
+  // way the Tickets module does it (separate key so the two don't clobber
+  // each other). Defaults to the table — these rows carry more columns worth
+  // scanning than a ticket does.
+  const [maintenanceViewMode, setMaintenanceViewMode] = useState(
+    () => localStorage.getItem('vms_maintenance_view') || 'table'
+  );
+  const changeMaintenanceViewMode = (mode) => {
+    setMaintenanceViewMode(mode);
+    localStorage.setItem('vms_maintenance_view', mode);
+  };
+  const [scheduleViewMode, setScheduleViewMode] = useState(
+    () => localStorage.getItem('vms_schedule_view') || 'table'
+  );
+  const changeScheduleViewMode = (mode) => {
+    setScheduleViewMode(mode);
+    localStorage.setItem('vms_schedule_view', mode);
+  };
+  // Drives the conditional External Shop / Vendor / Receipt fields in the
+  // Mark Done form below — reset wherever the modal is opened (see
+  // openCompleteSchedule) rather than in an effect.
+  const [completeScheduleExternal, setCompleteScheduleExternal] = useState(false);
+  const openCompleteSchedule = (row) => {
+    setCompleteScheduleExternal(false);
+    setCompleteScheduleTarget(row);
+  };
   const [report, setReport] = useState(null);
   const [notice, setNotice] = useState(null);
   useEffect(() => {
     if (!notice) return;
-    const timer = setTimeout(() => setNotice(null), 5000);
+    const timer = setTimeout(() => setNotice(null), notice.lines ? 8000 : 5000);
     return () => clearTimeout(timer);
   }, [notice]);
   const [loading, setLoading] = useState(false);
@@ -338,6 +474,7 @@ function Workspace() {
   // Draft for the condition filter bar — applied only on "Filter" click.
   const [condDraft, setCondDraft] = useState({ category: '', status: '', start: '', end: '' });
   const [prefilledTicketData, setPrefilledTicketData] = useState(null);
+  const [prefilledMaintenanceData, setPrefilledMaintenanceData] = useState(null);
   const [allHubs, setAllHubs] = useState([]);
   const [locationsTab, setLocationsTab] = useState('map');
   const [selectedMapVehicleId, setSelectedMapVehicleId] = useState(null);
@@ -537,9 +674,16 @@ function Workspace() {
 
       if (activeModule === 'maintenanceStatus') {
         await api.put(`/maintenance-records/${editTarget.maintenance_id}/verify`, cleanPayload(payload));
+        // Capture before clearing editTarget — a Pass means the Custodian is
+        // physically at the vehicle right now, which is the cheapest possible
+        // moment to also confirm it's ready to respond (see
+        // readinessPromptTarget). A Fail means the vehicle is going back for
+        // more work, so there's nothing to check yet.
+        const justVerifiedVehicle = payload.verification_result === 'Passed' ? editTarget.vehicle : null;
         setEditTarget(null);
         setNotice({ type: 'success', text: 'Verification submitted.' });
         await refreshCurrent();
+        if (justVerifiedVehicle) setReadinessPromptTarget(justVerifiedVehicle);
         return;
       }
 
@@ -580,13 +724,69 @@ function Workspace() {
   };
 
   const handleCreateTicketFromIssue = (issue) => {
+    // The custodian who filed this already told us what's wrong — don't make
+    // someone re-diagnose it. Pre-diagnosed mode skips straight past
+    // inspection to a sub-issue ready for a mechanic; the assigned custodian
+    // only re-enters later, to verify the actual repair.
+    const reporterId = issue.reported_by?.id;
+    const reporterIsCustodian = (ticketLookups.custodians ?? []).some((c) => c.id === reporterId);
     setPrefilledTicketData({
       vehicle_id: issue.vehicle_id,
       ticket_title: `[Issue #${issue.issue_report_id}] ${issue.issue_type}`,
+      fault_category: issue.issue_type,
       ticket_description: `Original Reported Issue: ${issue.issue_description}\nSeverity: ${issue.severity_level}`,
       issue_report_id: issue.issue_report_id,
+      entry_mode: 'prediagnosed',
+      sub_issues_text: `${issue.issue_type}: ${issue.issue_description}`,
+      // Defaulted, not locked — Admin can still pick someone else (workload,
+      // availability), but the person who already knows this is the sane
+      // starting point instead of a blank "Select."
+      ...(reporterIsCustodian ? { assigned_custodian_id: reporterId } : {}),
     });
     navigate(`${roleRoutes[user.role]}/tickets/new`);
+  };
+
+  // #2 (Mode C) — a "Needs Repair"/"Damaged" condition check already IS the
+  // inspection, so spawn a pre-diagnosed ticket carrying the custodian's
+  // findings straight in (no re-inspection). Observations seed the sub-issues.
+  const handleCreateTicketFromCondition = (cond) => {
+    setPrefilledTicketData({
+      vehicle_id: cond.vehicle_id,
+      ticket_title: `Condition Check: ${cond.condition_result}`,
+      ticket_description: `From condition check #${cond.condition_check_id} by ${cond.checked_by?.name ?? 'custodian'}.\nObservations: ${cond.observations ?? '—'}`,
+      entry_mode: 'prediagnosed',
+      sub_issues_text: cond.observations || cond.condition_result,
+      priority: cond.condition_result === 'Damaged' ? 'High' : 'Medium',
+    });
+    navigate(`${roleRoutes[user.role]}/tickets/new`);
+  };
+
+  // The Custodian has daily eyes on the vehicle and is the one most likely
+  // to notice "this is due for a checkup soon" — but they can't decide to
+  // fix something, only propose WHEN to look at it. Jumps to Add Schedule
+  // with the vehicle and a note already filled in; still needs to actually
+  // be submitted (nothing is booked until then).
+  const handleSuggestScheduleFromCondition = (cond) => {
+    setPrefilledScheduleData({
+      vehicle_id: cond.vehicle_id,
+      notes: `Suggested from condition check #${cond.condition_check_id} (${cond.condition_result})${cond.observations ? `: ${cond.observations}` : ''}`,
+    });
+    navigate(`${roleRoutes[user.role]}/schedules/new`);
+  };
+
+  // Closes the loop on the receipt-backed external repair path (#5): whether
+  // the issue is standalone or the follow-up breadcrumb from a deferred
+  // sub-issue, this jumps straight to Add Maintenance Record with the
+  // vehicle and issue already linked — Admin only needs to add the vendor,
+  // cost, and receipt, instead of hunting for the right issue in a dropdown.
+  const handleSendToExternalShop = ({ vehicle_id, issue_report_id, problem_reason }) => {
+    setPrefilledMaintenanceData({
+      vehicle_id,
+      issue_report_id,
+      problem_reason,
+      is_external: 1,
+    });
+    navigate(`${roleRoutes[user.role]}/maintenance/new`);
   };
 
   const deleteTicket = async (ticket) => {
@@ -604,6 +804,22 @@ function Workspace() {
     try {
       await api.put(path, payload);
       setNotice({ type: 'success', text: success });
+      await refreshCurrent();
+    } catch (error) {
+      showError(error, setNotice);
+    }
+  };
+
+  // Readiness check submitted from the post-verification prompt. Separate from
+  // the Maintenance Record entirely — two different questions ("was this
+  // repair done?" vs "can this vehicle respond right now?") kept as two
+  // honest records, just collected in one visit.
+  const submitReadinessFromPrompt = async (vehicleId, payload) => {
+    setNotice(null);
+    try {
+      await api.post(`/vehicles/${vehicleId}/readiness-check`, payload);
+      setNotice({ type: 'success', text: 'Readiness check recorded.' });
+      setReadinessPromptTarget(null);
       await refreshCurrent();
     } catch (error) {
       showError(error, setNotice);
@@ -648,10 +864,13 @@ function Workspace() {
     });
   };
 
-  const restoreRecord = async (path, success) => {
+  // `message` defaults to the vehicle wording this was originally written for,
+  // so existing callers are unchanged, but a schedule restore can say what it
+  // actually does instead of claiming to restore a vehicle.
+  const restoreRecord = async (path, success, message = 'Restore this vehicle to active service?') => {
     setConfirmDialog({
       title: 'Confirm Action',
-      message: 'Restore this vehicle to active service?',
+      message,
       confirmLabel: 'Restore',
       variant: 'primary',
       onConfirm: async () => {
@@ -757,8 +976,29 @@ function Workspace() {
   const submitFormPage = async (moduleKey, existing, payload) => {
     setNotice(null);
     try {
-      const request = moduleRequest(moduleKey, existing, payload);
-      await sendPayload(request.method, request.path, payload);
+      let finalPayload = payload;
+
+      // "+ Add New Issue" was picked on the maintenance form instead of an
+      // existing report — file the Issue Report first, then point the
+      // maintenance record at the ID it comes back with.
+      if (moduleKey === 'maintenance' && payload.issue_report_id === '__new_issue__') {
+        const { data: newIssue } = await api.post('/issues', {
+          vehicle_id: payload.vehicle_id,
+          issue_type: payload.new_issue_type,
+          issue_description: payload.new_issue_description,
+          severity_level: payload.new_issue_severity,
+        });
+        finalPayload = {
+          ...payload,
+          issue_report_id: newIssue.issue_report_id,
+          new_issue_type: undefined,
+          new_issue_description: undefined,
+          new_issue_severity: undefined,
+        };
+      }
+
+      const request = moduleRequest(moduleKey, existing, finalPayload);
+      await sendPayload(request.method, request.path, finalPayload);
       await refreshCurrent();
       // If the admin just edited their OWN account, re-pull the logged-in user
       // so the topbar name/avatar/photo update immediately (no reload needed).
@@ -804,10 +1044,20 @@ function Workspace() {
     }
 
     if (activeModule === 'schedules' && !filterStatus) {
-      result = result.filter((row) => row.status !== 'Cancelled');
+      // Recurring schedules auto-regenerate every time one is completed
+      // (Workflow 15), so Completed rows pile up indefinitely otherwise —
+      // default view stays to just what's actually upcoming/actionable.
+      // Click the Completed or Cancelled stat card to see the rest.
+      result = result.filter((row) => row.status === 'Scheduled');
     }
 
-    if (activeModule === 'ticketInspections') {
+    if (activeModule === 'schedules' && filterStatus === 'MyAssigned') {
+      result = result.filter((row) => row.status === 'Scheduled' && String(row.assigned_to) === String(user.id));
+    } else if (activeModule === 'schedules' && filterStatus === 'AwaitingVerification') {
+      result = result.filter((row) => (
+        row.status === 'Completed' && row.resulting_maintenance && row.resulting_maintenance.progress_status !== 'Completed'
+      ));
+    } else if (activeModule === 'ticketInspections') {
       result = result.filter((row) => (
         filterStatus === 'Inspected' ? row.status !== 'Open' : row.status === 'Open'
       ));
@@ -818,6 +1068,10 @@ function Workspace() {
     } else if (activeModule === 'ticketVerifications') {
       result = result.filter((row) => (
         filterStatus === 'Verified' ? row.status !== 'For Inspection' : row.status === 'For Inspection'
+      ));
+    } else if (activeModule === 'vehicles' && (filterStatus === 'ReadyToRespond' || filterStatus === 'NotReady')) {
+      result = result.filter((row) => (
+        filterStatus === 'ReadyToRespond' ? row.readiness_state === 'ready' : row.readiness_state !== 'ready'
       ));
     } else if (filterStatus && activeModule === 'users') {
       result = result.filter((row) => row.role === filterStatus);
@@ -941,6 +1195,18 @@ function Workspace() {
       });
     }
 
+    // A "Completed" schedule only means the calendar task is done — the
+    // record it produced might still need Custodian verification. Float
+    // those to the top instead of leaving them buried among rows that are
+    // genuinely finished, so the ones still needing attention are the
+    // first thing Admin sees.
+    if (activeModule === 'schedules') {
+      const needsAttention = (row) => (
+        row.status === 'Completed' && row.resulting_maintenance && row.resulting_maintenance.progress_status !== 'Completed' ? 0 : 1
+      );
+      result = [...result].sort((a, b) => needsAttention(a) - needsAttention(b));
+    }
+
     return result;
   }, [rawRows, searchQuery, filterCategory, filterCapacity, filterStatus, filterPriority, activeModule, condFilterStartDate, condFilterEndDate, archiveStart, archiveEnd, archiveStatusFilter]);
 
@@ -960,10 +1226,22 @@ function Workspace() {
     [records.issues]
   );
 
-  const scheduleStats = useMemo(
-    () => countByValues(records.schedules ?? [], (r) => r.status, ['Scheduled', 'Completed', 'Cancelled']),
-    [records.schedules]
-  );
+  const scheduleStats = useMemo(() => {
+    const base = countByValues(records.schedules ?? [], (r) => r.status, ['Scheduled', 'Completed', 'Cancelled']);
+    // A schedule marked "Completed" only means the calendar task is done —
+    // the record it produced might still be sitting unverified. Surface
+    // that as its own count so it's findable instead of buried among
+    // fully-verified rows.
+    const awaitingVerification = (records.schedules ?? []).filter(
+      (r) => r.status === 'Completed' && r.resulting_maintenance && r.resulting_maintenance.progress_status !== 'Completed'
+    ).length;
+    // A mechanic's own pending workload — how many vehicles THEY still need
+    // to do, not the fleet-wide total everyone else also sees.
+    const myAssigned = (records.schedules ?? []).filter(
+      (r) => r.status === 'Scheduled' && String(r.assigned_to) === String(user.id)
+    ).length;
+    return { ...base, AwaitingVerification: awaitingVerification, MyAssigned: myAssigned };
+  }, [records.schedules, user.id]);
 
   const conditionStats = useMemo(
     () => countByValues(records.conditions ?? [], (r) => r.condition_result, ['Good', 'Needs Inspection', 'Needs Repair', 'Damaged']),
@@ -1006,6 +1284,8 @@ function Workspace() {
       Available: countByStatus('Available'),
       'Under Maintenance': countByStatus('Under Maintenance'),
       Inactive: countByStatus('Inactive'),
+      ReadyToRespond: rows.filter((row) => row.readiness_state === 'ready').length,
+      NotReady: rows.filter((row) => row.readiness_state !== 'ready').length,
     };
   }, [records.vehicles]);
 
@@ -1153,10 +1433,19 @@ function Workspace() {
                       <span>No notifications yet.</span>
                     </div>
                   ) : (
-                    notifications.map((n) => (
+                    notifications.map((n) => {
+                      const getNotificationType = (title) => {
+                        if (/confirmed|approved|completed|verified|done/i.test(title)) return 'success';
+                        if (/reopened|deferred|rejected|sent back/i.test(title)) return 'warning';
+                        if (/required|assigned|logged|repairs completed/i.test(title)) return 'info';
+                        if (/failed|error/i.test(title)) return 'error';
+                        return 'info';
+                      };
+                      const notificationType = getNotificationType(n.title);
+                      return (
                       <div
                         key={n.notification_id}
-                        className={`notification-item ${!n.read_at ? 'unread' : ''}`}
+                        className={`notification-item notification-${notificationType} ${!n.read_at ? 'unread' : ''}`}
                         onClick={async () => {
                           await markNotificationAsRead(n.notification_id);
                           if (n.ticket_id) {
@@ -1181,7 +1470,8 @@ function Workspace() {
                         </button>
                       </div>
                     </div>
-                  ))
+                    );
+                    })
                 )}
               </div>
             </div>
@@ -1223,25 +1513,58 @@ function Workspace() {
       <main className={`workspace${isSidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
         <aside className={`sidebar${isSidebarCollapsed ? ' collapsed' : ''}`}>
           <nav className="module-nav" aria-label="Workspace modules">
-            {modules.map(([key, label]) => {
-              const badgeCount = dashboard?.badge_counts?.[key] ?? 0;
+            {moduleGroups.map(({ section, items }) => {
+              const renderItem = ([key, label]) => {
+                const badgeCount = dashboard?.badge_counts?.[key] ?? 0;
+                return (
+                  <button
+                    className={key === activeModule ? 'active' : ''}
+                    key={key}
+                    onClick={() => {
+                      setActiveModule(key);
+                      if (isOnSpecialPage) {
+                        navigate(roleRoutes[user.role]);
+                      }
+                    }}
+                    title={isSidebarCollapsed ? label : undefined}
+                    type="button"
+                  >
+                    {moduleIcons[key]}
+                    <span>{label}</span>
+                    {badgeCount > 0 && <span className="module-nav-badge">{badgeCount}</span>}
+                  </button>
+                );
+              };
+
+              // Ungrouped (Dashboard) — no header, always visible.
+              if (!section) return <div key="__top" className="module-nav-group">{items.map(renderItem)}</div>;
+
+              // Collapsing must never hide an alert: the header carries the
+              // sum of its children's badges so a folded group still shows
+              // there's something inside needing attention.
+              const groupBadge = items.reduce((sum, [key]) => sum + (dashboard?.badge_counts?.[key] ?? 0), 0);
+              // Two things force a group open regardless of stored state: the
+              // icon-only rail (no room for headers, and hiding icons there
+              // would leave no way to reach them), and the group containing
+              // whatever module is currently active — so notification jumps
+              // and deep links never land on a hidden item.
+              const holdsActive = items.some(([key]) => key === activeModule);
+              const expanded = isSidebarCollapsed || holdsActive || !collapsedNavGroups.includes(section);
+
               return (
-                <button
-                  className={key === activeModule ? 'active' : ''}
-                  key={key}
-                  onClick={() => {
-                    setActiveModule(key);
-                    if (isOnSpecialPage) {
-                      navigate(roleRoutes[user.role]);
-                    }
-                  }}
-                  title={isSidebarCollapsed ? label : undefined}
-                  type="button"
-                >
-                  {moduleIcons[key]}
-                  <span>{label}</span>
-                  {badgeCount > 0 && <span className="module-nav-badge">{badgeCount}</span>}
-                </button>
+                <div key={section} className="module-nav-group">
+                  <button
+                    type="button"
+                    className="module-nav-section"
+                    onClick={() => toggleNavGroup(section)}
+                    aria-expanded={expanded}
+                  >
+                    <span className="module-nav-section-label">{section}</span>
+                    {!expanded && groupBadge > 0 && <span className="module-nav-badge">{groupBadge}</span>}
+                    <Icon name="chevronDown" size={13} className={`module-nav-section-chevron${expanded ? '' : ' is-collapsed'}`} />
+                  </button>
+                  {expanded && items.map(renderItem)}
+                </div>
               );
             })}
           </nav>
@@ -1249,10 +1572,28 @@ function Workspace() {
 
         <section className="content-area">
           <div className="page-heading-row">
-            <h2>{moduleIcons[activeModule]} {moduleLabel(modules, activeModule)}</h2>
+            <span className="page-heading-icon">{moduleIcons[activeModule]}</span>
+            <div className="page-heading-text">
+              {subPageTitle && (
+                <p className="breadcrumb-path">{moduleLabel(modules, breadcrumbModule)} »</p>
+              )}
+              <h2>{subPageTitle ?? moduleLabel(modules, activeModule)}</h2>
+            </div>
           </div>
 
-        {notice && (
+        {notice && notice.lines ? (
+          <div className="toast-notice-overlay" onClick={() => setNotice(null)}>
+            <div className="toast-notice toast-notice-validation error" role="alert" onClick={(e) => e.stopPropagation()}>
+              <Icon name="alert" size={17} className="toast-notice-icon" />
+              <div className="toast-notice-lines">
+                {notice.lines.map((line, i) => <span key={i}>{line}</span>)}
+              </div>
+              <button type="button" className="toast-notice-close" onClick={() => setNotice(null)} aria-label="Dismiss">
+                <Icon name="close" size={13} />
+              </button>
+            </div>
+          </div>
+        ) : notice && (
           <div className={`toast-notice ${notice.type}`} role="alert">
             <Icon name={notice.type === 'success' ? 'checkCircle' : 'alert'} size={16} />
             <span>{notice.text}</span>
@@ -1281,6 +1622,7 @@ function Workspace() {
               ticketLookups={ticketLookups}
               prefilledTicketData={prefilledTicketData}
               onCreateTicket={createTicket}
+              basePath={roleRoutes[user.role]}
             />
           ) : vehicleProfileId ? (
             <VehicleProfilePage
@@ -1289,9 +1631,8 @@ function Workspace() {
               allHubs={allHubs}
               canManage={hasRole(user, 'Admin')}
               canCheckReadiness={hasRole(user, 'Admin') || hasRole(user, 'Custodian')}
-              onBack={() => returnToModule('vehicles')}
               setNotice={setNotice}
-              onSaved={loadLookups}
+              onSaved={refreshCurrent}
               onViewTicket={openTicketProfile}
               onRequestConfirmation={setConfirmDialog}
             />
@@ -1304,11 +1645,19 @@ function Workspace() {
               onBack={() => returnToModule('tickets')}
               onDeleteTicket={deleteTicket}
               onRequestConfirmation={setConfirmDialog}
+              onSendToExternalShop={handleSendToExternalShop}
               ticketAction={ticketAction}
+            />
+          ) : maintenanceProfileId ? (
+            <MaintenanceRecordProfilePage
+              maintenanceId={maintenanceProfileId}
+              canManage={hasRole(user, 'Admin')}
+              onConfirm={(r) => updateRecord(`/maintenance-records/${r.maintenance_id}/confirm`, { confirmed: true }, 'Maintenance confirmed.')}
+              onReopen={(r) => updateRecord(`/maintenance-records/${r.maintenance_id}/confirm`, { confirmed: false }, 'Maintenance reopened.')}
+              onDecisionClose={(r, payload) => updateRecord(`/maintenance-records/${r.maintenance_id}/decision-close`, payload, 'Record closed without verification.')}
             />
           ) : (isNewCategoryPage || editCategoryId) ? (
             <FormPage
-              title={editCategoryId ? 'Edit Vehicle Type' : 'Add Vehicle Type'}
               description="Maintain standard vehicle type choices used across dropdowns."
               onBack={() => returnToModule('categories')}
               fields={categoryFields}
@@ -1318,9 +1667,8 @@ function Workspace() {
             />
           ) : (isNewSchedulePage || editScheduleId) ? (
             <FormPage
-              title={editScheduleId ? 'Update Schedule' : 'Add Maintenance Schedule'}
               description="Plan preventative maintenance and track schedule status."
-              onBack={() => returnToModule('schedules')}
+              onBack={() => { setPrefilledScheduleData(null); returnToModule('schedules'); }}
               fields={scheduleFields(lookups, allHubs, Boolean(editScheduleId))}
               initialValues={scheduleInitialValues}
               onSubmit={(payload) => submitFormPage('schedules', editScheduleId ? { schedule_id: editScheduleId } : null, payload)}
@@ -1330,14 +1678,15 @@ function Workspace() {
             />
           ) : viewIssueId ? (
             <IssueViewPage
-              issue={(records.issues ?? []).find((i) => String(i.issue_report_id) === String(viewIssueId))}
+              issueId={viewIssueId}
               allIssues={records.issues ?? []}
               allHubs={allHubs}
-              onBack={() => returnToModule('issues')}
+              role={user.role}
+              onCreateTicketFromIssue={handleCreateTicketFromIssue}
+              onSendToExternalShop={handleSendToExternalShop}
             />
           ) : (isNewIssuePage || editIssueId) ? (
             <FormPage
-              title={editIssueId ? 'Update Issue Status' : 'Report Vehicle Issue'}
               description={issueDescription(user.role)}
               onBack={() => returnToModule('issues')}
               fields={issueFields(lookups, editIssueId ? { issue_report_id: editIssueId } : null, user.role)}
@@ -1346,10 +1695,11 @@ function Workspace() {
               submitLabel={editIssueId ? 'Update Issue' : 'Submit Issue'}
               contextVehicles={lookups.vehicles}
               hubs={allHubs}
+              warnEndpoint={editIssueId ? undefined : (vid) => `/vehicles/${vid}/open-issues`}
+              warnRender={(rows) => <OpenItemsWarning kind="issue" rows={rows} basePath={roleRoutes[user.role]} />}
             />
           ) : (isNewConditionPage || editConditionId) ? (
             <FormPage
-              title={editConditionId ? 'Edit Condition Check' : 'Add Condition Check'}
               description="Periodic inspection log — a Custodian's routine check-in on a vehicle's physical condition."
               onBack={() => returnToModule('conditions')}
               fields={conditionFields(lookups)}
@@ -1361,11 +1711,10 @@ function Workspace() {
             />
           ) : (isNewMaintenancePage || editMaintenanceId) ? (
             <FormPage
-              title={editMaintenanceId ? 'Update Maintenance Record' : 'Add Maintenance Record'}
               description="Directly log external, historical, or third-party vehicle maintenance records and expenses without running the 5-phase ticket workflow."
-              onBack={() => returnToModule('maintenance')}
-              fields={maintenanceFields(lookups, user.role)}
-              initialValues={editMaintenanceId ? (records.maintenance ?? []).find((m) => String(m.maintenance_id) === String(editMaintenanceId)) : EMPTY_OBJ}
+              onBack={() => { setPrefilledMaintenanceData(null); returnToModule('maintenance'); }}
+              fields={(vals) => maintenanceFields(lookups, user.role, vals)}
+              initialValues={editMaintenanceId ? (records.maintenance ?? []).find((m) => String(m.maintenance_id) === String(editMaintenanceId)) : (prefilledMaintenanceData ?? EMPTY_OBJ)}
               onSubmit={(payload) => submitFormPage('maintenance', editMaintenanceId ? { maintenance_id: editMaintenanceId } : null, payload)}
               submitLabel={editMaintenanceId ? 'Update Maintenance' : 'Add Maintenance'}
               contextVehicles={lookups.vehicles}
@@ -1376,12 +1725,10 @@ function Workspace() {
               userId={viewUserId}
               users={records.users}
               role={user.role}
-              onBack={() => returnToModule('users')}
               onEdit={() => navigate(`${roleRoutes[user.role]}/users/${viewUserId}/edit`)}
             />
           ) : (isNewUserPage || editUserId) ? (
             <FormPage
-              title={editUserId ? 'Update User' : 'Add User'}
               description="Create and manage user accounts — Admin, Custodian, and Maintenance Personnel."
               onBack={() => returnToModule('users')}
               fields={userFields(Boolean(editUserId))}
@@ -1425,7 +1772,16 @@ function Workspace() {
 
   function renderModule() {
     if (activeModule === 'dashboard') {
-      return <Dashboard data={dashboard} hubs={allHubs} user={user} />;
+      return (
+        <Dashboard
+          data={dashboard}
+          hubs={allHubs}
+          user={user}
+          basePath={roleRoutes[user.role]}
+          onNavigate={navigate}
+          onGoToSchedules={() => returnToModule('schedules')}
+        />
+      );
     }
 
     if (activeModule === 'vehicles') {
@@ -1469,7 +1825,7 @@ function Workspace() {
             priorityOptions={lookups.condition_results}
             priorityLabel="Condition"
           />
-          <PaginatedTable columns={vehicleColumns(user.role, (row) => openVehicleProfile(row, 'edit'), deleteRecord, restoreRecord, filterStatus)} rows={visibleRows} onRowClick={openVehicleProfile} emptyMessage="No vehicles here yet — click the + button to register one." />
+          <PaginatedTable columns={vehicleColumns(user.role, (row) => openVehicleProfile(row, 'edit'), deleteRecord, restoreRecord, filterStatus, openTicketProfile)} rows={visibleRows} onRowClick={openVehicleProfile} emptyMessage="No vehicles here yet — click the + button to register one." />
         </ModulePanel>
       );
     }
@@ -1734,7 +2090,7 @@ function Workspace() {
             </div>
 
             <DataTable
-              columns={conditionColumns(user.role, (row) => navigate(`${roleRoutes[user.role]}/conditions/${row.condition_check_id}/edit`), deleteRecord)}
+              columns={conditionColumns(user.role, (row) => navigate(`${roleRoutes[user.role]}/conditions/${row.condition_check_id}/edit`), deleteRecord, handleCreateTicketFromCondition, handleSuggestScheduleFromCondition)}
               emptyMessage="No condition checks logged yet — click the + button to record one."
               rows={visibleRows}
               onRowClick={(row) => row.vehicle && openVehicleProfile(row.vehicle)}
@@ -1821,13 +2177,16 @@ function Workspace() {
         >
           <div className="panel-header-bar">
             <h3>Maintenance Records <span className="count-badge">{visibleRows.length}</span></h3>
-            <LocalSearchInput
-              value={searchQuery}
-              onChange={setSearchQuery}
-              placeholder="Search maintenance..."
-              onAdd={hasRole(user, 'Admin') ? () => navigate(`${roleRoutes[user.role]}/maintenance/new`) : undefined}
-              addLabel="Add Maintenance"
-            />
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <ViewModeDropdown value={maintenanceViewMode} onChange={changeMaintenanceViewMode} />
+              <LocalSearchInput
+                value={searchQuery}
+                onChange={setSearchQuery}
+                placeholder="Search maintenance..."
+                onAdd={(hasRole(user, 'Admin') || hasRole(user, 'Maintenance Personnel')) ? () => navigate(`${roleRoutes[user.role]}/maintenance/new`) : undefined}
+                addLabel="Add Maintenance"
+              />
+            </div>
           </div>
           <FilterBar
             categories={lookups.categories}
@@ -1841,13 +2200,27 @@ function Workspace() {
             statusOptions={lookups.maintenance_statuses}
             statusLabel="Progress"
           />
-          <PaginatedTable
-            columns={maintenanceColumns(user.role, (row) => navigate(`${roleRoutes[user.role]}/maintenance/${row.maintenance_id}/edit`), updateRecord)}
-            emptyMessage="No maintenance records yet — click the + button to log one."
-            rows={visibleRows}
-            compact
-            onRowClick={(row) => row.vehicle && openVehicleProfile(row.vehicle)}
-          />
+          {maintenanceViewMode === 'card' ? (
+            <PaginatedCardGrid
+              items={visibleRows}
+              keyOf={(row) => row.maintenance_id}
+              emptyMessage="No maintenance records yet — click the + button to log one."
+              renderItem={(row) => (
+                <MaintenanceRecordCard
+                  record={row}
+                  onClick={() => navigate(`${roleRoutes[user.role]}/maintenance/${row.maintenance_id}`)}
+                />
+              )}
+            />
+          ) : (
+            <PaginatedTable
+              columns={maintenanceColumns(user.role, (row) => navigate(`${roleRoutes[user.role]}/maintenance/${row.maintenance_id}/edit`), updateRecord, (row) => navigate(`${roleRoutes[user.role]}/maintenance/${row.maintenance_id}`))}
+              emptyMessage="No maintenance records yet — click the + button to log one."
+              rows={visibleRows}
+              compact
+              onRowClick={(row) => row.vehicle && openVehicleProfile(row.vehicle)}
+            />
+          )}
         </ModulePanel>
       );
     }
@@ -1877,11 +2250,49 @@ function Workspace() {
               title=""
             />
           </FormModal>
+
+          {/* Offered right after a Pass, while the Custodian is still at the
+              vehicle. Confirming a repair and confirming the vehicle can
+              respond are different facts, so they stay separate records —
+              this just removes the second trip needed to collect them. */}
+          <FormModal
+            open={!!readinessPromptTarget}
+            title={`Readiness Check — ${readinessPromptTarget?.vehicle_name ?? ''}`}
+            onClose={() => setReadinessPromptTarget(null)}
+          >
+            {readinessPromptTarget && (
+              <>
+                <div className="notice success" style={{ marginBottom: 14, display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                  <span style={{ display: 'inline-flex', flexShrink: 0, marginTop: 1 }}><Icon name="checkCircle" size={16} /></span>
+                  <span style={{ fontSize: '0.84rem' }}>
+                    Verification passed. Since you&apos;re already at this vehicle, you can record its Readiness Check now instead of making a second trip — or skip it with Cancel.
+                  </span>
+                </div>
+                <ReadinessCheckForm
+                  vehicle={readinessPromptTarget}
+                  onCancel={() => setReadinessPromptTarget(null)}
+                  onSubmit={(payload) => submitReadinessFromPrompt(readinessPromptTarget.vehicle_id, payload)}
+                />
+              </>
+            )}
+          </FormModal>
         </>
       );
     }
 
     if (activeModule === 'schedules') {
+      // A mechanic's own assignments surface first — the shared list still
+      // shows everyone's schedules for context, but their own work isn't
+      // buried in it. Computed once so the table and card views can't drift
+      // into showing different orderings.
+      const scheduleRows = (!hasRole(user, 'Admin') && hasRole(user, 'Maintenance Personnel'))
+        ? [...visibleRows].sort((a, b) => {
+            const aMine = String(a.assigned_to) === String(user.id) ? 0 : 1;
+            const bMine = String(b.assigned_to) === String(user.id) ? 0 : 1;
+            return aMine - bMine;
+          })
+        : visibleRows;
+
       return (
         <ModulePanel
           description="Plan preventative maintenance and track schedule status."
@@ -1889,7 +2300,7 @@ function Workspace() {
             <ModuleStatCards
               totalLabel="Total Schedules"
               total={scheduleStats.total}
-              cards={SCHEDULE_STAT_CARDS}
+              cards={(hasRole(user, 'Maintenance Personnel') && !hasRole(user, 'Admin')) ? [...SCHEDULE_STAT_CARDS, MY_ASSIGNED_SCHEDULE_CARD] : SCHEDULE_STAT_CARDS}
               counts={scheduleStats}
               activeFilter={filterStatus}
               onFilterChange={setFilterStatus}
@@ -1898,21 +2309,43 @@ function Workspace() {
         >
           <div className="panel-header-bar">
             <h3>Maintenance Schedules <span className="count-badge">{visibleRows.length}</span></h3>
-            <LocalSearchInput
-              value={searchQuery}
-              onChange={setSearchQuery}
-              placeholder="Search schedules..."
-              onAdd={hasRole(user, 'Admin') ? () => navigate(`${roleRoutes[user.role]}/schedules/new`) : undefined}
-              addLabel="Add Schedule"
-              onExport={() => exportRowsToCsv('maintenance-schedules.csv', SCHEDULE_EXPORT_COLUMNS, visibleRows)}
-            />
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <ViewModeDropdown value={scheduleViewMode} onChange={changeScheduleViewMode} />
+              <LocalSearchInput
+                value={searchQuery}
+                onChange={setSearchQuery}
+                placeholder="Search schedules..."
+                onAdd={hasRole(user, 'Admin') ? () => navigate(`${roleRoutes[user.role]}/schedules/new`) : undefined}
+                addLabel="Add Schedule"
+                onExport={() => exportRowsToCsv('maintenance-schedules.csv', SCHEDULE_EXPORT_COLUMNS, visibleRows)}
+              />
+            </div>
           </div>
-          <DataTable
-            columns={scheduleColumns((row) => navigate(`${roleRoutes[user.role]}/schedules/${row.schedule_id}/edit`), deleteRecord, setCompleteScheduleTarget)}
-            emptyMessage="No maintenance scheduled — click the + button to plan one."
-            rows={visibleRows}
-            onRowClick={(row) => row.vehicle && openVehicleProfile(row.vehicle)}
-          />
+          {scheduleViewMode === 'card' ? (
+            <PaginatedCardGrid
+              items={scheduleRows}
+              keyOf={(row) => row.schedule_id}
+              emptyMessage="No maintenance scheduled — click the + button to plan one."
+              renderItem={(row) => (
+                <MaintenanceScheduleCard
+                  row={row}
+                  currentUser={user}
+                  onComplete={openCompleteSchedule}
+                  onEdit={(r) => navigate(`${roleRoutes[user.role]}/schedules/${r.schedule_id}/edit`)}
+                  onDelete={(r) => deleteRecord(`/maintenance-schedules/${r.schedule_id}`, 'Schedule cancelled.')}
+                  onRestore={(r) => restoreRecord(`/maintenance-schedules/${r.schedule_id}/restore`, 'Schedule restored.', 'Restore this cancelled schedule back to Scheduled?')}
+                  onViewRecord={(r) => navigate(`${roleRoutes[user.role]}/maintenance/${r.resulting_maintenance_id}`)}
+                />
+              )}
+            />
+          ) : (
+            <PaginatedTable
+              columns={scheduleColumns((row) => navigate(`${roleRoutes[user.role]}/schedules/${row.schedule_id}/edit`), deleteRecord, openCompleteSchedule, user, (row) => navigate(`${roleRoutes[user.role]}/maintenance/${row.resulting_maintenance_id}`), restoreRecord)}
+              emptyMessage="No maintenance scheduled — click the + button to plan one."
+              rows={scheduleRows}
+              onRowClick={(row) => row.vehicle && openVehicleProfile(row.vehicle)}
+            />
+          )}
 
           <FormModal open={!!completeScheduleTarget} title={`Mark Done — ${completeScheduleTarget?.maintenance_type ?? ''}`} onClose={() => setCompleteScheduleTarget(null)} confirmClose>
             {completeScheduleTarget && (
@@ -1924,12 +2357,46 @@ function Workspace() {
                 <SmartForm
                   fields={[
                     { label: 'Date Completed', name: 'date_completed', type: 'date' },
-                    { label: 'Performed By', name: 'maintenance_personnel_id', options: options(lookups.maintenance_personnel, 'id', 'name'), type: 'select' },
+                    // Only an assigned mechanic (or Admin) can even open this
+                    // modal now — for a mechanic completing their own job,
+                    // "who performed it" is already answered by "you".
+                    // Admin keeps the picker since they can complete an
+                    // unassigned schedule on someone's behalf.
+                    ...(hasRole(user, 'Admin')
+                      ? [{ label: 'Performed By', name: 'maintenance_personnel_id', options: options(lookups.maintenance_personnel, 'id', 'name'), type: 'select' }]
+                      : []),
                     { label: 'Cost (optional)', name: 'maintenance_cost', type: 'number' },
+                    // Sometimes a scheduled job turns out to need a
+                    // third-party shop instead of in-house work.
+                    { label: 'Sent to External Shop?', name: 'is_external', type: 'select', options: [
+                      { value: 0, label: 'No — done in-house' },
+                      { value: 1, label: 'Yes — external shop repair' },
+                    ] },
+                    // Vendor/warranty only matter when it went external, so
+                    // those two stay conditional. Proof of completion below
+                    // does NOT — a receipt (external) or a photo of the
+                    // finished work (in-house) are equally valid proof, and
+                    // either is what actually lets Admin close this
+                    // immediately instead of waiting on Custodian
+                    // verification. A typed note alone is never enough.
+                    ...(completeScheduleExternal ? [
+                      { label: 'External Shop / Vendor', name: 'external_vendor', type: 'text', placeholder: 'e.g. Bautista Auto Shop' },
+                      { label: 'Warranty Until', name: 'warranty_until', type: 'date' },
+                    ] : []),
+                    {
+                      label: 'Receipt / Proof of Completion',
+                      name: 'receipt',
+                      type: 'file',
+                      accept: 'image/*,.pdf',
+                      hint: hasRole(user, 'Admin')
+                        ? 'Attach a receipt (external shop) or a photo of the completed repair (in-house) to close this immediately — no separate Custodian verification needed.'
+                        : 'Attach a receipt or a photo of the completed repair so the Custodian verifying this has proof.',
+                    },
                     { label: 'Notes (what was done)', name: 'notes', type: 'textarea', rows: 2 },
                   ]}
                   key={`complete-${completeScheduleTarget.schedule_id}`}
                   initialValues={{ date_completed: new Date().toISOString().slice(0, 10), maintenance_personnel_id: completeScheduleTarget.assigned_to ?? '' }}
+                  onValuesChange={(vals) => setCompleteScheduleExternal(vals.is_external === 1 || vals.is_external === '1' || vals.is_external === true)}
                   onCancel={() => setCompleteScheduleTarget(null)}
                   onSubmit={(payload) => completeSchedule(completeScheduleTarget, payload)}
                   submitLabel="Mark as Done"
@@ -2104,25 +2571,46 @@ function Workspace() {
         ...ticketArchiveColumns,
         {
           label: 'Actions',
-          render: (row) => row.final_status === 'Deleted' ? (
-            <button
-              className="btn-reopen-action"
-              type="button"
-              title="Reopen Ticket"
-              aria-label="Reopen Ticket"
-              onClick={() => {
-                setConfirmDialog({
-                  title: 'Reopen Deleted Ticket',
-                  message: `Are you sure you want to reopen Ticket #${row.ticket_id} for ${row.vehicle_name}? It will be restored with all its sub-issues to how they were before it was deleted.`,
-                  confirmLabel: 'Reopen Ticket',
-                  variant: 'primary',
-                  onConfirm: () => ticketAction(`/ticket-archives/${row.archive_id}/reopen`, {}, 'Ticket successfully reopened.'),
-                });
-              }}
-            >
-              <Icon name="undo" size={14} /> Reopen
-            </button>
-          ) : <span className="muted">—</span>,
+          render: (row) => {
+            if (row.final_status === 'Deleted') {
+              return (
+                <button
+                  className="btn-reopen-action icon-btn"
+                  type="button"
+                  title="Reopen Ticket"
+                  aria-label="Reopen Ticket"
+                  onClick={() => {
+                    setConfirmDialog({
+                      title: 'Reopen Deleted Ticket',
+                      message: `Are you sure you want to reopen Ticket #${row.ticket_id} for ${row.vehicle_name}? It will be restored with all its sub-issues to how they were before it was deleted.`,
+                      confirmLabel: 'Reopen Ticket',
+                      variant: 'primary',
+                      onConfirm: () => ticketAction(`/ticket-archives/${row.archive_id}/reopen`, {}, 'Ticket successfully reopened.'),
+                    });
+                  }}
+                >
+                  <Icon name="undo" size={14} />
+                </button>
+              );
+            }
+            // A Closed ticket is permanently locked (no Reopen), but its
+            // record still exists — the Admin can still open it read-only
+            // to see the full history of what was done.
+            if (row.final_status === 'Closed') {
+              return (
+                <button
+                  className="btn-view-action icon-btn"
+                  type="button"
+                  title="View Ticket"
+                  aria-label="View Ticket"
+                  onClick={() => openTicketProfile({ ticket_id: row.ticket_id })}
+                >
+                  <Icon name="eye" size={14} />
+                </button>
+              );
+            }
+            return <span className="muted">—</span>;
+          },
         },
       ];
 
@@ -2290,6 +2778,7 @@ function Workspace() {
     if (activeModule === 'ticketVerifications') {
       return (
         <CustodianVerificationModule
+          user={user}
           tickets={visibleRows}
           editTarget={editTarget}
           setEditTarget={setEditTarget}
@@ -2331,11 +2820,82 @@ function Workspace() {
       );
     }
 
+    // Cross-phase outcome feed — "vehicles I've worked on and where they stand
+    // now" — so Custodians/Mechanics see verdicts (Approved/Rejected/Confirmed/
+    // Reopened) without hunting for the ticket or relying on a notification.
+    if (activeModule === 'workTracker') {
+      return (
+        <WorkTrackerModule
+          tickets={records.workTracker ?? []}
+          user={user}
+          categories={lookups.categories}
+          vehicles={lookups.vehicles}
+          onViewTicket={openTicketProfile}
+        />
+      );
+    }
+
     return null;
   }
 }
 
-function Dashboard({ data, hubs = null, user }) {
+// Maps an Action Queue item's type to where clicking it should go, and what
+// it should look like — one place to keep type/icon/route in sync.
+const ACTION_QUEUE_META = {
+  issue_pending:           { icon: 'alert',       color: '#b45309', route: (basePath, id) => `${basePath}/issues/${id}` },
+  ticket_confirm:          { icon: 'checkCircle', color: '#9d174d', route: (basePath, id) => `${basePath}/tickets/${id}` },
+  ticket_close:            { icon: 'checkCircle', color: '#16a34a', route: (basePath, id) => `${basePath}/tickets/${id}` },
+  recurring_fault_review:  { icon: 'undo',        color: '#c2410c', route: (basePath, id) => `${basePath}/tickets/${id}` },
+  readiness_check:         { icon: 'search',      color: '#0369a1', route: (basePath, id) => `${basePath}/vehicles/${id}` },
+  schedule_overdue:        { icon: 'wrench',      color: '#b91c1c', route: null },
+};
+
+function ActionQueueRow({ item, basePath, onNavigate, onGoToSchedules }) {
+  const meta = ACTION_QUEUE_META[item.type] ?? ACTION_QUEUE_META.issue_pending;
+  const goTo = () => (meta.route ? onNavigate(meta.route(basePath, item.id)) : onGoToSchedules());
+  return (
+    <button
+      type="button"
+      onClick={goTo}
+      className="action-queue-row"
+      style={{ '--aq-color': meta.color }}
+    >
+      <span className="action-queue-row-icon"><Icon name={meta.icon} size={15} /></span>
+      <span className="action-queue-row-body">
+        <span className="action-queue-row-label">{item.label}</span>
+        {item.vehicle_name && <span className="action-queue-row-vehicle">{item.vehicle_name}</span>}
+      </span>
+      {item.severity && <span className="action-queue-row-severity">{item.severity}</span>}
+      <Icon name="chevronRight" size={14} className="action-queue-row-chevron" />
+    </button>
+  );
+}
+
+// A mechanic's personal task list — the counterpart to the Admin's Action
+// Queue, but scoped to "what's assigned to ME" instead of "what needs an
+// Admin decision". Same visual language (reuses .action-queue-* styles) so
+// it reads as part of the same "here's what to do" pattern on the dashboard.
+function MyScheduledWorkRow({ item, onClick }) {
+  const overdue = isScheduleOverdue(item);
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="action-queue-row"
+      style={{ '--aq-color': overdue ? '#b91c1c' : '#0369a1' }}
+    >
+      <span className="action-queue-row-icon"><Icon name="wrench" size={15} /></span>
+      <span className="action-queue-row-body">
+        <span className="action-queue-row-label">{item.maintenance_type}</span>
+        {item.vehicle && <span className="action-queue-row-vehicle">{item.vehicle.vehicle_name}</span>}
+      </span>
+      <span className="action-queue-row-severity">{overdue ? 'OVERDUE' : item.scheduled_date}</span>
+      <Icon name="chevronRight" size={14} className="action-queue-row-chevron" />
+    </button>
+  );
+}
+
+function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedules }) {
   const [weather, setWeather] = useState(null);
   const [greeting, setGreeting] = useState(() => buildLocalGreeting(user?.name));
   const [greetingRole, setGreetingRole] = useState(() => dashboardRoleLabel(user?.role));
@@ -2425,12 +2985,28 @@ function Dashboard({ data, hubs = null, user }) {
   // Gap 1 — readiness/coverage by vehicle type; Gap 2 — preventive watch.
   const readiness = data.readiness ?? [];
   const noCoverage = readiness.filter((r) => r.no_coverage);
+  const fleetSummary = data.fleet_readiness_summary ?? null;
   const preventiveWatch = data.preventive_watch ?? [];
   // Gap A — readiness watch; Gap B — fragility; Gap C — failure patterns.
   const readinessWatch = data.readiness_watch ?? [];
   const fragility = data.fragility ?? [];
   const failurePatterns = data.failure_patterns ?? [];
   const READINESS_STATE_LABEL = { stale: 'Check stale', not_ready: 'Not ready', unchecked: 'Never checked' };
+  // These panels pair up side-by-side to stop the dashboard being one long
+  // column of full-width sections — but if the paired panel has nothing to
+  // show, its sibling should reclaim the full row instead of leaving a gap.
+  const showRiskWatch = fragility.length > 0 || readinessWatch.length > 0;
+  const showBreakingMost = hasRole(user, 'Admin') && failurePatterns.length > 0;
+
+  // Action Queue — everything currently waiting on an Admin decision,
+  // ranked and pulled from across the whole system, so the dashboard
+  // answers "what do I do right now" instead of just "what's currently
+  // true". Admin-only (the backend already returns [] for other roles).
+  const actionQueue = data.action_queue ?? [];
+
+  // My Scheduled Work — a mechanic's own assigned schedules, surfaced right
+  // on their dashboard instead of only living in the shared schedule table.
+  const myScheduledWork = data.my_scheduled_work ?? [];
 
   const fleetStatus = [
     { label: 'Available', value: availableVehicles, color: '#36c66d' },
@@ -2482,6 +3058,58 @@ function Dashboard({ data, hubs = null, user }) {
         </div>
       </div>
 
+      {/* Above even the readiness hero number — this is the one thing the
+          dashboard should answer first: what needs me right now. */}
+      {hasRole(user, 'Admin') && (
+        <section className="panel full-span action-queue-panel">
+          <div className="panel-header-bar">
+            <h3><Icon name="alert" size={16} /> Action Queue</h3>
+            {actionQueue.length > 0 && <span className="area-chart-tag">{actionQueue.length} need{actionQueue.length === 1 ? 's' : ''} you</span>}
+          </div>
+          {actionQueue.length === 0 ? (
+            <p className="action-queue-clear"><Icon name="checkCircle" size={16} /> All clear — nothing needs your attention right now.</p>
+          ) : (
+            <div className="action-queue-list">
+              {actionQueue.map((item) => (
+                <ActionQueueRow
+                  key={`${item.type}-${item.id}`}
+                  item={item}
+                  basePath={basePath}
+                  onNavigate={onNavigate}
+                  onGoToSchedules={onGoToSchedules}
+                />
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* Counterpart to the Admin's Action Queue above: not "what needs a
+          decision" but "what's assigned to me". Only shows for Maintenance
+          Personnel — an Admin viewing their own dashboard already has the
+          Action Queue for this. */}
+      {hasRole(user, 'Maintenance Personnel') && (
+        <section className="panel full-span action-queue-panel">
+          <div className="panel-header-bar">
+            <h3><Icon name="wrench" size={16} /> My Scheduled Work</h3>
+            {myScheduledWork.length > 0 && <span className="area-chart-tag">{myScheduledWork.length} assigned to you</span>}
+          </div>
+          {myScheduledWork.length === 0 ? (
+            <p className="action-queue-clear"><Icon name="checkCircle" size={16} /> Nothing scheduled for you right now.</p>
+          ) : (
+            <div className="action-queue-list">
+              {myScheduledWork.map((item) => (
+                <MyScheduledWorkRow
+                  key={item.schedule_id}
+                  item={item}
+                  onClick={onGoToSchedules}
+                />
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
       <section className="metric-grid">
         {data.metrics.map((metric) => {
           const isReportedIssueAlert = metric.label === 'Reported Issues' && reportedIssues > 0;
@@ -2510,6 +3138,17 @@ function Dashboard({ data, hubs = null, user }) {
             <h3><Icon name="checkCircle" size={16} /> Emergency Readiness</h3>
             <span className="area-chart-tag">Coverage by vehicle type</span>
           </div>
+          {/* #12 — one fleet-wide headline before the per-type breakdown. */}
+          {fleetSummary && (
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, margin: '0 0 14px', padding: '12px 16px', borderRadius: 10, background: fleetSummary.coverage_alert ? '#fff5f5' : '#f0fdf4', border: `1px solid ${fleetSummary.coverage_alert ? '#fecaca' : '#bbf7d0'}` }}>
+              <span style={{ fontSize: '1.8rem', fontWeight: 800, color: fleetSummary.coverage_alert ? '#dc2626' : '#16a34a' }}>
+                {fleetSummary.verified_ready}
+              </span>
+              <span style={{ fontSize: '0.95rem', color: '#334155', fontWeight: 600 }}>
+                of {fleetSummary.operational_total} emergency vehicles verified ready to respond right now
+              </span>
+            </div>
+          )}
           {noCoverage.length > 0 && (
             <div style={{ margin: '0 0 14px', padding: '12px 16px', borderRadius: 10, background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b', display: 'flex', alignItems: 'center', gap: 10, fontWeight: 600 }}>
               <Icon name="alert" size={18} />
@@ -2519,6 +3158,17 @@ function Dashboard({ data, hubs = null, user }) {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 12 }}>
             {readiness.map((r) => {
               const ok = !r.no_coverage;
+              const verifiedReady = typeof r.verified_ready === 'number' ? r.verified_ready : r.ready;
+              const unverified = r.ready - verifiedReady;
+              // The hero number answers "how many can we deploy RIGHT NOW with
+              // confidence" — that's verified-ready, not merely Available. A
+              // vehicle can be Available yet never (or no longer) proven ready.
+              const heroColor = verifiedReady === 0 ? '#dc2626' : (verifiedReady < r.ready ? '#b45309' : '#16a34a');
+              const breakdown = [
+                `${r.ready} available`,
+                unverified > 0 ? `${unverified} unverified` : null,
+                r.down > 0 ? `${r.down} down` : null,
+              ].filter(Boolean).join(' · ');
               return (
                 <div key={r.category} style={{ padding: 14, borderRadius: 12, border: `1px solid ${r.no_coverage ? '#fecaca' : '#e2e8f0'}`, background: r.no_coverage ? '#fff5f5' : '#fff' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
@@ -2527,16 +3177,11 @@ function Dashboard({ data, hubs = null, user }) {
                       <Icon name={ok ? 'checkCircle' : 'alert'} size={11} /> {ok ? 'Covered' : 'No coverage'}
                     </span>
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-                    <span style={{ fontSize: '1.6rem', fontWeight: 800, color: ok ? '#16a34a' : '#dc2626' }}>{r.ready}</span>
-                    <span style={{ fontSize: '0.9rem', color: '#64748b' }}>of {r.total} available</span>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }} title="Passed a recent pre-deployment readiness check.">
+                    <span style={{ fontSize: '1.6rem', fontWeight: 800, color: heroColor }}>{verifiedReady}</span>
+                    <span style={{ fontSize: '0.9rem', color: '#64748b' }}>of {r.total} verified ready</span>
                   </div>
-                  {typeof r.verified_ready === 'number' && (
-                    <span style={{ fontSize: '0.76rem', color: r.verified_ready < r.ready ? '#b45309' : '#16a34a' }} title="Passed a recent pre-deployment readiness check.">
-                      {r.verified_ready} verified ready to respond{r.verified_ready < r.ready ? ` · ${r.ready - r.verified_ready} unverified` : ''}
-                    </span>
-                  )}
-                  {r.down > 0 && <span style={{ display: 'block', fontSize: '0.76rem', color: '#b45309' }}>{r.down} down</span>}
+                  <span style={{ display: 'block', marginTop: 2, fontSize: '0.76rem', color: '#64748b' }}>{breakdown}</span>
                 </div>
               );
             })}
@@ -2544,12 +3189,12 @@ function Dashboard({ data, hubs = null, user }) {
         </section>
       )}
 
-      {(fragility.length > 0 || readinessWatch.length > 0) && (
-        <section className="panel full-span">
+      {showRiskWatch && (
+        <section className="panel dashboard-half" style={{ gridColumn: 'span 6' }}>
           <div className="panel-header-bar">
             <h3><Icon name="alert" size={16} /> Risk &amp; Readiness Watch</h3>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 16 }}>
             {fragility.length > 0 && (
               <div>
                 <h4 style={{ margin: '0 0 8px', fontSize: '0.85rem', color: '#334155' }}>Single points of failure</h4>
@@ -2578,7 +3223,7 @@ function Dashboard({ data, hubs = null, user }) {
         </section>
       )}
 
-      <section className="panel full-span">
+      <section className="panel dashboard-half" style={{ gridColumn: showRiskWatch ? 'span 6' : 'span 12' }}>
         <div className="panel-header-bar">
           <h3>Availability Forecast</h3>
           <span className="area-chart-tag">{forecast.available_now} ready now</span>
@@ -2635,8 +3280,8 @@ function Dashboard({ data, hubs = null, user }) {
         )}
       </section>
 
-      {hasRole(user, 'Admin') && failurePatterns.length > 0 && (
-        <section className="panel full-span">
+      {showBreakingMost && (
+        <section className="panel dashboard-half" style={{ gridColumn: 'span 6' }}>
           <div className="panel-header-bar">
             <h3><Icon name="wrench" size={16} /> What's Breaking Most</h3>
             <span className="area-chart-tag">Fleet-wide · last 12 months</span>
@@ -2645,6 +3290,14 @@ function Dashboard({ data, hubs = null, user }) {
           <p className="muted" style={{ marginTop: 8, fontSize: '0.82rem' }}>A single common failure across many vehicles often points to a systemic cause (rough roads, a bad parts batch) worth fixing at the root.</p>
         </section>
       )}
+
+      <section className="panel dashboard-half area-chart-panel" style={{ gridColumn: showBreakingMost ? 'span 6' : 'span 12' }}>
+        <div className="panel-header-bar">
+          <h3>Fleet Activity by Day</h3>
+          <span className="area-chart-tag">Last 14 days</span>
+        </div>
+        <ActivityChart rows={data.activity_by_day ?? []} />
+      </section>
 
       <section className="dashboard-graphs full-span" aria-label="Dashboard graphs">
         <GraphPanel title="Fleet Status" stat={`${availabilityRate}% available`}>
@@ -2671,14 +3324,6 @@ function Dashboard({ data, hubs = null, user }) {
             <strong>{maintenanceExpenses}</strong>
           </div>
         </GraphPanel>
-      </section>
-
-      <section className="panel full-span area-chart-panel">
-        <div className="panel-header-bar">
-          <h3>Fleet Activity by Day</h3>
-          <span className="area-chart-tag">Last 14 days</span>
-        </div>
-        <ActivityChart rows={data.activity_by_day ?? []} />
       </section>
 
       {hasRole(user, 'Admin') && (
@@ -3208,7 +3853,7 @@ function FormModal({ open, title, onClose, children, confirmClose = false, wide 
           <button className="modal-close-btn" onClick={requestClose} type="button" aria-label="Close"><Icon name="close" size={18} /></button>
         </div>
         {notice && notice.type === 'error' && (
-          <div className="notice error" style={{ margin: '12px 28px 0', display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <div className="notice error" style={{ margin: '12px 28px 0', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', textAlign: 'center', flexDirection: 'column' }}>
             <span style={{ display: 'inline-flex', flexShrink: 0 }}><Icon name="alert" size={16} /></span>
             <span>{notice.text}</span>
           </div>
@@ -3284,14 +3929,13 @@ function UserInfoModal({ user, onClose }) {
 // Full-page user profile — clicking a user anywhere (any table, any role) opens
 // this instead of a popup. Uses the loaded users list when available, otherwise
 // the user object carried on navigation state (so non-admins can view it too).
-function UserViewPage({ userId, users = [], role, onBack, onEdit }) {
+function UserViewPage({ userId, users = [], role, onEdit }) {
   const location = useLocation();
   const user = (users ?? []).find((u) => String(u.id) === String(userId)) || location.state?.user || null;
 
   if (!user) {
     return (
       <ModulePanel description="This user account could not be found.">
-        <button className="ghost-button btn-exit-action" type="button" onClick={onBack}><Icon name="arrowLeft" size={18} /></button>
       </ModulePanel>
     );
   }
@@ -3302,7 +3946,6 @@ function UserViewPage({ userId, users = [], role, onBack, onEdit }) {
   return (
     <ModulePanel description="User account profile and contact details.">
       <div className="vehicle-profile-header">
-        <button className="ghost-button btn-exit-action" type="button" onClick={onBack}><Icon name="arrowLeft" size={18} /></button>
         <div className="vehicle-profile-identity">
           <span className="ticket-detail-id">User ID #{user.id}</span>
           <h3 className="ticket-detail-title">{user.name}</h3>
@@ -3349,8 +3992,38 @@ const ISSUE_STATUS_COLORS = {
 
 // Full-page issue detail — mirrors the vehicle/ticket profile pages so every
 // "View" action opens its own page rather than a modal, consistently for all roles.
-function IssueViewPage({ issue, allIssues = [], allHubs = [], onBack }) {
+// Fetches by ID rather than looking the issue up in an already-loaded list —
+// a pure Custodian's own list is filtered to "mine", but a "View" link from
+// the duplicate-issue warning is specifically for a report FILED BY SOMEONE
+// ELSE on the same vehicle, which that filtered list would never contain.
+function IssueViewPage({ issueId, allIssues = [], allHubs = [], role, onCreateTicketFromIssue, onSendToExternalShop }) {
   const actions = useContext(RowActionsContext);
+  const [issue, setIssue] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [notFound, setNotFound] = useState(false);
+  // Recurrence used to only ever surface AFTER a ticket was created — one
+  // step too late to change the decision. Checking it here means Admin sees
+  // "this fault came back a 3rd time" while still deciding whether to open
+  // one, not in a notification once it already exists.
+  const [recurrence, setRecurrence] = useState(null);
+
+  useEffect(() => {
+    setLoading(true);
+    api.get(`/issues/${issueId}`)
+      .then((response) => { setIssue(response.data); setNotFound(false); })
+      .catch(() => setNotFound(true))
+      .finally(() => setLoading(false));
+  }, [issueId]);
+
+  useEffect(() => {
+    if (!issue?.vehicle_id) { setRecurrence(null); return; }
+    let cancelled = false;
+    api.get(`/vehicles/${issue.vehicle_id}/recurrence`, { params: { fault_category: issue.issue_type, title: issue.issue_type } })
+      .then((r) => { if (!cancelled) setRecurrence(r.data); })
+      .catch(() => { if (!cancelled) setRecurrence(null); });
+    return () => { cancelled = true; };
+  }, [issue?.vehicle_id, issue?.issue_type]);
+
   const hub = allHubs.find((h) => h.name === issue?.vehicle?.current_location);
 
   // This vehicle's full issue-report history, broken down by status — reuses
@@ -3366,10 +4039,11 @@ function IssueViewPage({ issue, allIssues = [], allHubs = [], onBack }) {
   }, [allIssues, issue?.vehicle_id]);
   const historyTotal = historySegments.reduce((sum, s) => sum + s.value, 0);
 
-  if (!issue) {
+  if (loading) return <ModuleLoader label="Loading issue" />;
+
+  if (notFound || !issue) {
     return (
       <ModulePanel description="This issue report could not be found — it may have been deleted.">
-        <button className="ghost-button btn-exit-action" type="button" onClick={onBack}><Icon name="arrowLeft" size={18} /></button>
       </ModulePanel>
     );
   }
@@ -3377,7 +4051,6 @@ function IssueViewPage({ issue, allIssues = [], allHubs = [], onBack }) {
   return (
     <ModulePanel description="Full details of this reported vehicle issue.">
       <div className="vehicle-profile-header">
-        <button className="ghost-button btn-exit-action" type="button" onClick={onBack} aria-label="Back"><Icon name="arrowLeft" size={18} /></button>
         <div className="vehicle-profile-identity">
           <span className="ticket-detail-id">Issue #{issue.issue_report_id}</span>
           <h3 className="ticket-detail-title">{issue.issue_type}</h3>
@@ -3386,7 +4059,50 @@ function IssueViewPage({ issue, allIssues = [], allHubs = [], onBack }) {
             <StatusBadge value={issue.status} />
           </div>
         </div>
+        {/* Lets the Admin act on this issue right here instead of going back
+            to the Issue Reports list just to click the same button there. */}
+        {role === 'Admin' && (
+          <div style={{ display: 'flex', gap: 8 }}>
+            {onCreateTicketFromIssue && (
+              <button className="btn-confirm-action" type="button" onClick={() => onCreateTicketFromIssue(issue)}><Icon name="ticket" size={14} /> Create Ticket</button>
+            )}
+            {/* Receipt-backed fast close (#5): for a problem that's going to
+                (or already did) get fixed by an outside shop instead of
+                in-house — jumps to Add Maintenance Record with this issue
+                already linked. */}
+            {onSendToExternalShop && (
+              <button
+                className="btn-edit-action"
+                type="button"
+                onClick={() => onSendToExternalShop({
+                  vehicle_id: issue.vehicle_id,
+                  issue_report_id: issue.issue_report_id,
+                  problem_reason: `${issue.issue_type}: ${issue.issue_description}`,
+                })}
+              >
+                <Icon name="wrench" size={14} /> Send to External Shop
+              </button>
+            )}
+          </div>
+        )}
       </div>
+
+      {recurrence && recurrence.count > 0 && (
+        <div className="ticket-alert-banner formaint" style={{ marginBottom: 16 }}>
+          <Icon name="alert" size={16} />
+          <span>
+            {/* Same ordinal-suffix pattern as the ticket detail page's own
+                "Recurring — Nth time" badge — recurrence.count is the count
+                of PRIOR occurrences, same semantics as ticket.recurrence_count
+                there, so it indexes the same way. */}
+            <strong>This is the {recurrence.count + 1}{['st', 'nd', 'rd'][recurrence.count] ?? 'th'} time</strong> "{issue.issue_type}" has come up on this vehicle in the last 90 days
+            {recurrence.last_occurred && (
+              <> — last fixed via {recurrence.last_type === 'record' ? 'Maintenance Record' : 'Ticket'} #{recurrence.last_id} on {formatDate(recurrence.last_occurred)}</>
+            )}
+            . Consider a deeper fix or a decommission review rather than another routine repair.
+          </span>
+        </div>
+      )}
 
       <div className="issue-view-dash">
         <div className="issue-view-main">
@@ -3413,6 +4129,9 @@ function IssueViewPage({ issue, allIssues = [], allHubs = [], onBack }) {
                 <div>
                   <span className="veh-remarks-label">Reported By</span>
                   <div style={{ marginTop: 4 }}><UserAvatarName user={issue.reported_by} /></div>
+                  {issue.reported_on_behalf_of && (
+                    <div className="muted" style={{ marginTop: 2, fontSize: '0.85rem' }}>on behalf of {issue.reported_on_behalf_of}</div>
+                  )}
                 </div>
               </div>
 
@@ -3619,7 +4338,6 @@ function ProfilePage({ user, onBack, setNotice }) {
   return (
     <ModulePanel description="Your account details and password.">
       <div className="vehicle-profile-header">
-        <button className="ghost-button btn-exit-action" type="button" onClick={onBack}><Icon name="arrowLeft" size={18} /></button>
         <div className="vehicle-profile-identity">
           <span className="ticket-detail-id">My Profile</span>
           <h3 className="ticket-detail-title">{user.name}</h3>
@@ -3706,14 +4424,19 @@ function SelectOrOtherField({ field, value, onChange }) {
         <option value={SELECT_OR_OTHER_SENTINEL}>{field.otherLabel ?? 'Other (specify)'}</option>
       </select>
       {otherMode && (
-        <input
-          type="text"
-          placeholder={field.otherPlaceholder ?? 'Specify'}
-          required={field.required}
-          value={value ?? ''}
-          onChange={(e) => onChange(e.target.value)}
-          style={{ marginTop: 8 }}
-        />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+          <input
+            type={field.otherType ?? 'text'}
+            min={field.otherMin}
+            max={field.otherMax}
+            placeholder={field.otherPlaceholder ?? 'Specify'}
+            required={field.required}
+            value={value ?? ''}
+            onChange={(e) => onChange(e.target.value)}
+            style={{ flex: 1 }}
+          />
+          {field.otherSuffix && <span className="muted" style={{ fontSize: '0.85rem', whiteSpace: 'nowrap' }}>{field.otherSuffix}</span>}
+        </div>
       )}
     </>
   );
@@ -3721,6 +4444,7 @@ function SelectOrOtherField({ field, value, onChange }) {
 
 function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, onSubmit, submitLabel, title, onValuesChange }) {
   const [values, setValues] = useState(() => valuesFromFields(fields, initialValues));
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     setValues(valuesFromFields(fields, initialValues));
@@ -3729,7 +4453,10 @@ function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, onSubmit, subm
   const handleChange = (event) => {
     const { name, type, files, value } = event.target;
     const field = fields.find((f) => f.name === name);
-    const nextValue = field?.uppercase ? value.toUpperCase() : value;
+    let nextValue = field?.uppercase ? value.toUpperCase() : value;
+    if (field?.type === 'tel' && name === 'phone') {
+      nextValue = value.replace(/[^0-9]/g, '').slice(0, 10);
+    }
     const next = { ...values, [name]: type === 'file' ? files[0] : nextValue };
     setValues(next);
     onValuesChange?.(next);
@@ -3737,11 +4464,25 @@ function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, onSubmit, subm
 
   const handleSubmit = async (event) => {
     event.preventDefault();
-    await onSubmit(values);
+    setSubmitting(true);
+    try {
+      await onSubmit(values);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
     <form className="smart-form" onSubmit={handleSubmit}>
+      {submitting && createPortal(
+        <div className="loading-overlay">
+          <div className="loading-overlay-card">
+            <Icon name="gear" size={34} className="loading-overlay-gear" filled />
+            <span>Loading…</span>
+          </div>
+        </div>,
+        document.body
+      )}
       <h3>{title}</h3>
       {fields.map((field) => {
         const quantity = field.type === 'quantity' ? splitQuantityValue(values[field.name], field.units) : null;
@@ -3854,6 +4595,7 @@ function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, onSubmit, subm
               src={URL.createObjectURL(values[field.name])}
             />
           ) : null}
+          {field.hint ? <small className="field-hint">{field.hint}</small> : null}
         </label>
         );
       })}
@@ -4003,7 +4745,7 @@ function userFields(isEditing) {
   return [
     { label: 'Full Name', name: 'name', required: true, type: 'text' },
     { label: 'Email', name: 'email', required: true, type: 'text' },
-    { label: 'Phone', name: 'phone', type: 'text' },
+    { label: 'Phone', name: 'phone', type: 'tel', pattern: '[0-9]{10}', placeholder: '09XXXXXXXXX', title: 'Phone must be exactly 10 digits' },
     { label: 'Address', name: 'address', type: 'text' },
     { label: 'Roles (a person can hold more than one — the first is their primary)', name: 'roles', options: ['Admin', 'Custodian', 'Maintenance Personnel'], required: true, type: 'checkboxes' },
     { label: 'Profile Photo', name: 'photo', accept: 'image/*', type: 'file' },
@@ -4101,7 +4843,6 @@ function NewVehiclePage({ onBack, lookups, allHubs, onSubmit }) {
   return (
     <ModulePanel description="Register a new vehicle in the fleet — complete all three steps to add it.">
       <div className="vehicle-profile-header">
-        <button className="ghost-button btn-exit-action" type="button" onClick={onBack}><Icon name="arrowLeft" size={18} /></button>
         <h3 className="ticket-detail-title" style={{ margin: 0 }}>Add Vehicle — Step {step} of 3</h3>
       </div>
       <div className="wizard-steps" role="list" aria-label="Add vehicle steps">
@@ -4159,14 +4900,59 @@ function formSummaryValue(field, raw) {
   return String(raw);
 }
 
+// #7 — non-blocking "this vehicle already has open items" warning, shown on the
+// Report Issue form (and reusable for tickets). Lets a second reporter notice a
+// duplicate before opening another record. Never blocks — two genuinely
+// different problems can be open at once.
+function OpenItemsWarning({ kind, rows, basePath }) {
+  return (
+    <div className="info-callout" style={{ marginBottom: 16, background: 'rgba(245, 158, 11, 0.1)', borderColor: '#f59e0b' }}>
+      <span style={{ marginRight: 8, color: '#b45309', display: 'inline-flex', flexShrink: 0 }}><Icon name="alert" size={16} /></span>
+      <div style={{ flex: 1 }}>
+        <p className="module-description" style={{ color: '#b45309', margin: '0 0 6px', fontWeight: 600 }}>
+          This vehicle already has {rows.length} open {kind}{rows.length !== 1 ? 's' : ''} — check it isn&apos;t the same problem before adding another:
+        </p>
+        <ul style={{ margin: 0, paddingLeft: 18 }}>
+          {rows.map((r) => {
+            const id = r.issue_report_id ?? r.ticket_id;
+            const label = r.issue_report_id
+              ? `#${r.issue_report_id} ${r.issue_type} (${r.severity_level}) — ${r.status}`
+              : `#${r.ticket_id} ${r.ticket_title} — ${r.status}`;
+            const href = basePath ? `${basePath}/${r.issue_report_id ? 'issues' : 'tickets'}/${id}` : null;
+            return (
+              <li key={id} style={{ fontSize: '0.85rem', color: '#92400e', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ flex: 1 }}>{label}</span>
+                {/* Opens in a new tab — same reasoning as the ticket duplicate
+                    warning: whoever's filling this form shouldn't lose their
+                    in-progress entry just to go check an existing record. */}
+                {href && (
+                  <a
+                    href={href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ fontSize: '0.8rem', fontWeight: 600, color: '#b45309', textDecoration: 'underline', whiteSpace: 'nowrap' }}
+                  >
+                    View <Icon name="link" size={11} style={{ verticalAlign: 'middle' }} />
+                  </a>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
 // Generic single-form page — used for every simple create/edit flow (Vehicle
 // Types, Maintenance Schedules, Condition Checks, Issue Reports) that doesn't
 // need its own multi-tab profile like vehicles/tickets do.
 // When `contextVehicles` is provided, the page renders Realcore-style: the form
 // fields sit in a card on the right, and the left side live-previews the
 // selected vehicle (photo, info, location map) as the user picks one.
-function FormPage({ title, description, onBack, fields, initialValues, onSubmit, submitLabel, contextVehicles, hubs }) {
+function FormPage({ description, onBack, fields, initialValues, onSubmit, submitLabel, contextVehicles, hubs, warnEndpoint, warnRender }) {
   const [liveValues, setLiveValues] = useState(initialValues ?? EMPTY_OBJ);
+  const [warnRows, setWarnRows] = useState([]);
 
   useEffect(() => {
     setLiveValues(initialValues ?? EMPTY_OBJ);
@@ -4178,24 +4964,39 @@ function FormPage({ title, description, onBack, fields, initialValues, onSubmit,
     : null;
   const hub = vehicle ? (hubs ?? []).find((h) => h.name === vehicle.current_location) : null;
 
+  // #7 — when a warn endpoint is provided (e.g. open issues on this vehicle),
+  // fetch it as the vehicle is picked so the form can show a duplicate warning.
+  const warnVehicleId = liveValues?.vehicle_id ?? null;
+  useEffect(() => {
+    if (!warnEndpoint || !warnVehicleId) { setWarnRows([]); return; }
+    let cancelled = false;
+    api.get(warnEndpoint(warnVehicleId))
+      .then((r) => { if (!cancelled) setWarnRows(Array.isArray(r.data) ? r.data : []); })
+      .catch(() => { if (!cancelled) setWarnRows([]); });
+    return () => { cancelled = true; };
+  }, [warnEndpoint, warnVehicleId]);
+
+  // `fields` may be a function of the live values so a form can grow extra
+  // fields in response to what the user picked (e.g. "+ Add New Issue").
+  const resolvedFields = typeof fields === 'function' ? fields(liveValues) : fields;
+
   const form = (
-    <SmartForm
-      fields={fields}
-      initialValues={initialValues ?? EMPTY_OBJ}
-      onCancel={onBack}
-      onSubmit={onSubmit}
-      onValuesChange={hasContext ? setLiveValues : undefined}
-      submitLabel={submitLabel}
-      title=""
-    />
+    <>
+      {warnRender && warnRows.length > 0 ? warnRender(warnRows) : null}
+      <SmartForm
+        fields={resolvedFields}
+        initialValues={initialValues ?? EMPTY_OBJ}
+        onCancel={onBack}
+        onSubmit={onSubmit}
+        onValuesChange={setLiveValues}
+        submitLabel={submitLabel}
+        title=""
+      />
+    </>
   );
 
   return (
     <ModulePanel description={description}>
-      <div className="vehicle-profile-header">
-        <button className="ghost-button btn-exit-action" type="button" onClick={onBack} aria-label="Back"><Icon name="arrowLeft" size={18} /></button>
-        <h3 className="ticket-detail-title" style={{ margin: 0 }}>{title}</h3>
-      </div>
       {hasContext ? (
         <div className="form-context-layout">
           <div className="form-context-side">
@@ -4234,7 +5035,7 @@ function FormPage({ title, description, onBack, fields, initialValues, onSubmit,
             <section className="veh-card">
               <div className="veh-card-head"><Icon name="clipboard" size={16} /><h4>Entry Summary</h4></div>
               <dl className="veh-kv">
-                {fields.filter((f) => f.name !== 'vehicle_id' && f.type !== 'file').map((f) => {
+                {resolvedFields.filter((f) => f.name !== 'vehicle_id' && f.type !== 'file').map((f) => {
                   const val = formSummaryValue(f, liveValues?.[f.name]);
                   return (
                     <div key={f.name}>
@@ -4267,6 +5068,9 @@ function vehicleFields(lookups, allHubs = [], domain = 'Land') {
     { label: 'Model', name: 'model', required: true, type: 'text' },
     { label: 'Year Model', name: 'year_model', required: true, type: 'number' },
     { label: 'Capacity', name: 'capacity', required: true, type: 'quantity', units: capacityUnits(domain) },
+    // #10 — optional; without it, lifetime-cost-vs-value (decommission signal)
+    // simply has nothing to compare against and is skipped for this vehicle.
+    { label: 'Acquisition Cost (optional)', name: 'acquisition_cost', type: 'number', placeholder: 'e.g. 850000' },
     { label: 'Vehicle Color', name: 'vehicle_color', required: true, type: 'text' },
     ...vehicleDomainFields(domain),
     { label: 'Current Location', name: 'current_location', options: hubOptions, required: true, type: 'select' },
@@ -4304,6 +5108,7 @@ function issueFields(lookups, editTarget, role) {
       { label: 'Issue Type', name: 'issue_type', options: lookups.issue_types, required: true, type: 'select' },
       { label: 'Issue Description', name: 'issue_description', required: true, type: 'textarea' },
       { label: 'Severity Level', name: 'severity_level', options: lookups.severity_levels, required: true, type: 'select' },
+      { label: 'Reported On Behalf Of (driver, optional)', name: 'reported_on_behalf_of', placeholder: 'e.g. Driver Mang Tonio', type: 'text' },
       { label: 'Attachment / Photo', name: 'photo', accept: 'image/*', type: 'file' },
       { label: 'Remarks', name: 'remarks', type: 'textarea' },
     ];
@@ -4321,12 +5126,13 @@ function issueFields(lookups, editTarget, role) {
     { label: 'Issue Type', name: 'issue_type', options: lookups.issue_types, required: true, type: 'select' },
     { label: 'Issue Description', name: 'issue_description', required: true, type: 'textarea' },
     { label: 'Severity Level', name: 'severity_level', options: lookups.severity_levels, required: true, type: 'select' },
+    { label: 'Reported On Behalf Of (driver, optional)', name: 'reported_on_behalf_of', placeholder: 'e.g. Driver Mang Tonio', type: 'text' },
     { label: 'Attachment / Photo', name: 'photo', accept: 'image/*', type: 'file' },
     { label: 'Remarks', name: 'remarks', type: 'textarea' },
   ];
 }
 
-function maintenanceFields(lookups, role) {
+function maintenanceFields(lookups, role, liveValues = EMPTY_OBJ) {
   const fields = [
     { label: 'Vehicle', name: 'vehicle_id', options: vehicleOptions(lookups), required: true, type: 'select' },
     { label: 'Related Issue Report', name: 'issue_report_id', options: issueOptions(), type: 'select' },
@@ -4336,6 +5142,37 @@ function maintenanceFields(lookups, role) {
     { label: 'Date Completed', name: 'date_completed', type: 'date' },
     { label: 'Action Taken', name: 'action_taken', type: 'textarea' },
     { label: 'Parts / Materials Used', name: 'parts_used', type: 'textarea' },
+    // Vehicle cannibalization: a part removed from another vehicle rather
+    // than newly acquired. Optional — leave blank for a normally-sourced
+    // part. Setting it also logs the loss on the donor vehicle's own
+    // history (see FleetController::storeMaintenanceRecord) — it does NOT
+    // change that vehicle's status/condition; that stays a human call.
+    {
+      label: 'Source Vehicle (if part was cannibalized)',
+      name: 'source_vehicle_id',
+      options: vehicleOptions(lookups).filter((v) => String(v.value) !== String(liveValues?.vehicle_id)),
+      type: 'select',
+      hint: 'Only set this if the part came off another vehicle instead of being newly acquired.',
+    },
+    { label: 'Maintenance Cost (PHP)', name: 'maintenance_cost', type: 'number', min: 0, placeholder: 'e.g. 1500' },
+    // #5 — third-party shop repairs: who did it and any warranty window.
+    { label: 'External Repair?', name: 'is_external', type: 'select', options: [
+      { value: 0, label: 'No — in-house' },
+      { value: 1, label: 'Yes — third-party shop' },
+    ] },
+    // Proof-of-completion fast close: what actually justifies skipping
+    // Custodian verification is that something REAL is attached — a receipt
+    // for an external shop repair, or a photo of the finished work for an
+    // in-house fix (e.g. a roadside tire change). Either counts; a typed
+    // note does not, so this isn't gated behind "External?" — it works the
+    // same way for both cases.
+    {
+      label: 'Receipt / Proof of Completion',
+      name: 'receipt',
+      type: 'file',
+      accept: 'image/*,.pdf',
+      hint: 'Attach a receipt (external shop) or a photo of the completed repair (in-house), then set Progress Status to Completed — this closes the record immediately with no separate verification step.',
+    },
     { label: 'Progress Status', name: 'progress_status', options: lookups.maintenance_statuses, type: 'select' },
     { label: 'Remarks', name: 'remarks', type: 'textarea' },
   ];
@@ -4350,15 +5187,43 @@ function maintenanceFields(lookups, role) {
     });
   }
 
+  // #5 — vendor + warranty are only meaningful for an external repair, so
+  // those two stay conditional (the receipt/photo field above does not).
+  const external = liveValues?.is_external === 1 || liveValues?.is_external === '1' || liveValues?.is_external === true;
+  if (external) {
+    const costIndex = fields.findIndex((f) => f.name === 'is_external');
+    fields.splice(costIndex + 1, 0,
+      { label: 'External Shop / Vendor', name: 'external_vendor', type: 'text', placeholder: 'e.g. Bautista Auto Shop' },
+      { label: 'Warranty Until', name: 'warranty_until', type: 'date' },
+    );
+  }
+
+  // No matching Issue Report yet (e.g. a mechanic self-filing a field repair
+  // with nothing on file) — let them create one inline instead of leaving
+  // this module and losing their in-progress record.
+  if (liveValues?.issue_report_id === NEW_ISSUE_OPTION.value) {
+    const issueReportIndex = fields.findIndex((f) => f.name === 'issue_report_id');
+    fields.splice(issueReportIndex + 1, 0,
+      { label: 'New Issue Type', name: 'new_issue_type', options: lookups.issue_types, required: true, type: 'select' },
+      { label: 'New Issue Description', name: 'new_issue_description', required: true, type: 'textarea' },
+      { label: 'New Issue Severity', name: 'new_issue_severity', options: lookups.severity_levels, required: true, type: 'select' },
+    );
+  }
+
   return fields;
 
   function issueOptions() {
-    return (lookups.issue_reports ?? []).map((issue) => ({
-      value: issue.issue_report_id,
-      label: `#${issue.issue_report_id} ${issue.issue_type}`,
-    }));
+    return [
+      NEW_ISSUE_OPTION,
+      ...(lookups.issue_reports ?? []).map((issue) => ({
+        value: issue.issue_report_id,
+        label: `#${issue.issue_report_id} ${issue.issue_type}`,
+      })),
+    ];
   }
 }
+
+const NEW_ISSUE_OPTION = { value: '__new_issue__', label: '+ Add New Issue…' };
 
 function scheduleFields(lookups, allHubs = [], isEdit = false) {
   const hubOptions = allHubs.map((hub) => ({ value: hub.name, label: hub.name }));
@@ -4370,12 +5235,23 @@ function scheduleFields(lookups, allHubs = [], isEdit = false) {
     { label: 'Scheduled Time', name: 'scheduled_time', type: 'time' },
     // Recurring PM: completing this schedule auto-creates the next at the chosen
     // interval. Left blank = one-time (the default "Select" option).
-    { label: 'Repeat Every (optional)', name: 'recurrence_months', options: [
-      { value: 1, label: 'Month' },
-      { value: 3, label: 'Quarter (3 months)' },
-      { value: 6, label: '6 Months' },
-      { value: 12, label: 'Year' },
-    ], type: 'select' },
+    {
+      label: 'Repeat Every (optional)',
+      name: 'recurrence_months',
+      type: 'select-or-other',
+      options: [
+        { value: 1, label: 'Month' },
+        { value: 3, label: 'Quarter (3 months)' },
+        { value: 6, label: '6 Months' },
+        { value: 12, label: 'Year' },
+      ],
+      otherLabel: 'Custom (months)…',
+      otherPlaceholder: 'e.g. 4',
+      otherSuffix: 'months',
+      otherType: 'number',
+      otherMin: 1,
+      otherMax: 60,
+    },
     // A known hub, or "Other" for an outside repair shop not in that list.
     { label: 'Service Location', name: 'service_location', type: 'select-or-other', options: hubOptions, otherLabel: 'Other / External Shop', otherPlaceholder: 'e.g. Toyota Service Center' },
     // Full-width only on create: with Status hidden there, it's the trailing
@@ -4527,6 +5403,10 @@ const VEHICLE_STAT_CARDS = [
   { key: 'Available', label: 'Available', icon: 'checkCircle', bg: '#dcfce7', color: '#16a34a' },
   { key: 'Under Maintenance', label: 'Under Maintenance', icon: 'wrench', bg: '#fef3c7', color: '#d97706' },
   { key: 'Inactive', label: 'Inactive', icon: 'archive', bg: '#fee2e2', color: '#dc2626' },
+  // Distinct from "Available" — a vehicle can be Available yet never (or no
+  // longer) proven ready by an actual readiness check. See responseReadinessState().
+  { key: 'ReadyToRespond', label: 'Ready to Respond', icon: 'checkCircle', bg: '#dcfce7', color: '#16a34a' },
+  { key: 'NotReady', label: 'Not Ready to Respond', icon: 'alert', bg: '#fee2e2', color: '#dc2626' },
 ];
 
 const ISSUE_STAT_CARDS = [
@@ -4539,8 +5419,16 @@ const ISSUE_STAT_CARDS = [
 const SCHEDULE_STAT_CARDS = [
   { key: 'Scheduled', label: 'Scheduled', icon: 'calendar', bg: '#e0f2fe', color: '#0284c7' },
   { key: 'Completed', label: 'Completed', icon: 'checkCircle', bg: '#dcfce7', color: '#16a34a' },
+  // A schedule marked "Completed" only means the calendar task is done —
+  // its record might still be sitting unverified. Its own filter so those
+  // rows are findable instead of scrolling through fully-verified ones.
+  { key: 'AwaitingVerification', label: 'Awaiting Verification', icon: 'search', bg: '#fef9c3', color: '#854d0e' },
   { key: 'Cancelled', label: 'Cancelled', icon: 'close', bg: '#fee2e2', color: '#dc2626' },
 ];
+
+// Only shown to a Maintenance-Personnel-only viewer — "how many vehicles do
+// I still need to do", not the fleet-wide count everyone else also sees.
+const MY_ASSIGNED_SCHEDULE_CARD = { key: 'MyAssigned', label: 'Assigned to You', icon: 'wrench', bg: '#eff6ff', color: '#1d4ed8' };
 
 const CONDITION_STAT_CARDS = [
   { key: 'Good', label: 'Good', icon: 'checkCircle', bg: '#dcfce7', color: '#16a34a' },
@@ -4576,6 +5464,12 @@ const TICKET_WORK_ORDER_STAT_CARDS = [
 const TICKET_VERIFICATION_STAT_CARDS = [
   { key: 'Pending', label: 'Pending', icon: 'checkCircle', bg: '#fef3c7', color: '#d97706' },
   { key: 'Verified', label: 'Verified', icon: 'checkCircle', bg: '#dcfce7', color: '#16a34a' },
+];
+
+const WORK_TRACKER_STAT_CARDS = [
+  { key: 'attention', label: 'Needs Your Action', icon: 'alert', bg: '#fef3c7', color: '#d97706' },
+  { key: 'progress', label: 'In Progress', icon: 'wrench', bg: '#e0f2fe', color: '#0284c7' },
+  { key: 'completed', label: 'Completed', icon: 'checkCircle', bg: '#dcfce7', color: '#16a34a' },
 ];
 
 const USER_STAT_CARDS = [
@@ -4629,7 +5523,7 @@ function ModuleStatCards({ totalLabel = 'Total', total, cards, counts, activeFil
   );
 }
 
-function vehicleColumns(role, onEdit, deleteRecord, restoreRecord, filterStatus) {
+function vehicleColumns(role, onEdit, deleteRecord, restoreRecord, filterStatus, onViewTicket) {
   const columns = [
     { label: 'ID', render: (row) => row.vehicle_id },
     {
@@ -4646,8 +5540,44 @@ function vehicleColumns(role, onEdit, deleteRecord, restoreRecord, filterStatus)
     { label: 'Brand / Model', render: (row) => `${row.brand} ${row.model}` },
     { label: 'Capacity', render: (row) => row.capacity },
     { label: 'Location', render: (row) => row.current_location },
-    { label: 'Status', render: (row) => <StatusBadge value={row.status} /> },
+    {
+      label: 'Status',
+      render: (row) => (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
+          <StatusBadge value={row.status} />
+          {/* "Under Maintenance" alone doesn't say whether a mechanic is
+              still actively working on it, or the ticket has nothing left
+              to do and is just waiting on Admin to click Close — often
+              because the last item was deferred for an emergency and
+              nobody circled back. This makes that second case visible at a
+              glance instead of looking identical to genuine active repair. */}
+          {row.awaiting_closure && (
+            <span
+              className="status-badge awaiting-closure"
+              title="Every sub-issue on this vehicle's open ticket is resolved (done or deferred) — it's just waiting for Admin to click Close Ticket to return it to Available."
+            >
+              <Icon name="checkCircle" size={11} /> Awaiting Closure
+            </span>
+          )}
+        </div>
+      ),
+    },
     { label: 'Condition', render: (row) => <StatusBadge value={row.condition} /> },
+    {
+      label: 'Ready to Respond',
+      render: (row) => {
+        const badge = READINESS_BADGE[row.readiness_state];
+        if (!badge) return <span className="muted">—</span>;
+        return (
+          <span
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '0.74rem', fontWeight: 700, padding: '3px 9px', borderRadius: 999, background: badge.bg, color: badge.color, border: `1px solid ${badge.border}`, whiteSpace: 'nowrap' }}
+            title={row.readiness_last_checked ? `Last checked ${formatDate(row.readiness_last_checked)}` : undefined}
+          >
+            <Icon name={badge.icon} size={11} /> {badge.label}
+          </span>
+        );
+      },
+    },
   ];
 
   if (filterStatus === 'Inactive') {
@@ -4662,11 +5592,21 @@ function vehicleColumns(role, onEdit, deleteRecord, restoreRecord, filterStatus)
       label: 'Action',
       render: (row) => (
         <div className="row-actions">
-          <button className="btn-edit-action" onClick={() => onEdit(row)} type="button" title="Edit" aria-label="Edit"><Icon name="edit" size={14} /> Edit</button>
-          {(row.status === 'Inactive' || row.status === 'Decommissioned') ? (
-            <button className="btn-edit-action" onClick={() => restoreRecord(`/vehicles/${row.vehicle_id}/restore`, row.status === 'Decommissioned' ? 'Vehicle recommissioned.' : 'Vehicle restored.')} type="button" title={row.status === 'Decommissioned' ? 'Recommission' : 'Restore'} aria-label="Restore"><Icon name="undo" size={14} /> {row.status === 'Decommissioned' ? 'Recommission' : 'Restore'}</button>
+          {/* Jumps straight to whatever ticket is keeping this vehicle
+              unavailable — no need to go hunt for it in Maintenance Tickets.
+              A same-size invisible spacer holds this slot when absent, so
+              Edit/Delete always land in the same column across rows instead
+              of shifting depending on whether a row has this button. */}
+          {row.open_ticket_id && onViewTicket ? (
+            <button className="btn-view-action icon-btn" onClick={() => onViewTicket({ ticket_id: row.open_ticket_id })} type="button" title={`View Ticket #${row.open_ticket_id}`} aria-label={`View Ticket #${row.open_ticket_id}`}><Icon name="ticket" size={14} /></button>
           ) : (
-            <button className="btn-archive-action" onClick={() => deleteRecord(`/vehicles/${row.vehicle_id}`, 'Vehicle marked inactive.')} type="button" title="Deactivate (reversible)" aria-label="Deactivate"><Icon name="archive" size={14} /> Deactivate</button>
+            <span className="icon-btn-spacer" aria-hidden="true" />
+          )}
+          <button className="btn-edit-action icon-btn" onClick={() => onEdit(row)} type="button" title="Edit" aria-label="Edit"><Icon name="edit" size={14} /></button>
+          {(row.status === 'Inactive' || row.status === 'Decommissioned') ? (
+            <button className="btn-edit-action icon-btn" onClick={() => restoreRecord(`/vehicles/${row.vehicle_id}/restore`, row.status === 'Decommissioned' ? 'Vehicle recommissioned.' : 'Vehicle restored.')} type="button" title={row.status === 'Decommissioned' ? 'Recommission' : 'Restore'} aria-label="Restore"><Icon name="undo" size={14} /></button>
+          ) : (
+            <button className="btn-archive-action icon-btn" onClick={() => deleteRecord(`/vehicles/${row.vehicle_id}`, 'Vehicle marked inactive.')} type="button" title="Deactivate (reversible)" aria-label="Deactivate"><Icon name="archive" size={14} /></button>
           )}
         </div>
       ),
@@ -4682,14 +5622,14 @@ function categoryColumns(onEdit, deleteRecord) {
     { label: 'Vehicle Type', width: '18%', render: (row) => row.category_name },
     { label: 'Domain', width: '10%', render: (row) => <StatusBadge value={row.domain ?? 'Land'} /> },
     { label: 'Vehicles', width: '9%', render: (row) => row.vehicles_count ?? 0 },
-    { label: 'Description', width: '37%', render: (row) => row.description ?? '-' },
+    { label: 'Description', width: '49%', render: (row) => row.description ?? '-' },
     {
       label: 'Action',
-      width: '20%',
+      width: '8%',
       render: (row) => (
         <div className="row-actions">
-          <button className="btn-edit-action" onClick={() => onEdit(row)} type="button" title="Edit" aria-label="Edit"><Icon name="edit" size={14} /> Edit</button>
-          <button className="btn-delete-action" onClick={() => deleteRecord(`/categories/${row.category_id}`, 'Category deleted.')} type="button" title="Delete" aria-label="Delete"><Icon name="trash" size={14} /> Delete</button>
+          <button className="btn-edit-action icon-btn" onClick={() => onEdit(row)} type="button" title="Edit" aria-label="Edit"><Icon name="edit" size={14} /></button>
+          <button className="btn-delete-action icon-btn" onClick={() => deleteRecord(`/categories/${row.category_id}`, 'Category deleted.')} type="button" title="Delete" aria-label="Delete"><Icon name="trash" size={14} /></button>
         </div>
       ),
     },
@@ -4715,12 +5655,12 @@ function userColumns(onEdit, onToggleActive, currentUserId) {
       label: 'Action',
       render: (row) => (
         <div className="row-actions">
-          <button className="btn-edit-action" onClick={() => onEdit(row)} type="button" title="Edit" aria-label="Edit"><Icon name="edit" size={14} /> Edit</button>
+          <button className="btn-edit-action icon-btn" onClick={() => onEdit(row)} type="button" title="Edit" aria-label="Edit"><Icon name="edit" size={14} /></button>
           {row.id !== currentUserId && (
             row.is_active ? (
-              <button className="btn-archive-action" onClick={() => onToggleActive(row, false)} type="button" title="Deactivate (reversible)" aria-label="Deactivate"><Icon name="archive" size={14} /> Deactivate</button>
+              <button className="btn-archive-action icon-btn" onClick={() => onToggleActive(row, false)} type="button" title="Deactivate (reversible)" aria-label="Deactivate"><Icon name="archive" size={14} /></button>
             ) : (
-              <button className="btn-edit-action" onClick={() => onToggleActive(row, true)} type="button" title="Activate" aria-label="Activate"><Icon name="undo" size={14} /> Activate</button>
+              <button className="btn-edit-action icon-btn" onClick={() => onToggleActive(row, true)} type="button" title="Activate" aria-label="Activate"><Icon name="undo" size={14} /></button>
             )
           )}
         </div>
@@ -4746,7 +5686,7 @@ function locationColumns(currentUser, onViewOnMap) {
     label: 'View',
     render: (row) => (
       <button
-        className="btn-view-action"
+        className="btn-view-action icon-btn"
         onClick={() => onViewOnMap(row)}
         title="View vehicle on map"
         aria-label="View vehicle on map"
@@ -4756,14 +5696,13 @@ function locationColumns(currentUser, onViewOnMap) {
           <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" />
           <circle cx="12" cy="12" r="3" />
         </svg>
-        View
       </button>
     ),
   },
   ];
 }
 
-function conditionColumns(role, onEdit, deleteRecord) {
+function conditionColumns(role, onEdit, deleteRecord, onCreateTicketFromCondition, onSuggestScheduleFromCondition) {
   const columns = [
     { label: 'ID', render: (row) => row.condition_check_id },
     { label: 'Vehicle', render: (row) => <VehicleCell vehicle={row.vehicle} /> }, { label: 'Plate', render: (row) => row.vehicle?.plate_number ?? '-' },
@@ -4779,8 +5718,35 @@ function conditionColumns(role, onEdit, deleteRecord) {
       label: 'Action',
       render: (row) => (
         <div className="row-actions">
-          <button className="btn-edit-action" onClick={() => onEdit(row)} type="button" title="Edit" aria-label="Edit"><Icon name="edit" size={14} /> Edit</button>
-          <button className="btn-delete-action" onClick={() => deleteRecord(`/conditions/${row.condition_check_id}`, 'Condition check deleted.')} type="button" title="Delete" aria-label="Delete"><Icon name="trash" size={14} /> Delete</button>
+          {/* #2 — Admin can turn a problem-finding condition check into a
+              pre-diagnosed ticket in one click (the check WAS the inspection).
+              Reserved as its own slot (hidden, not removed) even when this
+              row doesn't qualify — otherwise Edit/Delete shift left on every
+              row that lacks it, and the column stops lining up. */}
+          {role === 'Admin' && onCreateTicketFromCondition && (
+            ['Needs Repair', 'Damaged'].includes(row.condition_result) ? (
+              <button className="btn-confirm-action icon-btn" onClick={() => onCreateTicketFromCondition(row)} type="button" title="Create Ticket" aria-label="Create Ticket"><Icon name="ticket" size={14} /></button>
+            ) : (
+              <button
+                className="btn-confirm-action icon-btn"
+                type="button"
+                tabIndex={-1}
+                aria-hidden="true"
+                disabled
+                style={{ visibility: 'hidden', pointerEvents: 'none' }}
+              >
+                <Icon name="ticket" size={14} />
+              </button>
+            )
+          )}
+          {/* Custodian or Admin can propose a preventive schedule from any
+              condition check — not gated to a bad result, since "let's plan
+              a checkup" is a reasonable call even on a Good vehicle. */}
+          {onSuggestScheduleFromCondition && (
+            <button className="btn-view-action icon-btn" onClick={() => onSuggestScheduleFromCondition(row)} type="button" title="Suggest Maintenance Schedule" aria-label="Suggest Maintenance Schedule"><Icon name="calendar" size={14} /></button>
+          )}
+          <button className="btn-edit-action icon-btn" onClick={() => onEdit(row)} type="button" title="Edit" aria-label="Edit"><Icon name="edit" size={14} /></button>
+          <button className="btn-delete-action icon-btn" onClick={() => deleteRecord(`/conditions/${row.condition_check_id}`, 'Condition check deleted.')} type="button" title="Delete" aria-label="Delete"><Icon name="trash" size={14} /></button>
         </div>
       ),
     });
@@ -4794,7 +5760,7 @@ function issueColumns(role, onEdit, onCreateTicketFromIssue, setUserInfoTarget, 
     { label: 'ID', width: '5%', render: (row) => row.issue_report_id },
     {
       label: 'Issue',
-      width: '19%',
+      width: '35%',
       render: (row) => (
         <div className="issue-cell">
           <div className="issue-cell-top">
@@ -4824,13 +5790,13 @@ function issueColumns(role, onEdit, onCreateTicketFromIssue, setUserInfoTarget, 
   if (['Admin', 'Maintenance Personnel'].includes(role)) {
     columns.push({
       label: 'Action',
-      width: '26%',
+      width: '10%',
       render: (row) => (
         <div className="row-actions" style={{ flexWrap: 'nowrap' }}>
-          <button className="btn-view-action" onClick={() => onView(row)} type="button" title="View" aria-label="View"><Icon name="eye" size={14} /> View</button>
-          <button className="btn-edit-action" onClick={() => onEdit(row)} type="button" title="Update" aria-label="Update"><Icon name="edit" size={14} /> Update</button>
+          <button className="btn-view-action icon-btn" onClick={() => onView(row)} type="button" title="View" aria-label="View"><Icon name="eye" size={14} /></button>
+          <button className="btn-edit-action icon-btn" onClick={() => onEdit(row)} type="button" title="Update" aria-label="Update"><Icon name="edit" size={14} /></button>
           {role === 'Admin' && (
-            <button className="btn-confirm-action" onClick={() => onCreateTicketFromIssue(row)} type="button" title="Create Ticket" aria-label="Create Ticket"><Icon name="ticket" size={14} /> Create Ticket</button>
+            <button className="btn-confirm-action icon-btn" onClick={() => onCreateTicketFromIssue(row)} type="button" title="Create Ticket" aria-label="Create Ticket"><Icon name="ticket" size={14} /></button>
           )}
         </div>
       ),
@@ -4840,14 +5806,14 @@ function issueColumns(role, onEdit, onCreateTicketFromIssue, setUserInfoTarget, 
   if (role === 'Custodian') {
     columns.push({
       label: 'Action',
-      width: '26%',
+      width: '10%',
       render: (row) => (
         <div className="row-actions" style={{ flexWrap: 'nowrap' }}>
-          <button className="btn-view-action" onClick={() => onView(row)} type="button" title="View" aria-label="View"><Icon name="eye" size={14} /> View</button>
+          <button className="btn-view-action icon-btn" onClick={() => onView(row)} type="button" title="View" aria-label="View"><Icon name="eye" size={14} /></button>
           {row.status === 'Pending' && (
             <>
-              <button className="btn-edit-action" onClick={() => onEdit(row)} type="button" title="Edit" aria-label="Edit"><Icon name="edit" size={14} /> Edit</button>
-              <button className="btn-delete-action" onClick={() => deleteRecord(`/issues/${row.issue_report_id}`, 'Issue deleted.')} type="button" title="Delete" aria-label="Delete"><Icon name="trash" size={14} /> Delete</button>
+              <button className="btn-edit-action icon-btn" onClick={() => onEdit(row)} type="button" title="Edit" aria-label="Edit"><Icon name="edit" size={14} /></button>
+              <button className="btn-delete-action icon-btn" onClick={() => deleteRecord(`/issues/${row.issue_report_id}`, 'Issue deleted.')} type="button" title="Delete" aria-label="Delete"><Icon name="trash" size={14} /></button>
             </>
           )}
         </div>
@@ -4858,13 +5824,38 @@ function issueColumns(role, onEdit, onCreateTicketFromIssue, setUserInfoTarget, 
   return columns;
 }
 
-function maintenanceColumns(role, setEditTarget, updateRecord) {
+function maintenanceColumns(role, setEditTarget, updateRecord, onViewRecord) {
   const columns = [
     { label: 'ID', width: '4%', render: (row) => row.maintenance_id },
     { label: 'Vehicle', width: '15%', render: (row) => <VehicleCell vehicle={row.vehicle} /> },
     { label: 'Plate', width: '8%', render: (row) => row.vehicle?.plate_number ?? '-' },
-    { label: 'Type', width: '9%', render: (row) => row.maintenance_type },
-    { label: 'Problem / Reason', width: '16%', className: 'cell-text', render: (row) => <ExpandableText text={row.problem_reason} /> },
+    {
+      label: 'Type',
+      width: '9%',
+      render: (row) => (
+        <div>
+          <div>{row.maintenance_type}</div>
+          {row.is_external && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
+              <span className="badge" style={{ fontSize: '0.68rem', background: '#f0f9ff', color: '#0369a1', border: '1px solid #bae6fd' }} title={row.external_vendor || 'External shop'}>External</span>
+              {row.receipt_url && (
+                <a href={resolvePhotoUrl(row.receipt_url)} target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.72rem', fontWeight: 600, color: '#0369a1', textDecoration: 'underline' }}>
+                  Receipt
+                </a>
+              )}
+            </div>
+          )}
+          {row.source_vehicle && (
+            <div style={{ marginTop: 2 }}>
+              <span className="badge" style={{ fontSize: '0.68rem', background: '#fff7ed', color: '#9a3412', border: '1px solid #fed7aa' }} title={`Part cannibalized from ${row.source_vehicle.vehicle_name}`}>
+                ⚙ From {row.source_vehicle.vehicle_name}
+              </span>
+            </div>
+          )}
+        </div>
+      ),
+    },
+    { label: 'Problem / Reason', width: '20%', className: 'cell-text', render: (row) => <ExpandableText text={row.problem_reason} /> },
     { label: 'Personnel', width: '10%', render: (row) => <UserAvatarName user={row.maintenance_personnel} /> },
     { label: 'Progress', width: '8%', render: (row) => <StatusBadge value={row.progress_status} /> },
     { label: 'Verification', width: '8%', render: (row) => row.verification_result ? <StatusBadge value={row.verification_result} /> : '-' },
@@ -4872,14 +5863,17 @@ function maintenanceColumns(role, setEditTarget, updateRecord) {
     { label: 'Date Completed', width: '5%', render: (row) => <DateBadge value={row.date_completed} /> },
     {
       label: 'Action',
-      width: '12%',
+      width: '8%',
       render: (row) => (
         <div className="row-actions" style={{ flexWrap: 'wrap' }}>
-          <button className="btn-edit-action" onClick={() => setEditTarget(row)} type="button" title="Edit" aria-label="Edit"><Icon name="edit" size={14} /> Edit</button>
+          {onViewRecord && (
+            <button className="btn-view-action icon-btn" onClick={() => onViewRecord(row)} type="button" title="View" aria-label="View"><Icon name="eye" size={14} /></button>
+          )}
+          <button className="btn-edit-action icon-btn" onClick={() => setEditTarget(row)} type="button" title="Edit" aria-label="Edit"><Icon name="edit" size={14} /></button>
           {role === 'Admin' && row.verification_result === 'Passed' && row.progress_status !== 'Completed' ? (
             <>
-              <button className="btn-confirm-action" onClick={() => updateRecord(`/maintenance-records/${row.maintenance_id}/confirm`, { confirmed: true }, 'Maintenance confirmed.')} type="button" title="Confirm" aria-label="Confirm"><Icon name="checkCircle" size={14} /> Confirm</button>
-              <button className="btn-reopen-action" onClick={() => updateRecord(`/maintenance-records/${row.maintenance_id}/confirm`, { confirmed: false }, 'Maintenance reopened.')} type="button" title="Reopen" aria-label="Reopen"><Icon name="undo" size={14} /> Reopen</button>
+              <button className="btn-confirm-action icon-btn" onClick={() => updateRecord(`/maintenance-records/${row.maintenance_id}/confirm`, { confirmed: true }, 'Maintenance confirmed.')} type="button" title="Confirm" aria-label="Confirm"><Icon name="checkCircle" size={14} /></button>
+              <button className="btn-reopen-action icon-btn" onClick={() => updateRecord(`/maintenance-records/${row.maintenance_id}/confirm`, { confirmed: false }, 'Maintenance reopened.')} type="button" title="Reopen" aria-label="Reopen"><Icon name="undo" size={14} /></button>
             </>
           ) : null}
         </div>
@@ -4888,6 +5882,319 @@ function maintenanceColumns(role, setEditTarget, updateRecord) {
   ];
 
   return columns;
+}
+
+const MAINTENANCE_PROGRESS_STAGES = ['Assigned', 'Under Repair', 'For Verification', 'Completed'];
+
+// Where a record sits on the stage trail. Shared by the detail page's stepper
+// and the card view's progress bar so the two can never disagree. "On Hold -
+// Awaiting Parts" isn't its own stage — it's a stalled 'Under Repair'.
+function maintenanceStageIndex(record) {
+  if (record.progress_status === 'On Hold - Awaiting Parts') {
+    return MAINTENANCE_PROGRESS_STAGES.indexOf('Under Repair');
+  }
+  return MAINTENANCE_PROGRESS_STAGES.indexOf(record.progress_status);
+}
+
+// A record that reached Completed with no verification result was closed on an
+// Admin decision, not on verified work (see decisionCloseMaintenance).
+function isClosedUnverified(record) {
+  return record.progress_status === 'Completed' && !record.verification_result;
+}
+
+// Card-view counterpart to the Maintenance Records table — mirrors TicketCard
+// (and reuses its themed .ticket-card-* classes) so both modules read as the
+// same product rather than two different card systems.
+function MaintenanceRecordCard({ record, onClick }) {
+  const stageIndex = maintenanceStageIndex(record);
+  const isDone = record.progress_status === 'Completed';
+  const unverified = isClosedUnverified(record);
+  const stagesDone = stageIndex + 1;
+
+  return (
+    <div className="ticket-card" onClick={onClick} role="button" tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && onClick()}>
+      <div className="ticket-card-content-wrapper">
+        <div className="ticket-card-info">
+          <div className="ticket-card-top">
+            <span className="ticket-card-id">#{record.maintenance_id}</span>
+            <StatusBadge value={record.progress_status} />
+          </div>
+          <p className="ticket-card-title">{record.maintenance_type}</p>
+          <p className="ticket-card-vehicle">
+            {record.vehicle?.vehicle_name}{record.vehicle?.plate_number ? ` · ${record.vehicle.plate_number}` : ''}
+          </p>
+        </div>
+        {record.vehicle?.photo_url && (
+          <div className="ticket-card-photo">
+            <img src={resolvePhotoUrl(record.vehicle.photo_url)} alt={record.vehicle.vehicle_name} />
+          </div>
+        )}
+      </div>
+
+      {/* Same four stages as the detail page, compressed to a single bar —
+          green only once it's genuinely finished. */}
+      <div style={{ margin: '8px 0 2px' }}>
+        <div style={{ height: 6, borderRadius: 999, background: '#e2e8f0', overflow: 'hidden' }}>
+          <div style={{
+            height: '100%',
+            width: `${(stagesDone / MAINTENANCE_PROGRESS_STAGES.length) * 100}%`,
+            background: isDone ? '#16a34a' : '#d97706',
+            borderRadius: 999,
+          }} />
+        </div>
+        <span className="muted" style={{ fontSize: '0.72rem' }}>
+          {MAINTENANCE_PROGRESS_STAGES[stageIndex] ?? record.progress_status} · stage {stagesDone} of {MAINTENANCE_PROGRESS_STAGES.length}
+        </span>
+      </div>
+
+      {(unverified || record.is_external || record.source_vehicle) && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, margin: '6px 0 2px' }}>
+          {unverified && (
+            <span style={{ fontSize: '0.66rem', fontWeight: 700, padding: '2px 7px', borderRadius: 999, background: '#fef3c7', color: '#92400e', border: '1px solid #fde68a' }} title="Closed by Admin without Custodian verification.">
+              UNVERIFIED CLOSE
+            </span>
+          )}
+          {record.is_external && (
+            <span style={{ fontSize: '0.66rem', fontWeight: 700, padding: '2px 7px', borderRadius: 999, background: '#f0f9ff', color: '#0369a1', border: '1px solid #bae6fd' }} title={record.external_vendor || 'External shop'}>
+              EXTERNAL
+            </span>
+          )}
+          {record.source_vehicle && (
+            <span style={{ fontSize: '0.66rem', fontWeight: 700, padding: '2px 7px', borderRadius: 999, background: '#fff7ed', color: '#9a3412', border: '1px solid #fed7aa' }} title={`Part cannibalized from ${record.source_vehicle.vehicle_name}`}>
+              ⚙ {record.source_vehicle.vehicle_name}
+            </span>
+          )}
+        </div>
+      )}
+
+      <div className="ticket-card-bottom">
+        {record.verification_result
+          ? <StatusBadge value={record.verification_result} />
+          : <span className="muted" style={{ fontSize: '0.72rem' }}>{record.maintenance_personnel?.name ?? '—'}</span>}
+        <span className="ticket-card-date">{formatDate(record.date_completed ?? record.date_started)}</span>
+      </div>
+    </div>
+  );
+}
+
+// Read-rich detail PAGE for a single Maintenance Record — same spirit as the
+// Ticket detail page (a visual progress trail instead of a flat status
+// word), but for the linear Assigned -> ... -> Completed chain a Record
+// follows instead of a ticket's per-sub-issue breakdown. Reachable both from
+// the Maintenance Records table and from a completed Schedule row, so
+// there's one consistent "view what actually happened" experience instead
+// of only ever landing in the plain edit form.
+function MaintenanceRecordDetail({ record, onConfirm, onReopen, onDecisionClose, canManage }) {
+  const [closing, setClosing] = useState(false);
+  const onHold = record.progress_status === 'On Hold - Awaiting Parts';
+  const stageIndex = maintenanceStageIndex(record);
+  const canConfirm = canManage && record.verification_result === 'Passed' && record.progress_status !== 'Completed';
+  // Decision-close is only offered where it's actually meaningful: not
+  // already finished, and not already passed verification (a pass should go
+  // through Confirm so it isn't overwritten as "unverified").
+  const canDecisionClose = canManage && record.progress_status !== 'Completed' && record.verification_result !== 'Passed';
+  // A record that reached Completed with no verification result was closed on
+  // an Admin decision, not on verified work — never let the two look alike.
+  const closedUnverified = isClosedUnverified(record);
+
+  return (
+    <ModulePanel description={`Maintenance #${record.maintenance_id}`}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 20, padding: '4px 4px 8px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <VehicleCell vehicle={record.vehicle} />
+          <span className="muted">{record.maintenance_type}</span>
+          {onHold && (
+            <span style={{ fontSize: '0.7rem', fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: '#fef3c7', color: '#92400e', border: '1px solid #fde68a' }}>ON HOLD — AWAITING PARTS</span>
+          )}
+          {record.is_external && (
+            <span style={{ fontSize: '0.7rem', fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: '#f0f9ff', color: '#0369a1', border: '1px solid #bae6fd' }}>External{record.external_vendor ? ` — ${record.external_vendor}` : ''}</span>
+          )}
+          {record.source_vehicle && (
+            <span style={{ fontSize: '0.7rem', fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: '#fff7ed', color: '#9a3412', border: '1px solid #fed7aa' }}>⚙ Part from {record.source_vehicle.vehicle_name}</span>
+          )}
+          {closedUnverified && (
+            <span
+              style={{ fontSize: '0.7rem', fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: '#fef3c7', color: '#92400e', border: '1px solid #fde68a' }}
+              title="Admin closed this without waiting for Custodian verification — nobody independently checked the work."
+            >
+              <Icon name="alert" size={11} /> CLOSED WITHOUT VERIFICATION
+            </span>
+          )}
+        </div>
+
+        {/* Progress trail — where this record actually sits, not just a
+            status word. Filled/checked nodes are stages already passed. */}
+        <div style={{ display: 'flex', alignItems: 'flex-start', maxWidth: 480 }}>
+          {MAINTENANCE_PROGRESS_STAGES.map((stage, i) => (
+            <div key={stage} style={{ display: 'flex', alignItems: 'flex-start', flex: i === MAINTENANCE_PROGRESS_STAGES.length - 1 ? '0 0 auto' : 1 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, minWidth: 56 }}>
+                <div style={{
+                  width: 28, height: 28, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                  background: i < stageIndex || (i === stageIndex && stage === 'Completed') ? '#16a34a' : i === stageIndex ? '#2563eb' : '#e2e8f0',
+                  color: i <= stageIndex ? '#fff' : '#94a3b8', fontSize: '0.74rem', fontWeight: 700,
+                }}>
+                  {i < stageIndex || (i === stageIndex && stage === 'Completed') ? <Icon name="checkCircle" size={14} /> : i + 1}
+                </div>
+                <span style={{ fontSize: '0.7rem', color: i <= stageIndex ? '#0f172a' : '#94a3b8', fontWeight: i === stageIndex ? 700 : 500, textAlign: 'center' }}>{stage}</span>
+              </div>
+              {i < MAINTENANCE_PROGRESS_STAGES.length - 1 && (
+                <div style={{ flex: 1, height: 2, marginTop: 13, background: i < stageIndex ? '#16a34a' : '#e2e8f0' }} />
+              )}
+            </div>
+          ))}
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, fontSize: '0.88rem', maxWidth: 640 }}>
+          <div>
+            <span className="muted" style={{ fontSize: '0.74rem', display: 'block' }}>Problem / Reason</span>
+            {record.problem_reason || '—'}
+          </div>
+          <div>
+            <span className="muted" style={{ fontSize: '0.74rem', display: 'block' }}>Action Taken</span>
+            {record.action_taken || '—'}
+          </div>
+          <div>
+            <span className="muted" style={{ fontSize: '0.74rem', display: 'block' }}>Parts Used</span>
+            {record.parts_used || '—'}
+          </div>
+          <div>
+            <span className="muted" style={{ fontSize: '0.74rem', display: 'block' }}>Cost</span>
+            {record.maintenance_cost != null ? `₱${Number(record.maintenance_cost).toLocaleString()}` : '—'}
+          </div>
+          <div>
+            <span className="muted" style={{ fontSize: '0.74rem', display: 'block' }}>Personnel</span>
+            <UserAvatarName user={record.maintenance_personnel} />
+          </div>
+          <div>
+            <span className="muted" style={{ fontSize: '0.74rem', display: 'block' }}>Date Started / Completed</span>
+            {formatDate(record.date_started)} — {formatDate(record.date_completed)}
+          </div>
+        </div>
+
+        {/* Proof shown inline — the whole point of this view over the plain
+            edit form is not having to click away just to see it. */}
+        {record.receipt_url && (
+          <div>
+            <span className="muted" style={{ fontSize: '0.74rem', display: 'block', marginBottom: 6 }}>Proof of Completion</span>
+            <a href={resolvePhotoUrl(record.receipt_url)} target="_blank" rel="noopener noreferrer">
+              <img src={resolvePhotoUrl(record.receipt_url)} alt="Proof of completion" style={{ maxWidth: 360, maxHeight: 280, borderRadius: 8, border: '1px solid #e2e8f0', display: 'block' }} />
+            </a>
+          </div>
+        )}
+
+        {record.verification_result && (
+          <div style={{ padding: '10px 12px', borderRadius: 8, maxWidth: 480, background: record.verification_result === 'Passed' ? '#ecfdf5' : '#fef2f2', border: `1px solid ${record.verification_result === 'Passed' ? '#a7f3d0' : '#fecaca'}` }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.85rem', fontWeight: 700, color: record.verification_result === 'Passed' ? '#065f46' : '#991b1b' }}>
+              <Icon name={record.verification_result === 'Passed' ? 'checkCircle' : 'alert'} size={15} />
+              Verification: {record.verification_result}
+            </div>
+            {record.verification_notes && <p style={{ margin: '4px 0 0', fontSize: '0.82rem' }}>{record.verification_notes}</p>}
+            {record.verified_by && <p className="muted" style={{ margin: '4px 0 0', fontSize: '0.76rem' }}>By {record.verified_by.name} · {formatDate(record.verified_at)}</p>}
+          </div>
+        )}
+
+        {/* Why verification was skipped — mandatory at close time, so it's
+            always here when the badge above is showing. */}
+        {record.closure_reason && (
+          <div style={{ padding: '10px 12px', borderRadius: 8, maxWidth: 480, background: '#fffbeb', border: '1px solid #fde68a' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.85rem', fontWeight: 700, color: '#92400e' }}>
+              <Icon name="alert" size={15} /> Reason for closing without verification
+            </div>
+            <p style={{ margin: '4px 0 0', fontSize: '0.82rem' }}>{record.closure_reason}</p>
+          </div>
+        )}
+
+        {record.confirmed_by && (
+          <p className="muted" style={{ fontSize: '0.78rem', margin: 0 }}>
+            {closedUnverified ? 'Closed' : 'Confirmed'} by {record.confirmed_by.name} · {formatDate(record.confirmed_at)}
+          </p>
+        )}
+
+        {canConfirm && (
+          <div style={{ display: 'flex', gap: 10 }}>
+            <button className="primary-button" type="button" onClick={() => onConfirm(record)}>Confirm</button>
+            <button className="ghost-button" type="button" onClick={() => onReopen(record)}>Reopen</button>
+          </div>
+        )}
+
+        {canDecisionClose && !closing && (
+          <div>
+            <button className="ghost-button" type="button" onClick={() => setClosing(true)}>
+              Close Without Verification
+            </button>
+            <p className="muted" style={{ fontSize: '0.76rem', margin: '6px 0 0', maxWidth: 480 }}>
+              Ends this record now without waiting for a Custodian to check the work. Requires a reason, and the record stays permanently marked as unverified.
+            </p>
+          </div>
+        )}
+
+        {canDecisionClose && closing && (
+          <div style={{ padding: '14px 16px', borderRadius: 8, maxWidth: 520, background: '#fffbeb', border: '1px solid #fde68a' }}>
+            <h4 style={{ margin: '0 0 4px', fontSize: '0.92rem', color: '#92400e' }}>Close without Custodian verification</h4>
+            <p className="muted" style={{ fontSize: '0.78rem', margin: '0 0 12px' }}>
+              Nobody will have independently checked this work. The record will be permanently flagged as closed unverified, and Custodians will be notified the verification is no longer needed.
+            </p>
+            <SmartForm
+              fields={[
+                { label: 'Reason for closing without verification', name: 'closure_reason', type: 'textarea', rows: 2, required: true, fullWidth: true },
+                {
+                  label: 'Is the vehicle fit to return to service?',
+                  name: 'returned_to_service',
+                  type: 'select',
+                  required: true,
+                  fullWidth: true,
+                  options: [
+                    { value: 1, label: 'Yes — return it to Available' },
+                    { value: 0, label: 'No — keep it Under Maintenance' },
+                  ],
+                },
+              ]}
+              onCancel={() => setClosing(false)}
+              onSubmit={(payload) => onDecisionClose(record, payload)}
+              submitLabel="Close Record"
+              title=""
+            />
+          </div>
+        )}
+      </div>
+    </ModulePanel>
+  );
+}
+
+// Fetch-by-id wrapper — same pattern as TicketProfilePage: load once by the
+// URL's :id, show a loader/not-found state, then hand the fetched record to
+// the read-rich detail view above. Re-fetches after Confirm/Reopen so the
+// progress trail reflects the new state without a manual refresh.
+function MaintenanceRecordProfilePage({ maintenanceId, onConfirm, onReopen, onDecisionClose, canManage }) {
+  const [record, setRecord] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [notFound, setNotFound] = useState(false);
+
+  const loadRecord = useCallback(() => {
+    setLoading(true);
+    api.get(`/maintenance-records/${maintenanceId}`)
+      .then((response) => { setRecord(response.data); setNotFound(false); })
+      .catch(() => setNotFound(true))
+      .finally(() => setLoading(false));
+  }, [maintenanceId]);
+
+  useEffect(() => { loadRecord(); }, [loadRecord]);
+
+  if (loading) return <ModuleLoader label="Loading maintenance record" />;
+
+  if (notFound || !record) {
+    return <ModulePanel description="This maintenance record could not be found — it may have been deleted." />;
+  }
+
+  return (
+    <MaintenanceRecordDetail
+      record={record}
+      canManage={canManage}
+      onConfirm={(r) => onConfirm(r).then(loadRecord)}
+      onReopen={(r) => onReopen(r).then(loadRecord)}
+      onDecisionClose={(r, payload) => onDecisionClose(r, payload).then(loadRecord)}
+    />
+  );
 }
 
 function maintenanceStatusColumns(setEditTarget) {
@@ -4899,29 +6206,90 @@ function maintenanceStatusColumns(setEditTarget) {
     { label: 'Action Taken', className: 'cell-text', render: (row) => <ExpandableText text={row.action_taken} /> },
     { label: 'Personnel', render: (row) => <UserAvatarName user={row.maintenance_personnel} /> },
     { label: 'Progress', render: (row) => <StatusBadge value={row.progress_status} /> },
-    { label: 'Action', render: (row) => <button className="btn-edit-action" onClick={() => setEditTarget(row)} type="button" title="Verify" aria-label="Verify"><Icon name="checkCircle" size={14} /> Verify</button> },
+    { label: 'Action', render: (row) => <button className="btn-edit-action icon-btn" onClick={() => setEditTarget(row)} type="button" title="Verify" aria-label="Verify"><Icon name="checkCircle" size={14} /></button> },
   ];
 }
 
-function scheduleColumns(onEdit, deleteRecord, onComplete) {
+function scheduleColumns(onEdit, deleteRecord, onComplete, currentUser, onViewRecord, restoreRecord) {
+  const isAdmin = hasRole(currentUser, 'Admin');
+  const currentUserId = currentUser?.id;
   return [
     { label: 'ID', render: (row) => row.schedule_id },
     { label: 'Vehicle', render: (row) => <VehicleCell vehicle={row.vehicle} /> }, { label: 'Plate', render: (row) => row.vehicle?.plate_number ?? '-' },
     { label: 'Type', render: (row) => row.maintenance_type },
+    {
+      label: 'Assigned To',
+      render: (row) => {
+        const name = row.assigned_to_user?.name;
+        if (!name) return <span className="muted">Unassigned</span>;
+        const isMe = currentUserId != null && String(row.assigned_to) === String(currentUserId);
+        return (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            {name}
+            {isMe && <span style={{ fontSize: '0.68rem', fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe' }}>YOU</span>}
+          </span>
+        );
+      },
+    },
     { label: 'Date', render: (row) => <DateBadge value={row.scheduled_date} /> },
     { label: 'Time', render: (row) => row.scheduled_time ?? '-' },
     { label: 'Repeat', render: (row) => row.recurrence_months ? <StatusBadge value={RECURRENCE_LABEL[row.recurrence_months] ?? `Every ${row.recurrence_months} mo`} /> : <span className="muted">One-time</span> },
     { label: 'Location', render: (row) => row.service_location ?? '-' },
-    { label: 'Status', render: (row) => <StatusBadge value={row.status} /> },
+    {
+      label: 'Status',
+      render: (row) => (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <StatusBadge value={row.status} />
+          {/* #11 — a scheduled PM whose date has passed is overdue: flag it
+              loudly instead of leaving it to sit silently on the calendar. */}
+          {isScheduleOverdue(row) && (
+            <span style={{ fontSize: '0.68rem', fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: '#fef2f2', color: '#991b1b', border: '1px solid #fecaca' }}>OVERDUE</span>
+          )}
+          {/* Traceability — the schedule row only ever showed "Completed" as
+              a label with nothing to verify it against. This shows what the
+              linked Maintenance Record actually reached: still awaiting
+              Custodian verification, or genuinely Completed with a real
+              date (only fast-closed records get date_completed immediately;
+              others get it once verification/confirmation goes through). */}
+          {row.status === 'Completed' && row.resulting_maintenance && (
+            row.resulting_maintenance.progress_status === 'Completed' ? (
+              <span
+                style={{ fontSize: '0.68rem', fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: '#ecfdf5', color: '#065f46', border: '1px solid #a7f3d0' }}
+                title={`Verification: ${row.resulting_maintenance.verification_result ?? 'Pending'}`}
+              >
+                Done {formatDate(row.resulting_maintenance.date_completed)}
+              </span>
+            ) : (
+              <span
+                style={{ fontSize: '0.68rem', fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: '#fef9c3', color: '#854d0e', border: '1px solid #fde68a' }}
+                title="The calendar task is done, but the record it created still needs Custodian verification before it's fully closed."
+              >
+                Record: {row.resulting_maintenance.progress_status}
+              </span>
+            )
+          )}
+        </span>
+      ),
+    },
     {
       label: 'Action',
       render: (row) => (
         <div className="row-actions" style={{ flexWrap: 'wrap' }}>
-          {row.status === 'Scheduled' && onComplete && (
-            <button className="btn-confirm-action" onClick={() => onComplete(row)} type="button" title="Mark as Done" aria-label="Mark as Done"><Icon name="checkCircle" size={14} /> Mark Done</button>
+          {row.status === 'Scheduled' && onComplete && (isAdmin || (currentUserId != null && String(row.assigned_to) === String(currentUserId))) && (
+            <button className="btn-confirm-action icon-btn" onClick={() => onComplete(row)} type="button" title="Mark as Done" aria-label="Mark as Done"><Icon name="checkCircle" size={14} /></button>
           )}
-          <button className="btn-edit-action" onClick={() => onEdit(row)} type="button" title="Edit" aria-label="Edit"><Icon name="edit" size={14} /> Edit</button>
-          <button className="btn-delete-action" onClick={() => deleteRecord(`/maintenance-schedules/${row.schedule_id}`, 'Schedule deleted.')} type="button" title="Delete" aria-label="Delete"><Icon name="trash" size={14} /> Delete</button>
+          {row.status === 'Completed' && row.resulting_maintenance_id && onViewRecord && (
+            <button className="btn-view-action icon-btn" onClick={() => onViewRecord(row)} type="button" title="View Maintenance Record" aria-label="View Maintenance Record"><Icon name="wrench" size={14} /></button>
+          )}
+          <button className="btn-edit-action icon-btn" onClick={() => onEdit(row)} type="button" title="Edit" aria-label="Edit"><Icon name="edit" size={14} /></button>
+          {/* Cancelling a schedule is a soft cancel — the row survives — so a
+              cancelled one gets Restore instead of a Delete that would do
+              nothing. Same swap vehicleColumns makes for archived vehicles. */}
+          {row.status === 'Cancelled' && restoreRecord ? (
+            <button className="btn-confirm-action icon-btn" onClick={() => restoreRecord(`/maintenance-schedules/${row.schedule_id}/restore`, 'Schedule restored.', 'Restore this cancelled schedule back to Scheduled?')} type="button" title="Restore" aria-label="Restore"><Icon name="undo" size={14} /></button>
+          ) : (
+            <button className="btn-delete-action icon-btn" onClick={() => deleteRecord(`/maintenance-schedules/${row.schedule_id}`, 'Schedule cancelled.')} type="button" title="Cancel Schedule" aria-label="Cancel Schedule"><Icon name="trash" size={14} /></button>
+          )}
         </div>
       ),
     },
@@ -4929,6 +6297,117 @@ function scheduleColumns(onEdit, deleteRecord, onComplete) {
 }
 
 const RECURRENCE_LABEL = { 1: 'Monthly', 3: 'Quarterly', 6: 'Every 6 mo', 12: 'Yearly' };
+
+// #11 — a schedule is overdue when it's still 'Scheduled' but its date has
+// already passed (compared date-only, so "today" is never overdue).
+function isScheduleOverdue(row) {
+  if (row.status !== 'Scheduled' || !row.scheduled_date) return false;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const due = new Date(row.scheduled_date); due.setHours(0, 0, 0, 0);
+  return due < today;
+}
+
+// Card-view counterpart to scheduleColumns — same information and the same
+// action affordances, so neither view can do something the other can't.
+// Deliberately NOT one big click target: unlike a Maintenance Record, a
+// schedule has no detail page to open, and a whole-card click would fight
+// with the action buttons it needs to carry.
+function MaintenanceScheduleCard({ row, currentUser, onComplete, onEdit, onDelete, onViewRecord, onRestore }) {
+  const isAdmin = hasRole(currentUser, 'Admin');
+  const currentUserId = currentUser?.id;
+  const isMine = currentUserId != null && String(row.assigned_to) === String(currentUserId);
+  const overdue = isScheduleOverdue(row);
+  const resulting = row.resulting_maintenance;
+  const canComplete = row.status === 'Scheduled' && onComplete && (isAdmin || isMine);
+
+  return (
+    <div className="ticket-card" style={{ cursor: 'default' }}>
+      <div className="ticket-card-content-wrapper">
+        <div className="ticket-card-info">
+          <div className="ticket-card-top">
+            <span className="ticket-card-id">#{row.schedule_id}</span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+              <StatusBadge value={row.status} />
+              {overdue && (
+                <span style={{ fontSize: '0.66rem', fontWeight: 700, padding: '2px 7px', borderRadius: 999, background: '#fef2f2', color: '#991b1b', border: '1px solid #fecaca' }}>OVERDUE</span>
+              )}
+            </span>
+          </div>
+          <p className="ticket-card-title">{row.maintenance_type}</p>
+          <p className="ticket-card-vehicle" style={{ marginBottom: 8 }}>
+            {row.vehicle?.vehicle_name}{row.vehicle?.plate_number ? ` · ${row.vehicle.plate_number}` : ''}
+          </p>
+        </div>
+        {row.vehicle?.photo_url && (
+          <div className="ticket-card-photo">
+            <img src={resolvePhotoUrl(row.vehicle.photo_url)} alt={row.vehicle.vehicle_name} />
+          </div>
+        )}
+      </div>
+
+      {/* The date is the whole point of a schedule, so it leads here rather
+          than being one column among many. */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, fontSize: '0.78rem', margin: '2px 0 8px' }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontWeight: 700, color: overdue ? '#b91c1c' : undefined }}>
+          <Icon name="calendar" size={13} /> {formatDate(row.scheduled_date)}{row.scheduled_time ? ` · ${row.scheduled_time}` : ''}
+        </span>
+        <span className="muted" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+          <Icon name="undo" size={13} /> {row.recurrence_months ? (RECURRENCE_LABEL[row.recurrence_months] ?? `Every ${row.recurrence_months} mo`) : 'One-time'}
+        </span>
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.78rem', marginBottom: 8, flexWrap: 'wrap' }}>
+        {row.assigned_to_user?.name
+          ? (
+            <>
+              <UserAvatarName user={row.assigned_to_user} />
+              {isMine && <span style={{ fontSize: '0.64rem', fontWeight: 700, padding: '2px 7px', borderRadius: 999, background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe' }}>YOU</span>}
+            </>
+          )
+          : <span className="muted">Unassigned</span>}
+      </div>
+
+      {row.service_location && (
+        <p className="muted" style={{ fontSize: '0.74rem', margin: '0 0 8px', display: 'flex', alignItems: 'center', gap: 5 }}>
+          <Icon name="pin" size={12} /> {row.service_location}
+        </p>
+      )}
+
+      {/* Traceability, same as the table's Status column: "Completed" alone
+          doesn't say whether the record it produced was ever verified. */}
+      {row.status === 'Completed' && resulting && (
+        <div style={{ marginBottom: 8 }}>
+          {resulting.progress_status === 'Completed' ? (
+            <span style={{ fontSize: '0.66rem', fontWeight: 700, padding: '2px 7px', borderRadius: 999, background: '#ecfdf5', color: '#065f46', border: '1px solid #a7f3d0' }}>
+              Done {formatDate(resulting.date_completed)}
+            </span>
+          ) : (
+            <span style={{ fontSize: '0.66rem', fontWeight: 700, padding: '2px 7px', borderRadius: 999, background: '#fef9c3', color: '#854d0e', border: '1px solid #fde68a' }} title="The calendar task is done, but the record it created still needs Custodian verification.">
+              Record: {resulting.progress_status}
+            </span>
+          )}
+        </div>
+      )}
+
+      <div className="row-actions" style={{ justifyContent: 'flex-start' }}>
+        {canComplete && (
+          <button className="btn-confirm-action icon-btn" onClick={() => onComplete(row)} type="button" title="Mark as Done" aria-label="Mark as Done"><Icon name="checkCircle" size={14} /></button>
+        )}
+        {row.status === 'Completed' && row.resulting_maintenance_id && onViewRecord && (
+          <button className="btn-view-action icon-btn" onClick={() => onViewRecord(row)} type="button" title="View Maintenance Record" aria-label="View Maintenance Record"><Icon name="wrench" size={14} /></button>
+        )}
+        <button className="btn-edit-action icon-btn" onClick={() => onEdit(row)} type="button" title="Edit" aria-label="Edit"><Icon name="edit" size={14} /></button>
+        {/* Same swap as the table: a cancelled schedule offers Restore, not a
+            Delete that would just re-cancel something already cancelled. */}
+        {row.status === 'Cancelled' && onRestore ? (
+          <button className="btn-confirm-action icon-btn" onClick={() => onRestore(row)} type="button" title="Restore" aria-label="Restore"><Icon name="undo" size={14} /></button>
+        ) : (
+          <button className="btn-delete-action icon-btn" onClick={() => onDelete(row)} type="button" title="Cancel Schedule" aria-label="Cancel Schedule"><Icon name="trash" size={14} /></button>
+        )}
+      </div>
+    </div>
+  );
+}
 
 const maintenanceHistoryColumns = [
   { label: 'ID', render: (row) => row.maintenance_id },
@@ -5003,6 +6482,55 @@ function PaginatedTable({ columns, rows, onRowClick, emptyMessage, compact = fal
         <div className="table-pagination-controls">
           <label>
             Rows per page
+            <select value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>
+              {pageSizeOptions.map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </label>
+          <button type="button" className="ghost-button" disabled={clampedPage <= 1} onClick={() => setPage((p) => p - 1)}>Prev</button>
+          <span>Page {clampedPage} of {totalPages}</span>
+          <button type="button" className="ghost-button" disabled={clampedPage >= totalPages} onClick={() => setPage((p) => p + 1)}>Next</button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// Card-grid counterpart to PaginatedTable — same pagination footer markup,
+// same "Showing X-Y of Z" wording, same rows-per-page/Prev/Next controls, so
+// switching between List and Card view doesn't change how paging behaves.
+// Page size defaults lower than the table's: cards are much taller, so 25 of
+// them is a very long scroll.
+function PaginatedCardGrid({ items, renderItem, keyOf, emptyMessage, pageSizeOptions = [12, 24, 48, 96], initialPageSize = 12 }) {
+  const [pageSize, setPageSize] = useState(initialPageSize);
+  const [page, setPage] = useState(1);
+
+  // Mirrors PaginatedTable: filtering down to fewer results should put you
+  // back on page 1 rather than leaving you on a page that no longer exists.
+  useEffect(() => {
+    setPage(1);
+  }, [items.length, pageSize]);
+
+  if (!items?.length) {
+    return <p className="empty-state">{emptyMessage}</p>;
+  }
+
+  const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
+  const clampedPage = Math.min(page, totalPages);
+  const start = (clampedPage - 1) * pageSize;
+  const pageItems = items.slice(start, start + pageSize);
+
+  return (
+    <>
+      <div className="ticket-card-grid">
+        {pageItems.map((item, i) => (
+          <div key={keyOf ? keyOf(item) : i}>{renderItem(item)}</div>
+        ))}
+      </div>
+      <div className="table-pagination">
+        <span className="muted">Showing {start + 1}-{Math.min(start + pageSize, items.length)} of {items.length}</span>
+        <div className="table-pagination-controls">
+          <label>
+            Cards per page
             <select value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>
               {pageSizeOptions.map((n) => <option key={n} value={n}>{n}</option>)}
             </select>
@@ -5505,6 +7033,7 @@ const VEHICLE_EXPORT_COLUMNS = [
   { label: 'Location', value: (r) => r.current_location },
   { label: 'Status', value: (r) => r.status },
   { label: 'Condition', value: (r) => r.condition },
+  { label: 'Ready to Respond', value: (r) => READINESS_BADGE[r.readiness_state]?.label ?? '' },
 ];
 
 const SCHEDULE_EXPORT_COLUMNS = [
@@ -5518,6 +7047,9 @@ const SCHEDULE_EXPORT_COLUMNS = [
 ];
 
 function rowKey(row, index) {
+  // An explicit override wins — lets a flattened row (e.g. many sub-issues under
+  // one ticket) supply a guaranteed-unique key instead of colliding on ticket_id.
+  if (row._rowKey != null)            return row._rowKey;
   // Use the most-specific ID first so tickets sharing a vehicle never collide.
   if (row.ticket_id != null)          return `t-${row.ticket_id}`;
   if (row.log_id != null)             return `l-${row.log_id}`;
@@ -5557,10 +7089,13 @@ function isFile(value) {
 
 function showError(error, setNotice) {
   const validation = error.response?.data?.errors;
-  const message = validation
-    ? Object.values(validation).flat().join(' ')
-    : error.response?.data?.message ?? 'Something went wrong while saving.';
+  if (validation) {
+    const lines = Object.values(validation).flat();
+    setNotice({ type: 'error', text: lines.join(' '), lines });
+    return;
+  }
 
+  const message = error.response?.data?.message ?? 'Something went wrong while saving.';
   setNotice({ type: 'error', text: message });
 }
 
@@ -5596,14 +7131,363 @@ function flattenSubIssueRows(tickets, mechanicId = null) {
   return rows;
 }
 
-function ticketCreateFields(lookups) {
-  return [
-    { label: 'Vehicle', name: 'vehicle_id', options: (lookups.vehicles ?? []).filter((v) => v.status !== 'Inactive').map((v) => ({ value: v.vehicle_id, label: `${v.vehicle_name} (${v.plate_number})` })), required: true, type: 'select' },
-    { label: 'Assign to Custodian', name: 'assigned_custodian_id', options: (lookups.custodians ?? []).map((c) => ({ value: c.id, label: c.name })), required: true, type: 'select' },
-    { label: 'Ticket Title', name: 'ticket_title', required: true, type: 'text' },
-    { label: 'Description / Details', name: 'ticket_description', required: true, type: 'textarea' },
-    { label: 'Priority', name: 'priority', options: lookups.priorities ?? [], required: true, type: 'select' },
-  ];
+// =========================================================================
+// WORK TRACKER — cross-phase outcome feed (Custodian + Maintenance)
+// =========================================================================
+
+// Reads the FK that may arrive either as an eager-loaded relation object or as
+// the raw integer column (both serialize under the same snake_case key).
+function idOf(value) {
+  return (value && typeof value === 'object') ? value.id : value;
+}
+
+// Flattens role-scoped tickets into one row per sub-issue THIS user is tied to,
+// tagged with how they're involved (Mechanic / Custodian / both). A ticket may
+// carry sibling sub-issues owned by other people — those are skipped.
+function flattenWorkTrackerRows(tickets, user) {
+  const uid = user?.id;
+  const rows = [];
+  (tickets ?? []).forEach((ticket) => {
+    (ticket.sub_issues ?? []).forEach((si) => {
+      const isMechanic = si.assigned_mechanic_id === uid;
+      const isVerifier = ticket.assigned_custodian_id === uid || idOf(si.verification_assigned_to) === uid;
+      if (!isMechanic && !isVerifier) return;
+
+      const relationship = (isMechanic && isVerifier) ? 'Mechanic + Custodian'
+        : isMechanic ? 'Mechanic' : 'Custodian';
+
+      // Latest timestamp across every event that could have touched this line,
+      // so "Last Update" reflects real activity rather than row creation.
+      const stamps = [
+        si.reopened_at, si.confirmed_at, si.verified_at, si.repair_completed_at,
+        si.mechanic_assigned_at, si.deferred_at, ticket.created_at,
+      ].filter(Boolean);
+      let lastIso = ticket.created_at ?? null;
+      let lastTs = 0;
+      stamps.forEach((s) => {
+        const t = new Date(s).getTime();
+        if (t >= lastTs) { lastTs = t; lastIso = s; }
+      });
+
+      rows.push({
+        _rowKey: `wt-${ticket.ticket_id}-${si.sub_issue_id}`,
+        ticket_id: ticket.ticket_id,
+        ticket_title: ticket.ticket_title,
+        sub_issue_id: si.sub_issue_id,
+        title: si.title,
+        status: si.status,
+        vehicle: ticket.vehicle,
+        relationship,
+        isMechanic,
+        isVerifier,
+        maintenance_type: si.maintenance_type,
+        assigned_mechanic: si.assigned_mechanic,
+        verification_verdict: si.verification_verdict,
+        confirmation_verdict: si.confirmation_verdict,
+        reopened_at: si.reopened_at,
+        confirmed_at: si.confirmed_at,
+        deferred_at: si.deferred_at,
+        lastActivityIso: lastIso,
+        lastActivityTs: lastTs,
+      });
+    });
+  });
+  return rows;
+}
+
+// The single outcome label a user cares about at a glance, plus a tone that
+// drives its color. Ordered from most-final (Confirmed) to earliest (Open).
+function workTrackerOutcome(row) {
+  const { status, verification_verdict, confirmation_verdict, reopened_at } = row;
+  if (status === 'Done' && confirmation_verdict === 'Confirmed') return { label: 'Confirmed — Done', tone: 'success' };
+  if (reopened_at && status === 'For Inspection')                return { label: 'Reopened by Admin', tone: 'warning' };
+  if (status === 'For Confirmation')                             return { label: 'Approved — awaiting Admin', tone: 'info' };
+  if (status === 'Under Repair' && verification_verdict === 'Rejected') return { label: 'Rejected — redo repair', tone: 'warning' };
+  if (status === 'For Inspection')                               return { label: 'Awaiting your verification', tone: 'info' };
+  if (status === 'Under Repair')                                 return { label: 'In repair', tone: 'info' };
+  if (status === 'Deferred')                                     return { label: 'Deferred', tone: 'warning' };
+  if (status === 'Open')                                         return { label: 'Awaiting assignment', tone: 'neutral' };
+  return { label: status ?? '—', tone: 'neutral' };
+}
+
+// True when the item is sitting in THIS user's court needing action — the
+// mechanic still owes a repair log, or the verifier still owes a verification.
+function workTrackerNeedsAction(row) {
+  if (row.isMechanic && row.status === 'Under Repair') return true;
+  if (row.isVerifier && row.status === 'For Inspection') return true;
+  return false;
+}
+
+function workTrackerBucket(row) {
+  if (workTrackerNeedsAction(row)) return 'attention';
+  if (row.status === 'Done' || row.status === 'Deferred') return 'completed';
+  return 'progress';
+}
+
+// Master-detail grouping: one entry per ticket (a sub-issue belongs to exactly
+// one ticket, which belongs to exactly one vehicle), so a vehicle with many
+// sub-issues collapses to a single list entry instead of many table rows.
+// Sorted the same way the old flat list was — action-needed first, then most
+// recently active — so the master list surfaces what matters without scrolling.
+function groupWorkTrackerByTicket(rows) {
+  const map = new Map();
+  rows.forEach((row) => {
+    if (!map.has(row.ticket_id)) {
+      map.set(row.ticket_id, {
+        ticket_id: row.ticket_id,
+        ticket_title: row.ticket_title,
+        vehicle: row.vehicle,
+        subIssues: [],
+        lastActivityTs: 0,
+        lastActivityIso: null,
+      });
+    }
+    const group = map.get(row.ticket_id);
+    group.subIssues.push(row);
+    if (row.lastActivityTs >= group.lastActivityTs) {
+      group.lastActivityTs = row.lastActivityTs;
+      group.lastActivityIso = row.lastActivityIso;
+    }
+  });
+
+  return Array.from(map.values())
+    .map((group) => ({ ...group, needsAction: group.subIssues.some(workTrackerNeedsAction) }))
+    .sort((a, b) => {
+      const an = a.needsAction ? 1 : 0;
+      const bn = b.needsAction ? 1 : 0;
+      if (an !== bn) return bn - an;
+      return b.lastActivityTs - a.lastActivityTs;
+    });
+}
+
+function WorkOutcomeChip({ tone, label, flag = false }) {
+  const map = {
+    success: { bg: '#dcfce7', bd: '#86efac', fg: '#166534' },
+    warning: { bg: '#fef3c7', bd: '#fcd34d', fg: '#92400e' },
+    info:    { bg: '#e0f2fe', bd: '#7dd3fc', fg: '#075985' },
+    neutral: { bg: '#f1f5f9', bd: '#e2e8f0', fg: '#475569' },
+  };
+  const c = map[tone] ?? map.neutral;
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 10px', borderRadius: 999, fontSize: '0.78rem', fontWeight: 600, background: c.bg, border: `1px solid ${c.bd}`, color: c.fg }}>
+      {flag && <Icon name="alert" size={12} />}{label}
+    </span>
+  );
+}
+
+function WorkRoleBadge({ row }) {
+  const both = row.isMechanic && row.isVerifier;
+  const style = both
+    ? { bg: '#ede9fe', fg: '#6d28d9' }
+    : row.isMechanic ? { bg: '#fef3c7', fg: '#b45309' } : { bg: '#e0f2fe', fg: '#0369a1' };
+  return (
+    <span style={{ fontSize: '0.74rem', fontWeight: 600, padding: '2px 8px', borderRadius: 6, background: style.bg, color: style.fg, whiteSpace: 'nowrap' }}>
+      {row.relationship}
+    </span>
+  );
+}
+
+// "Vehicles you've worked on and where they stand now." A read-only feed that
+// unifies every workflow phase so a Custodian/Mechanic sees the OUTCOME of their
+// work (approved, rejected, confirmed, reopened) in one place — no notification
+// chasing. Scope: everything still in progress, plus items completed/deferred
+// within the last 30 days so recent outcomes stay visible without old clutter.
+function WorkTrackerModule({ tickets, user, categories = [], vehicles = [], onViewTicket }) {
+  const [activeFilter, setActiveFilter] = useState('');
+  const [search, setSearch] = useState('');
+  // FilterBar (draft/apply) state — Category + Capacity + Status + My Role.
+  const [filterCategory, setFilterCategory] = useState('');
+  const [filterCapacity, setFilterCapacity] = useState('');
+  const [filterStatus, setFilterStatus] = useState('');
+  const [filterRole, setFilterRole] = useState('');
+  // Card clicked open in the detail popup — a modal instead of an inline
+  // expand so a ticket with many sub-issues doesn't push the whole grid down.
+  const [modalGroup, setModalGroup] = useState(null);
+  // Captured once at mount (a 30-day window doesn't need per-render precision),
+  // keeping the filter memo below a pure function of its inputs.
+  const [nowTs] = useState(() => Date.now());
+
+  const allRows = useMemo(() => {
+    const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
+    return flattenWorkTrackerRows(tickets, user)
+      .filter((row) => {
+        const isCompleted = row.status === 'Done' || row.status === 'Deferred';
+        if (!isCompleted) return true; // always show active/in-progress work
+        const ref = row.confirmed_at || row.deferred_at || row.lastActivityIso;
+        return ref ? (nowTs - new Date(ref).getTime()) <= THIRTY_DAYS : false;
+      })
+      // Action-needed first, then most-recent activity.
+      .sort((a, b) => {
+        const an = workTrackerNeedsAction(a) ? 1 : 0;
+        const bn = workTrackerNeedsAction(b) ? 1 : 0;
+        if (an !== bn) return bn - an;
+        return b.lastActivityTs - a.lastActivityTs;
+      });
+  }, [tickets, user, nowTs]);
+
+  const counts = useMemo(() => {
+    const c = { attention: 0, progress: 0, completed: 0 };
+    allRows.forEach((row) => { c[workTrackerBucket(row)] += 1; });
+    return c;
+  }, [allRows]);
+
+  const visibleRows = useMemo(() => {
+    let result = allRows;
+    if (activeFilter) result = result.filter((row) => workTrackerBucket(row) === activeFilter);
+    if (filterCategory) result = result.filter((row) => String(row.vehicle?.category_id) === String(filterCategory));
+    if (filterCapacity) result = result.filter((row) => row.vehicle?.capacity === filterCapacity);
+    if (filterStatus) result = result.filter((row) => row.status === filterStatus);
+    if (filterRole) {
+      result = result.filter((row) => (filterRole === 'Mechanic' ? row.isMechanic : row.isVerifier));
+    }
+    const q = search.trim().toLowerCase();
+    if (q) {
+      result = result.filter((row) => (
+        (row.vehicle?.vehicle_name ?? '').toLowerCase().includes(q)
+        || (row.vehicle?.plate_number ?? '').toLowerCase().includes(q)
+        || (row.ticket_title ?? '').toLowerCase().includes(q)
+        || (row.title ?? '').toLowerCase().includes(q)
+      ));
+    }
+    return result;
+  }, [allRows, activeFilter, filterCategory, filterCapacity, filterStatus, filterRole, search]);
+
+  const groupedTickets = useMemo(() => groupWorkTrackerByTicket(visibleRows), [visibleRows]);
+
+  // Keep the open popup in sync with live data (e.g. a poll refresh); if its
+  // ticket drops out of the filtered/visible set, fall back to the last known
+  // snapshot rather than flashing an empty modal while it's still open.
+  const displayGroup = modalGroup
+    ? (groupedTickets.find((g) => g.ticket_id === modalGroup.ticket_id) ?? modalGroup)
+    : null;
+
+  return (
+    <div className="module-grid">
+      <ModuleStatCards
+        totalLabel="Total"
+        total={allRows.length}
+        cards={WORK_TRACKER_STAT_CARDS}
+        counts={counts}
+        activeFilter={activeFilter}
+        onFilterChange={setActiveFilter}
+      />
+      <section className="panel">
+        <div className="panel-header-bar">
+          <h3>Work Tracker <span className="count-badge">{visibleRows.length}</span></h3>
+          <LocalSearchInput
+            value={search}
+            onChange={setSearch}
+            placeholder="Search vehicle, plate, or ticket..."
+            onExport={() => exportRowsToCsv('work-tracker.csv', [
+              { label: 'Ticket', value: (r) => `#${r.ticket_id} ${r.ticket_title}` },
+              { label: 'Vehicle', value: (r) => r.vehicle?.vehicle_name ?? '' },
+              { label: 'Plate', value: (r) => r.vehicle?.plate_number ?? '' },
+              { label: 'Sub-Issue', value: (r) => r.title ?? '' },
+              { label: 'My Role', value: (r) => r.relationship },
+              { label: 'Status', value: (r) => r.status ?? '' },
+              { label: 'Outcome', value: (r) => workTrackerOutcome(r).label },
+              { label: 'Last Update', value: (r) => r.lastActivityIso ?? '' },
+            ], visibleRows)}
+          />
+        </div>
+        <p className="muted" style={{ margin: '0 0 14px', fontSize: '0.85rem' }}>
+          Every vehicle you've worked on and where it stands now — so you can see the outcome of your work
+          without hunting for the ticket. Items needing your action are pinned to the top.
+        </p>
+        <FilterBar
+          categories={categories}
+          vehicles={vehicles}
+          filterCategory={filterCategory}
+          setFilterCategory={setFilterCategory}
+          filterCapacity={filterCapacity}
+          setFilterCapacity={setFilterCapacity}
+          filterStatus={filterStatus}
+          setFilterStatus={setFilterStatus}
+          filterPriority={filterRole}
+          setFilterPriority={setFilterRole}
+          statusOptions={['Open', 'Under Repair', 'For Inspection', 'For Confirmation', 'Done', 'Deferred']}
+          priorityOptions={(hasRole(user, 'Custodian') && hasRole(user, 'Maintenance Personnel')) ? ['Mechanic', 'Custodian'] : []}
+          priorityLabel="Role"
+        />
+        <div style={{ height: '16px' }} />
+        <div className="work-tracker-grid">
+          {groupedTickets.length === 0 ? (
+            <p className="empty-state" style={{ gridColumn: '1 / -1' }}>
+              Nothing here yet — vehicles you repair or verify will show up here with their current status.
+            </p>
+          ) : (
+            groupedTickets.map((group) => {
+              const photo = group.vehicle?.photo_url ? resolvePhotoUrl(group.vehicle.photo_url) : null;
+              const doneCount = group.subIssues.filter((s) => s.status === 'Done').length;
+              return (
+                <button
+                  key={group.ticket_id}
+                  type="button"
+                  className={`work-tracker-card${group.needsAction ? ' needs-action' : ''}`}
+                  onClick={() => setModalGroup(group)}
+                >
+                  <span className="work-tracker-thumb">
+                    {photo ? <img src={photo} alt="" /> : <Icon name="vehicle" size={18} />}
+                  </span>
+                  <span className="work-tracker-card-heading">
+                    <span className="work-tracker-card-title-row">
+                      <strong>{group.vehicle?.vehicle_name ?? 'Unknown Vehicle'}</strong>
+                      <span className="muted" style={{ fontSize: '0.78rem' }}>({group.vehicle?.plate_number ?? '-'})</span>
+                      {group.needsAction && <Icon name="alert" size={13} className="work-tracker-item-flag" />}
+                    </span>
+                    <span className="work-tracker-card-sub" title={group.ticket_title}>#{group.ticket_id} · {group.ticket_title}</span>
+                    <span className="work-tracker-card-summary">
+                      {group.subIssues.length} sub-issue{group.subIssues.length !== 1 ? 's' : ''}
+                      {doneCount > 0 ? ` · ${doneCount} done` : ''}
+                      {' · '}{formatDate(group.lastActivityIso)}
+                    </span>
+                  </span>
+                  <span className="work-tracker-card-chevron">▸</span>
+                </button>
+              );
+            })
+          )}
+        </div>
+      </section>
+
+      <FormModal
+        open={!!modalGroup}
+        onClose={() => setModalGroup(null)}
+        title={displayGroup ? `${displayGroup.vehicle?.vehicle_name ?? 'Unknown Vehicle'} — #${displayGroup.ticket_id} · ${displayGroup.ticket_title}` : ''}
+      >
+        {displayGroup && (
+          <>
+            <button
+              type="button"
+              className="ghost-button"
+              style={{ marginBottom: 14 }}
+              onClick={() => onViewTicket({ ticket_id: displayGroup.ticket_id })}
+            >
+              View Full Ticket ↗
+            </button>
+            <div className="work-tracker-subissue-list">
+              {displayGroup.subIssues.map((si) => {
+                const outcome = workTrackerOutcome(si);
+                return (
+                  <div key={si.sub_issue_id} className={`work-tracker-subissue-card${workTrackerNeedsAction(si) ? ' needs-action' : ''}`}>
+                    <div className="work-tracker-subissue-top">
+                      <strong>{si.title}</strong>
+                      <WorkRoleBadge row={si} />
+                    </div>
+                    <div className="work-tracker-subissue-bottom">
+                      <TicketStatusBadge value={si.status} />
+                      <WorkOutcomeChip tone={outcome.tone} label={outcome.label} flag={workTrackerNeedsAction(si)} />
+                      <span className="muted" style={{ fontSize: '0.78rem', marginLeft: 'auto' }}>{formatDate(si.lastActivityIso)}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+      </FormModal>
+    </div>
+  );
 }
 
 function mechanicAssignFields(lookups) {
@@ -5643,6 +7527,7 @@ function VerificationForm({ target, onCancel, onSubmit }) {
   const [attested, setAttested] = useState(false);
   const [notes, setNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [newTestInput, setNewTestInput] = useState('');
 
   const allAnswered = results.every((r) => r.passed !== null);
   const anyFailed = results.some((r) => r.passed === false);
@@ -5651,6 +7536,13 @@ function VerificationForm({ target, onCancel, onSubmit }) {
   const canSubmit = allAnswered && (!needsAttestation || attested) && !submitting;
 
   const setResult = (i, passed) => setResults((rs) => rs.map((r, idx) => (idx === i ? { ...r, passed } : r)));
+  const addTest = () => {
+    if (newTestInput.trim()) {
+      setResults((rs) => [...rs, { item: newTestInput.trim(), passed: null }]);
+      setNewTestInput('');
+    }
+  };
+  const removeTest = (i) => setResults((rs) => rs.filter((_, idx) => idx !== i));
 
   const submit = async () => {
     if (!canSubmit) return;
@@ -5676,7 +7568,7 @@ function VerificationForm({ target, onCancel, onSubmit }) {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {results.map((r, i) => (
           <div key={r.item} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '8px 10px', background: '#f8fafc', borderRadius: 8, border: '1px solid #e2e8f0' }}>
-            <span style={{ fontSize: '0.85rem' }}>{r.item}</span>
+            <span style={{ fontSize: '0.85rem', flex: 1 }}>{r.item}</span>
             <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
               <button
                 type="button"
@@ -5692,9 +7584,34 @@ function VerificationForm({ target, onCancel, onSubmit }) {
               >
                 Fail
               </button>
+              <button
+                type="button"
+                onClick={() => removeTest(i)}
+                title="Remove this test"
+                style={{ padding: '4px 8px', borderRadius: 6, fontSize: '0.78rem', fontWeight: 600, cursor: 'pointer', border: '1px solid #fca5a5', background: '#fef2f2', color: '#dc2626' }}
+              >
+                ✕
+              </button>
             </div>
           </div>
         ))}
+        <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+          <input
+            type="text"
+            value={newTestInput}
+            onChange={(e) => setNewTestInput(e.target.value)}
+            onKeyPress={(e) => e.key === 'Enter' && addTest()}
+            placeholder="Add a custom test item..."
+            style={{ flex: 1, padding: '8px 10px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: '0.85rem', fontFamily: 'inherit' }}
+          />
+          <button
+            type="button"
+            onClick={addTest}
+            style={{ padding: '8px 16px', borderRadius: 6, fontSize: '0.78rem', fontWeight: 600, cursor: 'pointer', border: '1px solid #2563eb', background: '#2563eb', color: '#fff' }}
+          >
+            + Add Test
+          </button>
+        </div>
       </div>
 
       {allAnswered && (
@@ -5770,11 +7687,13 @@ function TicketStatusBadge({ value, size = 'normal' }) {
 // TICKET DETAIL PANEL — shown when admin clicks a ticket row
 // =========================================================================
 
-function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, onReassignMechanic, onConfirm, onAddSubIssue, onDeferSubIssue, onCloseTicket, onCancel, onUncancel, onDelete, onRequestConfirmation, onClose, asPage = false }) {
+function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, onReassignMechanic, onReassignCustodian, onConfirm, onReopenDone, onAddSubIssue, onDeferSubIssue, onCloseTicket, onCancel, onUncancel, onDelete, onRequestConfirmation, onSendToExternalShop, onClose, asPage = false }) {
   const [assigningId, setAssigningId] = useState(null);
   const [reassigningId, setReassigningId] = useState(null);
   const [confirmingId, setConfirmingId] = useState(null);
   const [deferringId, setDeferringId] = useState(null);
+  const [reassigningCustodian, setReassigningCustodian] = useState(false);
+  const [editingDoneId, setEditingDoneId] = useState(null);
   const [addingSubIssue, setAddingSubIssue] = useState(false);
   const [decisionClosing, setDecisionClosing] = useState(false);
 
@@ -5862,9 +7781,11 @@ function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, on
               )}
             </div>
           </div>
-          {asPage ? (
-            <button className="ghost-button btn-exit-action" onClick={onClose} type="button"><Icon name="arrowLeft" size={18} /></button>
-          ) : (
+          {/* As a full page, the breadcrumb above already says "back to
+              Maintenance Tickets" and the sidebar is always one click away —
+              a redundant arrow here just duplicates that. Only the modal
+              variant (opened over another page) needs its own close button. */}
+          {asPage ? null : (
             <button className="icon-btn" onClick={onClose} type="button" title="Close" aria-label="Close"><Icon name="close" size={18} /></button>
           )}
         </div>
@@ -5951,6 +7872,36 @@ function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, on
                   )}
                 </div>
                 {ticket.inspection_notes && <p className="muted" style={{ margin: 0, fontSize: '0.82rem' }}>{ticket.inspection_notes}</p>}
+
+                {/* This Custodian is hard-locked as both the inspector AND the
+                    verifier of every repair on this ticket. If they become
+                    unavailable the ticket is otherwise unworkable — and if it's
+                    still Open it can't even be closed. Same escape hatch the
+                    mechanic work orders already have. */}
+                {isAdmin && onReassignCustodian && !['Closed', 'Cancelled'].includes(ticket.status) && (
+                  reassigningCustodian ? (
+                    <div className="ticket-inline-form" style={{ marginTop: 10, padding: '10px 12px' }}>
+                      <p className="muted" style={{ marginBottom: 8, fontSize: '0.8rem' }}>
+                        Hand this ticket to a different Custodian (e.g. the current one is on leave). Any repairs already awaiting verification move with it.
+                      </p>
+                      <SmartForm
+                        fields={[
+                          { label: 'Reassign to Custodian', name: 'assigned_custodian_id', options: (lookups.custodians ?? []).filter((c) => c.id !== ticket.assigned_custodian_id).map((c) => ({ value: c.id, label: c.name })), required: true, type: 'select' },
+                          { label: 'Reason for reassigning', name: 'reassign_reason', required: true, type: 'textarea', rows: 2 },
+                        ]}
+                        key={`reassign-custodian-${ticket.ticket_id}`}
+                        onCancel={() => setReassigningCustodian(false)}
+                        onSubmit={(payload) => onReassignCustodian(ticket, payload).then(() => setReassigningCustodian(false))}
+                        submitLabel="Reassign Custodian"
+                        title=""
+                      />
+                    </div>
+                  ) : (
+                    <button className="btn-edit-action" style={{ marginTop: 10 }} type="button" onClick={() => setReassigningCustodian(true)}>
+                      <Icon name="undo" size={14} /> Reassign Custodian
+                    </button>
+                  )
+                )}
               </section>
             )}
 
@@ -6010,7 +7961,13 @@ function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, on
                 </div>
               )}
 
-              {subIssues.length === 0 && <p className="muted">No sub-issues — inspection found nothing to repair.</p>}
+              {/* The actionable "ready to close" banner lives once, down in
+                  ticket-detail-actions, covering both this case (no
+                  sub-issues) and the all-resolved-via-defer case — so there's
+                  one consistent prompt instead of two different ones. */}
+              {subIssues.length === 0 && (
+                <p className="muted">No sub-issues — inspection found nothing to repair.</p>
+              )}
               {subIssues.map((si, index) => {
                 const stageBanner = {
                   'Under Repair':     { color: '#d97706', bg: '#fffbeb', text: '#92400e', icon: 'wrench', label: `Awaiting ${si.assigned_mechanic?.name ?? 'the mechanic'}'s repair log` },
@@ -6092,6 +8049,16 @@ function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, on
                     <p className="muted" style={{ marginTop: 8 }}>Admin verdict: <TicketStatusBadge value={si.confirmation_verdict} /> {si.confirmation_notes}</p>
                   )}
 
+                  {si.reopened_at && si.status === 'For Inspection' && (
+                    <div style={{ marginTop: 8, padding: '10px 12px', background: '#fef3c7', borderLeft: '3px solid #f59e0b', borderRadius: 6, fontSize: '0.82rem', color: '#92400e' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                        <Icon name="alert" size={14} /> <strong>Reopened by {si.reopened_by?.name || 'Admin'}</strong>
+                      </div>
+                      {si.confirmation_notes && <p style={{ margin: 0 }}><strong>Reason:</strong> {si.confirmation_notes}</p>}
+                      <p style={{ margin: '4px 0 0', fontStyle: 'italic', opacity: 0.85 }}>This repair was unconfirmed and needs to be re-verified.</p>
+                    </div>
+                  )}
+
                   {si.status === 'Deferred' && (
                     <div style={{ marginTop: 8, padding: '8px 12px', background: '#fffbeb', borderLeft: '3px solid #f59e0b', borderRadius: 6, fontSize: '0.82rem', color: '#92400e' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -6099,6 +8066,25 @@ function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, on
                       </div>
                       {si.deferred_reason && <p style={{ margin: '4px 0 0' }}>{si.deferred_reason}</p>}
                       <p style={{ margin: '4px 0 0', fontStyle: 'italic', opacity: 0.85 }}>A follow-up issue report was opened so this defect isn't forgotten.</p>
+                      {/* Receipt-backed fast close (#5): the natural next
+                          step for "deferred because we can't fix this
+                          in-house" is an external shop — jumps straight to
+                          Add Maintenance Record with the follow-up issue and
+                          vehicle already linked. */}
+                      {isAdmin && onSendToExternalShop && si.deferred_issue_report_id && (
+                        <button
+                          className="btn-edit-action"
+                          type="button"
+                          style={{ marginTop: 8 }}
+                          onClick={() => onSendToExternalShop({
+                            vehicle_id: ticket.vehicle_id,
+                            issue_report_id: si.deferred_issue_report_id,
+                            problem_reason: `${si.title}${si.deferred_reason ? ` — ${si.deferred_reason}` : ''}`,
+                          })}
+                        >
+                          <Icon name="wrench" size={14} /> Send to External Shop
+                        </button>
+                      )}
                     </div>
                   )}
 
@@ -6152,6 +8138,28 @@ function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, on
                       </div>
                     ) : (
                       <button className="primary-button" style={{ marginTop: 10 }} type="button" onClick={() => setConfirmingId(si.sub_issue_id)}>Issue Confirmation Verdict</button>
+                    )
+                  )}
+
+                  {isAdmin && si.status === 'Done' && (
+                    editingDoneId === si.sub_issue_id ? (
+                      <div className="ticket-inline-form" style={{ marginTop: 8, padding: '10px 12px' }}>
+                        <p className="muted" style={{ marginBottom: 8, fontSize: '0.8rem' }}>Unconfirm this repair so you can make adjustments and re-confirm it.</p>
+                        <SmartForm
+                          fields={[
+                            { label: 'Notes (optional)', name: 'reopen_reason', type: 'textarea', rows: 2, placeholder: 'e.g., Needs adjustment, additional notes' },
+                          ]}
+                          key={`unconfirm-done-${si.sub_issue_id}`}
+                          onCancel={() => setEditingDoneId(null)}
+                          onSubmit={(payload) => onReopenDone(ticket, si, payload).then(() => setEditingDoneId(null))}
+                          submitLabel="Unconfirm"
+                          title=""
+                        />
+                      </div>
+                    ) : (
+                      <button className="btn-edit-action" style={{ marginTop: 10 }} type="button" onClick={() => setEditingDoneId(si.sub_issue_id)}>
+                        <Icon name="undo" size={14} /> Unconfirm
+                      </button>
                     )
                   )}
 
@@ -6220,6 +8228,29 @@ function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, on
         </div>
 
         <div className="ticket-detail-actions">
+          {/* Nothing left to do on this ticket — whether because there was
+              never anything to fix, everything got Done, or the rest got
+              Deferred (e.g. an emergency: "not fixing this now, we need the
+              vehicle"). That last case matters most: deferring the LAST
+              open sub-issue makes this banner appear immediately, right when
+              Admin is most likely to otherwise forget the second click —
+              because until Close Ticket is pressed, the vehicle stays stuck
+              showing Under Maintenance even though nothing is actually being
+              worked on anymore. */}
+          {isAdmin && canClose && (
+            <div className="notice success" style={{ marginBottom: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Icon name="checkCircle" size={15} />
+                {subIssues.length === 0
+                  ? 'Inspection found no issues — nothing to repair.'
+                  : 'All sub-issues are resolved (fixed or deferred).'}
+                {' '}This ticket is ready to close
+                {progress.deferred > 0 ? ' — closing now returns the vehicle to Available.' : '.'}
+              </span>
+              <button className="primary-button" type="button" onClick={() => onCloseTicket(ticket, {})}>Close Ticket</button>
+            </div>
+          )}
+
           {/* The explanation and its action live in one visual unit, so the
               recommended next step is never separated from why it's offered. */}
           {isAdmin && canDecisionClose && !decisionClosing && (
@@ -6264,9 +8295,8 @@ function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, on
             {isAdmin && ticket.status === 'Cancelled' && onUncancel && (
               <button className="primary-button" type="button" onClick={() => onUncancel(ticket)}>Restore Ticket</button>
             )}
-            {isAdmin && canClose && (
-              <button className="primary-button" type="button" onClick={() => onCloseTicket(ticket, {})}>Close Ticket</button>
-            )}
+            {/* Close Ticket itself now lives in the green banner above when
+                canClose is true — no need to repeat the same button here. */}
             {isAdmin && ticket.status !== 'Closed' && ticket.status !== 'Cancelled' && (
               <button className="ghost-button" type="button" onClick={() => onCancel(ticket)}>Cancel Ticket</button>
             )}
@@ -6290,7 +8320,7 @@ function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, on
   );
 }
 
-function TicketProfilePage({ ticketId, role, userId, ticketLookups, onBack, onDeleteTicket, onRequestConfirmation, ticketAction: sendTicketAction }) {
+function TicketProfilePage({ ticketId, role, userId, ticketLookups, onBack, onDeleteTicket, onRequestConfirmation, onSendToExternalShop, ticketAction: sendTicketAction }) {
   const [ticket, setTicket] = useState(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
@@ -6313,7 +8343,6 @@ function TicketProfilePage({ ticketId, role, userId, ticketLookups, onBack, onDe
   if (notFound || !ticket) {
     return (
       <ModulePanel description="This ticket could not be found — it may have been deleted or archived.">
-        <button className="ghost-button btn-exit-action" type="button" onClick={onBack}><Icon name="arrowLeft" size={18} /></button>
       </ModulePanel>
     );
   }
@@ -6327,9 +8356,12 @@ function TicketProfilePage({ ticketId, role, userId, ticketLookups, onBack, onDe
       lookups={ticketLookups}
       onAssignMechanic={(t, subIssue, payload) => sendTicketAction(`/tickets/${t.ticket_id}/sub-issues/${subIssue.sub_issue_id}/assign-mechanic`, payload, 'Mechanic assigned — work order dispatched.').then(loadTicket)}
       onReassignMechanic={(t, subIssue, payload) => sendTicketAction(`/tickets/${t.ticket_id}/sub-issues/${subIssue.sub_issue_id}/reassign-mechanic`, payload, 'Work order reassigned.').then(loadTicket)}
+      onReassignCustodian={(t, payload) => sendTicketAction(`/tickets/${t.ticket_id}/reassign-custodian`, payload, 'Custodian reassigned.').then(loadTicket)}
       onConfirm={(t, subIssue, payload) => sendTicketAction(`/tickets/${t.ticket_id}/sub-issues/${subIssue.sub_issue_id}/confirm`, payload, 'Confirmation verdict submitted.').then(loadTicket)}
+      onReopenDone={(t, subIssue, payload) => sendTicketAction(`/tickets/${t.ticket_id}/sub-issues/${subIssue.sub_issue_id}/reopen-confirmed`, payload, 'Sub-issue reopened for re-verification.').then(loadTicket)}
       onAddSubIssue={(t, payload) => sendTicketAction(`/tickets/${t.ticket_id}/sub-issues`, payload, 'Sub-issue added.', 'post').then(loadTicket)}
       onDeferSubIssue={(t, subIssue, payload) => sendTicketAction(`/tickets/${t.ticket_id}/sub-issues/${subIssue.sub_issue_id}/defer`, payload, 'Sub-issue deferred — a follow-up issue report was opened.').then(loadTicket)}
+      onSendToExternalShop={onSendToExternalShop}
       onCloseTicket={(t, payload = {}) => sendTicketAction(`/tickets/${t.ticket_id}/close`, payload, payload.deferral_reason ? 'Ticket closed as a decision.' : 'Ticket closed.').then(loadTicket)}
       onCancel={(t) => sendTicketAction(`/tickets/${t.ticket_id}/cancel`, {}, 'Ticket cancelled.').then(loadTicket)}
       onUncancel={(t) => sendTicketAction(`/tickets/${t.ticket_id}/uncancel`, {}, 'Ticket restored.').then(loadTicket)}
@@ -6340,14 +8372,94 @@ function TicketProfilePage({ ticketId, role, userId, ticketLookups, onBack, onDe
   );
 }
 
-function NewTicketPage({ onBack, ticketLookups, prefilledTicketData, onCreateTicket }) {
+function NewTicketPage({ onBack, ticketLookups, prefilledTicketData, onCreateTicket, basePath }) {
+  // Stable across re-renders (only changes if prefilledTicketData itself
+  // changes) — resetting on every render would wipe out whatever the user
+  // already typed.
+  const initialTicketValues = useMemo(
+    () => ({ entry_mode: 'inspection', ...(prefilledTicketData ?? {}) }),
+    [prefilledTicketData]
+  );
+  const [liveValues, setLiveValues] = useState(initialTicketValues);
+  const [subIssueRows, setSubIssueRows] = useState(() => {
+    const seeded = (prefilledTicketData?.sub_issues_text ?? '').split('\n').map((s) => s.trim()).filter(Boolean);
+    return seeded.length ? seeded : [''];
+  });
+  const [submitting, setSubmitting] = useState(false);
+  const selectedVehicleId = liveValues.vehicle_id ?? null;
+  const [openTicketsOnVehicle, setOpenTicketsOnVehicle] = useState([]);
+  // Same reasoning as the open-tickets check above, for recurrence instead of
+  // duplicates: this used to only ever reach Admin in a notification sent
+  // AFTER the ticket was created — too late to change the decision. Checking
+  // it here means "this fault came back a 3rd time" is visible while Admin is
+  // still choosing, not after.
+  const [recurrence, setRecurrence] = useState(null);
+
+  useEffect(() => {
+    if (!selectedVehicleId) {
+      setOpenTicketsOnVehicle([]);
+      return;
+    }
+    let cancelled = false;
+    api.get(`/vehicles/${selectedVehicleId}/open-tickets`)
+      .then((response) => { if (!cancelled) setOpenTicketsOnVehicle(response.data); })
+      .catch(() => { if (!cancelled) setOpenTicketsOnVehicle([]); });
+    return () => { cancelled = true; };
+  }, [selectedVehicleId]);
+
+  useEffect(() => {
+    const title = (liveValues.ticket_title ?? '').trim();
+    if (!selectedVehicleId || !title) { setRecurrence(null); return; }
+    let cancelled = false;
+    api.get(`/vehicles/${selectedVehicleId}/recurrence`, { params: { fault_category: liveValues.fault_category || undefined, title } })
+      .then((r) => { if (!cancelled) setRecurrence(r.data); })
+      .catch(() => { if (!cancelled) setRecurrence(null); });
+    return () => { cancelled = true; };
+  }, [selectedVehicleId, liveValues.fault_category, liveValues.ticket_title]);
+
+  const setField = (name, value) => setLiveValues((v) => ({ ...v, [name]: value }));
+  const preDiagnosed = liveValues.entry_mode === 'prediagnosed';
+
+  // Same add/remove list pattern as Root Causes on the Inspect Ticket page —
+  // one consistent way to build a list of findings anywhere in the app,
+  // instead of a free-text "one per line" box.
+  const updateSubIssue = (index, value) => setSubIssueRows((rows) => rows.map((r, i) => (i === index ? value : r)));
+  const addSubIssueRow = () => setSubIssueRows((rows) => [...rows, '']);
+  const removeSubIssueRow = (index) => setSubIssueRows((rows) => rows.filter((_, i) => i !== index));
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setSubmitting(true);
+    try {
+      const out = {
+        vehicle_id: liveValues.vehicle_id,
+        assigned_custodian_id: liveValues.assigned_custodian_id,
+        ticket_title: liveValues.ticket_title,
+        fault_category: liveValues.fault_category || undefined,
+        ticket_description: liveValues.ticket_description,
+        priority: liveValues.priority,
+        entry_mode: liveValues.entry_mode,
+        issue_report_id: prefilledTicketData?.issue_report_id,
+      };
+      if (preDiagnosed) {
+        out.sub_issues = subIssueRows.map((t) => t.trim()).filter(Boolean).map((title) => ({ title, maintenance_type: null }));
+        out.down_since = liveValues.down_since || undefined;
+      }
+      await onCreateTicket(out);
+      onBack();
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const vehicleOptions = (ticketLookups.vehicles ?? []).filter((v) => v.status !== 'Inactive');
+  const custodianOptions = ticketLookups.custodians ?? [];
+  const faultCategoryOptions = ticketLookups.fault_categories ?? [];
+  const priorityOptions = ticketLookups.priorities ?? [];
+
   return (
-    <ModulePanel description="Create a new maintenance ticket and assign it to a custodian for inspection (Phase 1).">
-      <div className="vehicle-profile-header">
-        <button className="ghost-button btn-exit-action" type="button" onClick={onBack}><Icon name="arrowLeft" size={18} /></button>
-        <h3 className="ticket-detail-title" style={{ margin: 0 }}>Create Ticket</h3>
-      </div>
-      {prefilledTicketData && (
+    <ModulePanel description="Create a new maintenance ticket and assign it to a custodian.">
+      {prefilledTicketData?.issue_report_id && (
         <div className="info-callout" style={{ marginBottom: '16px', background: 'rgba(59, 130, 246, 0.1)', borderColor: '#3b82f6' }}>
           <span style={{ marginRight: '8px', color: '#3b82f6', display: 'inline-flex' }}><Icon name="link" size={16} /></span>
           <p className="module-description" style={{ color: '#3b82f6', margin: 0 }}>
@@ -6355,17 +8467,187 @@ function NewTicketPage({ onBack, ticketLookups, prefilledTicketData, onCreateTic
           </p>
         </div>
       )}
-      <SmartForm
-        fields={ticketCreateFields(ticketLookups)}
-        initialValues={prefilledTicketData ?? EMPTY_OBJ}
-        onCancel={onBack}
-        onSubmit={async (payload) => {
-          await onCreateTicket({ ...payload, issue_report_id: prefilledTicketData?.issue_report_id });
-          onBack();
-        }}
-        submitLabel="Create Ticket & Assign"
-        title=""
-      />
+      {/* Layer 2 duplicate-prevention aid — title-matching alone can't tell
+          "Brake Problem" and "Brakes Squeaking" are the same real issue, so
+          surface every OTHER open ticket on this vehicle and let the Admin
+          judge for themselves. Non-blocking — a vehicle can legitimately
+          have two different problems open at once. */}
+      {openTicketsOnVehicle.length > 0 && (
+        <div className="info-callout" style={{ marginBottom: '16px', background: 'rgba(245, 158, 11, 0.1)', borderColor: '#f59e0b' }}>
+          <span style={{ marginRight: '8px', color: '#b45309', display: 'inline-flex', flexShrink: 0 }}><Icon name="alert" size={16} /></span>
+          <div>
+            <p className="module-description" style={{ color: '#b45309', margin: '0 0 6px', fontWeight: 600 }}>
+              This vehicle already has {openTicketsOnVehicle.length} open ticket{openTicketsOnVehicle.length !== 1 ? 's' : ''} — check it isn't the same problem before creating a new one:
+            </p>
+            <ul style={{ margin: 0, paddingLeft: 18 }}>
+              {openTicketsOnVehicle.map((t) => (
+                <li key={t.ticket_id} style={{ fontSize: '0.85rem', color: '#92400e', display: 'flex', alignItems: 'center', gap: 8, listStyle: 'none', marginLeft: -18 }}>
+                  <span>&bull;</span>
+                  <span style={{ flex: 1 }}>#{t.ticket_id} "{t.ticket_title}" — {t.status}</span>
+                  {/* Opens in a new tab — the Admin is mid-way through this
+                      Create Ticket form and shouldn't lose it just to check
+                      whether this is the same problem. */}
+                  <a
+                    href={`${basePath}/tickets/${t.ticket_id}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ fontSize: '0.8rem', fontWeight: 600, color: '#b45309', textDecoration: 'underline', whiteSpace: 'nowrap' }}
+                  >
+                    View <Icon name="link" size={11} style={{ verticalAlign: 'middle' }} />
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
+
+      {recurrence && recurrence.count > 0 && (
+        <div className="info-callout" style={{ marginBottom: '16px', background: 'rgba(194, 65, 12, 0.1)', borderColor: '#c2410c' }}>
+          <span style={{ marginRight: '8px', color: '#c2410c', display: 'inline-flex', flexShrink: 0 }}><Icon name="undo" size={16} /></span>
+          <p className="module-description" style={{ color: '#c2410c', margin: 0 }}>
+            <strong>This is the {recurrence.count + 1}{['st', 'nd', 'rd'][recurrence.count] ?? 'th'} time</strong> this fault has come up on this vehicle in the last 90 days
+            {recurrence.last_occurred && (
+              <> — last fixed via {recurrence.last_type === 'record' ? 'Maintenance Record' : 'Ticket'} #{recurrence.last_id} on {formatDate(recurrence.last_occurred)}</>
+            )}
+            . Worth considering a deeper fix or a decommission review instead of another routine repair.
+          </p>
+        </div>
+      )}
+
+      {/* Hand-built (not the generic field-array SmartForm) so the layout can
+          be grouped into clear sections instead of one long vertical list of
+          full-width dropdowns — same reasoning as Inspect Ticket's own
+          hand-built form. Reuses the .smart-form input/label styling so
+          every field still looks consistent with the rest of the app. */}
+      <form className="smart-form ticket-create-form" onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+
+        {/* Entry mode comes first, not last — it decides what the rest of
+            the form even asks for, so it shouldn't be buried at the bottom. */}
+        <section className="veh-card">
+          <div className="veh-card-head"><Icon name="clipboard" size={16} /><h4>How Is This Being Reported?</h4></div>
+          <div style={{ padding: 18 }}>
+            <div className="entry-mode-toggle" role="radiogroup" aria-label="Entry mode">
+              <button
+                type="button"
+                role="radio"
+                aria-checked={!preDiagnosed}
+                className={!preDiagnosed ? 'primary-button' : 'ghost-button'}
+                onClick={() => setField('entry_mode', 'inspection')}
+              >
+                Needs Inspection
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={preDiagnosed}
+                className={preDiagnosed ? 'primary-button' : 'ghost-button'}
+                onClick={() => setField('entry_mode', 'prediagnosed')}
+              >
+                Pre-Diagnosed
+              </button>
+            </div>
+            <p className="muted" style={{ margin: '10px 0 0', fontSize: '0.82rem' }}>
+              {preDiagnosed
+                ? 'The problem is already known — this skips straight to a mechanic, no custodian inspection needed.'
+                : "Nobody has confirmed what's wrong yet — the assigned custodian will inspect the vehicle first."}
+            </p>
+          </div>
+        </section>
+
+        <section className="veh-card">
+          <div className="veh-card-head"><Icon name="vehicle" size={16} /><h4>Vehicle & Assignment</h4></div>
+          <div className="ticket-form-grid-2">
+            <label>
+              <span>Vehicle</span>
+              <select required value={liveValues.vehicle_id ?? ''} onChange={(e) => setField('vehicle_id', e.target.value)}>
+                <option value="">Select</option>
+                {vehicleOptions.map((v) => <option key={v.vehicle_id} value={v.vehicle_id}>{v.vehicle_name} ({v.plate_number})</option>)}
+              </select>
+            </label>
+            <label>
+              <span>Assign to Custodian (verifies the repair later)</span>
+              <select required value={liveValues.assigned_custodian_id ?? ''} onChange={(e) => setField('assigned_custodian_id', e.target.value)}>
+                <option value="">Select</option>
+                {custodianOptions.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </label>
+          </div>
+        </section>
+
+        <section className="veh-card">
+          <div className="veh-card-head"><Icon name="alert" size={16} /><h4>Issue Details</h4></div>
+          <div style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div className="ticket-form-grid-2" style={{ padding: 0 }}>
+              <label>
+                <span>Ticket Title (Main Issue)</span>
+                <input required type="text" value={liveValues.ticket_title ?? ''} onChange={(e) => setField('ticket_title', e.target.value)} />
+              </label>
+              <label>
+                <span>Fault Category</span>
+                <select value={liveValues.fault_category ?? ''} onChange={(e) => setField('fault_category', e.target.value)}>
+                  <option value="">Select</option>
+                  {faultCategoryOptions.map((f) => <option key={f} value={f}>{f}</option>)}
+                </select>
+              </label>
+            </div>
+            <label>
+              <span>Description / Details</span>
+              <textarea required rows={3} value={liveValues.ticket_description ?? ''} onChange={(e) => setField('ticket_description', e.target.value)} />
+            </label>
+            <label style={{ maxWidth: 260 }}>
+              <span>Priority</span>
+              <select required value={liveValues.priority ?? ''} onChange={(e) => setField('priority', e.target.value)}>
+                <option value="">Select</option>
+                {priorityOptions.map((p) => <option key={p} value={p}>{p}</option>)}
+              </select>
+            </label>
+          </div>
+        </section>
+
+        {preDiagnosed && (
+          <section className="veh-card">
+            <div className="veh-card-head"><Icon name="wrench" size={16} /><h4>Known Sub-Issues</h4></div>
+            <div style={{ padding: 18 }}>
+              <p className="muted" style={{ marginTop: 0, marginBottom: 14 }}>List each specific problem already found — a mechanic will be assigned to each one.</p>
+              {subIssueRows.map((title, index) => (
+                <div key={index} style={{ display: 'flex', gap: 8, marginBottom: 10, alignItems: 'center' }}>
+                  <span className="muted" style={{ flex: '0 0 20px', textAlign: 'right' }}>{index + 1}.</span>
+                  <input
+                    type="text"
+                    placeholder="e.g. Low coolant level"
+                    value={title}
+                    onChange={(e) => updateSubIssue(index, e.target.value)}
+                    style={{ flex: 1 }}
+                  />
+                  <button
+                    type="button"
+                    className="danger-button"
+                    onClick={() => removeSubIssueRow(index)}
+                    disabled={subIssueRows.length === 1}
+                    title="Remove sub-issue"
+                    aria-label="Remove sub-issue"
+                    style={{ padding: '8px 12px' }}
+                  >
+                    <Icon name="close" size={14} />
+                  </button>
+                </div>
+              ))}
+              <button type="button" className="ghost-button" onClick={addSubIssueRow} style={{ marginTop: 4, marginBottom: 18 }}><Icon name="clipboard" size={14} /> Add Another Sub-Issue</button>
+
+              <label style={{ maxWidth: 320 }}>
+                <span>Vehicle Down Since (optional)</span>
+                <input type="datetime-local" value={liveValues.down_since ?? ''} onChange={(e) => setField('down_since', e.target.value)} />
+              </label>
+            </div>
+          </section>
+        )}
+
+        <div className="form-actions">
+          <button className="ghost-button btn-exit-action" onClick={onBack} type="button">Cancel</button>
+          <button className="primary-button" type="submit" disabled={submitting}>{preDiagnosed ? 'Create Pre-Diagnosed Ticket' : 'Create Ticket & Assign'}</button>
+        </div>
+      </form>
     </ModulePanel>
   );
 }
@@ -6538,10 +8820,23 @@ function ReadinessCheckForm({ vehicle, onCancel, onSubmit }) {
   const [results, setResults] = useState(() => items.map((item) => ({ item, passed: null })));
   const [notes, setNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [newItemInput, setNewItemInput] = useState('');
 
-  const allAnswered = results.every((r) => r.passed !== null);
+  const allAnswered = results.length > 0 && results.every((r) => r.passed !== null);
   const anyFailed = results.some((r) => r.passed === false);
+  const allOk = results.length > 0 && results.every((r) => r.passed === true);
   const setResult = (i, passed) => setResults((rs) => rs.map((r, idx) => (idx === i ? { ...r, passed } : r)));
+  // Most checks are routine passes — checking each item individually is
+  // needless friction. This bulk-marks everything OK in one click; any item
+  // that actually failed just gets flipped to Fail afterward.
+  const toggleAllOk = (checked) => setResults((rs) => rs.map((r) => ({ ...r, passed: checked ? true : null })));
+  const addItem = () => {
+    if (newItemInput.trim()) {
+      setResults((rs) => [...rs, { item: newItemInput.trim(), passed: null }]);
+      setNewItemInput('');
+    }
+  };
+  const removeItem = (i) => setResults((rs) => rs.filter((_, idx) => idx !== i));
 
   const submit = async () => {
     if (!allAnswered || submitting) return;
@@ -6558,16 +8853,45 @@ function ReadinessCheckForm({ vehicle, onCancel, onSubmit }) {
       <p className="muted" style={{ margin: '0 0 12px', fontSize: '0.85rem' }}>
         Physically confirm the vehicle is ready to respond right now — fuelled, equipped, and working. Any failed item marks it NOT ready.
       </p>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', marginBottom: 8, borderRadius: 8, background: '#eff6ff', border: '1px solid #bfdbfe', fontSize: '0.83rem', fontWeight: 600, color: '#1e40af', cursor: 'pointer' }}>
+        <input type="checkbox" checked={allOk} onChange={(e) => toggleAllOk(e.target.checked)} style={{ width: 16, height: 16, cursor: 'pointer' }} />
+        Mark all as OK
+      </label>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {results.map((r, i) => (
           <div key={r.item} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '8px 10px', background: '#f8fafc', borderRadius: 8, border: '1px solid #e2e8f0' }}>
-            <span style={{ fontSize: '0.85rem' }}>{r.item}</span>
+            <span style={{ fontSize: '0.85rem', flex: 1 }}>{r.item}</span>
             <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
               <button type="button" onClick={() => setResult(i, true)} style={{ padding: '4px 12px', borderRadius: 6, fontSize: '0.78rem', fontWeight: 600, cursor: 'pointer', border: `1px solid ${r.passed === true ? '#16a34a' : '#cbd5e1'}`, background: r.passed === true ? '#16a34a' : '#fff', color: r.passed === true ? '#fff' : '#64748b' }}>OK</button>
               <button type="button" onClick={() => setResult(i, false)} style={{ padding: '4px 12px', borderRadius: 6, fontSize: '0.78rem', fontWeight: 600, cursor: 'pointer', border: `1px solid ${r.passed === false ? '#dc2626' : '#cbd5e1'}`, background: r.passed === false ? '#dc2626' : '#fff', color: r.passed === false ? '#fff' : '#64748b' }}>Fail</button>
+              <button
+                type="button"
+                onClick={() => removeItem(i)}
+                title="Remove this item"
+                style={{ padding: '4px 8px', borderRadius: 6, fontSize: '0.78rem', fontWeight: 600, cursor: 'pointer', border: '1px solid #fca5a5', background: '#fef2f2', color: '#dc2626' }}
+              >
+                ✕
+              </button>
             </div>
           </div>
         ))}
+        <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+          <input
+            type="text"
+            value={newItemInput}
+            onChange={(e) => setNewItemInput(e.target.value)}
+            onKeyPress={(e) => e.key === 'Enter' && addItem()}
+            placeholder="Add a custom checklist item..."
+            style={{ flex: 1, padding: '8px 10px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: '0.85rem', fontFamily: 'inherit' }}
+          />
+          <button
+            type="button"
+            onClick={addItem}
+            style={{ padding: '8px 16px', borderRadius: 6, fontSize: '0.78rem', fontWeight: 600, cursor: 'pointer', border: '1px solid #2563eb', background: '#2563eb', color: '#fff' }}
+          >
+            + Add Item
+          </button>
+        </div>
       </div>
       {allAnswered && (
         <div style={{ marginTop: 12, padding: '8px 12px', borderRadius: 8, fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: 8, background: anyFailed ? '#fef2f2' : '#ecfdf5', color: anyFailed ? '#991b1b' : '#065f46', border: `1px solid ${anyFailed ? '#fecaca' : '#a7f3d0'}` }}>
@@ -6589,7 +8913,7 @@ function ReadinessCheckForm({ vehicle, onCancel, onSubmit }) {
   );
 }
 
-function VehicleProfilePage({ vehicleId, lookups, allHubs, canManage = false, canCheckReadiness = false, onBack, setNotice, onSaved, onViewTicket, onRequestConfirmation }) {
+function VehicleProfilePage({ vehicleId, lookups, allHubs, canManage = false, canCheckReadiness = false, setNotice, onSaved, onViewTicket, onRequestConfirmation }) {
   const location = useLocation();
   const [editing, setEditing] = useState(new URLSearchParams(location.search).get('tab') === 'edit');
   const [tabData, setTabData] = useState({});
@@ -6674,7 +8998,6 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, canManage = false, ca
   if (!vehicle) {
     return (
       <ModulePanel description="This vehicle could not be found — it may have been archived.">
-        <button className="ghost-button btn-exit-action" type="button" onClick={onBack}><Icon name="arrowLeft" size={18} /></button>
       </ModulePanel>
     );
   }
@@ -6728,7 +9051,6 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, canManage = false, ca
   return (
     <ModulePanel description="Full profile, maintenance, and tickets for this vehicle.">
       <div className="vehicle-profile-header">
-        <button className="ghost-button btn-exit-action" type="button" onClick={onBack}><Icon name="arrowLeft" size={18} /></button>
         <div className="vehicle-profile-identity">
           <span className="ticket-detail-id">{vehicle.plate_number}</span>
           <h3 className="ticket-detail-title">{vehicle.vehicle_name}</h3>
@@ -6898,6 +9220,15 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, canManage = false, ca
                 <div className="veh-stat"><span>{reliability.avg_days_out ?? '—'}</span><small>Avg Days Out</small></div>
                 <div className="veh-stat"><span>₱{Number(reliability.total_spend ?? 0).toLocaleString()}</span><small>Lifetime Repair Spend</small></div>
               </div>
+              {/* #10 — only renders when the vehicle has an acquisition cost on
+                  file; otherwise there's nothing to compare lifetime spend to. */}
+              {reliability.cost_ratio != null && (
+                <div style={{ margin: '12px 0 0', padding: '10px 12px', borderRadius: 10, background: reliability.decommission_signal ? '#fef2f2' : '#f8fafc', border: `1px solid ${reliability.decommission_signal ? '#fecaca' : '#e2e8f0'}`, color: reliability.decommission_signal ? '#991b1b' : '#334155', display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600, fontSize: '0.85rem' }}>
+                  <Icon name={reliability.decommission_signal ? 'alert' : 'checkCircle'} size={16} />
+                  {(reliability.cost_ratio * 100).toFixed(0)}% of acquisition cost (₱{Number(reliability.acquisition_cost).toLocaleString()}) spent on repairs
+                  {reliability.decommission_signal ? ' — consider a decommission review.' : '.'}
+                </div>
+              )}
               <p className="veh-hint">A vehicle that keeps failing is a reliability signal — for an emergency unit, that's a safety concern, not just a cost.</p>
             </section>
           )}
@@ -7083,7 +9414,7 @@ function CustodianInspectionModule({
                 {
                   label: 'Action',
                   render: (r) => r.status === 'Open'
-                    ? <button className="btn-edit-action" type="button" onClick={() => onOpenInspect(r)} title="Inspect" aria-label="Inspect"><Icon name="search" size={14} /> Inspect</button>
+                    ? <button className="btn-edit-action icon-btn" type="button" onClick={() => onOpenInspect(r)} title="Inspect" aria-label="Inspect"><Icon name="search" size={14} /></button>
                     : <span className="muted">Submitted</span>
                 },
               ]}
@@ -7106,7 +9437,6 @@ function InspectTicketPage({ ticket, onBack, onSubmit, ticketLookups }) {
   if (!ticket) {
     return (
       <ModulePanel description="This inspection assignment could not be found — it may no longer be assigned to you.">
-        <button className="ghost-button btn-exit-action" type="button" onClick={onBack}><Icon name="arrowLeft" size={18} /></button>
       </ModulePanel>
     );
   }
@@ -7129,7 +9459,6 @@ function InspectTicketPage({ ticket, onBack, onSubmit, ticketLookups }) {
   return (
     <ModulePanel description="Review the vehicle in person and submit your physical inspection findings.">
       <div className="vehicle-profile-header">
-        <button className="ghost-button btn-exit-action" type="button" onClick={onBack}><Icon name="arrowLeft" size={18} /></button>
         <h3 className="ticket-detail-title" style={{ margin: 0 }}>Inspect Ticket #{ticket.ticket_id}</h3>
       </div>
       {/* One continuous form — Cancel/Submit sit at the very end, after every
@@ -7207,6 +9536,7 @@ function InspectTicketPage({ ticket, onBack, onSubmit, ticketLookups }) {
 // =========================================================================
 
 function CustodianVerificationModule({
+  user,
   tickets,
   editTarget,
   setEditTarget,
@@ -7273,12 +9603,33 @@ function CustodianVerificationModule({
                   ) : '—'
                 },
                 { label: 'Parts Used', render: (r) => <PartsTags value={r.parts_used} /> },
-                { label: 'Verdict', render: (r) => r.verification_verdict ? <TicketStatusBadge value={r.verification_verdict} /> : <span className="muted">—</span> },
+                {
+                  label: 'Status',
+                  render: (r) => {
+                    if (r.reopened_at) {
+                      return (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', background: '#fef3c7', border: '1px solid #fcd34d', color: '#92400e', borderRadius: 6, fontSize: '0.8rem', fontWeight: 600 }} title={`Reopened by ${r.reopened_by?.name || 'Admin'}`}>
+                          <Icon name="alert" size={12} /> Reopened
+                        </span>
+                      );
+                    }
+                    return r.verification_verdict ? <TicketStatusBadge value={r.verification_verdict} /> : <span className="muted">—</span>;
+                  }
+                },
                 {
                   label: 'Action',
-                  render: (r) => r.status === 'For Inspection'
-                    ? <button className="btn-edit-action" type="button" onClick={() => setEditTarget(r)} title="Verify Repair" aria-label="Verify Repair"><Icon name="checkCircle" size={14} /> Verify</button>
-                    : <span className="muted">Submitted</span>
+                  render: (r) => {
+                    if (r.status === 'For Inspection') {
+                      const assignedId = typeof r.verification_assigned_to === 'object' ? r.verification_assigned_to?.id : r.verification_assigned_to;
+                      const isAssignedToUser = assignedId === user.id || String(assignedId) === String(user.id);
+                      if (isAssignedToUser) {
+                        return <button className="btn-edit-action icon-btn" type="button" onClick={() => setEditTarget(r)} title="Verify Repair" aria-label="Verify Repair"><Icon name="checkCircle" size={14} /></button>;
+                      }
+                      const assignedName = (typeof r.verification_assigned_to === 'object' ? r.verification_assigned_to?.name : null) || 'another custodian';
+                      return <span className="muted" title={`Assigned to ${assignedName}`}>Assigned to {assignedName}</span>;
+                    }
+                    return <span className="muted">Submitted</span>;
+                  }
                 },
               ]}
               rows={tickets}
@@ -7441,7 +9792,7 @@ function MechanicWorkOrderModule({
                 {
                   label: 'Action',
                   render: (r) => r.status === 'Under Repair'
-                    ? <button className="btn-edit-action" type="button" onClick={() => onOpenLogRepairs(r)} title="Log Repairs" aria-label="Log Repairs"><Icon name="wrench" size={14} /> Log Repairs</button>
+                    ? <button className="btn-edit-action icon-btn" type="button" onClick={() => onOpenLogRepairs(r)} title="Log Repairs" aria-label="Log Repairs"><Icon name="wrench" size={14} /></button>
                     : <span className="muted">Submitted</span>
                 },
               ]}
@@ -7466,7 +9817,6 @@ function LogRepairsPage({ ticket, onBack, onSubmit }) {
   if (!ticket) {
     return (
       <ModulePanel description="This work order could not be found — it may no longer be assigned to you.">
-        <button className="ghost-button btn-exit-action" type="button" onClick={onBack}><Icon name="arrowLeft" size={18} /></button>
       </ModulePanel>
     );
   }
@@ -7497,7 +9847,6 @@ function LogRepairsPage({ ticket, onBack, onSubmit }) {
   return (
     <ModulePanel description="Execute the repair and submit your logs to send this ticket for Custodian inspection.">
       <div className="vehicle-profile-header">
-        <button className="ghost-button btn-exit-action" type="button" onClick={onBack}><Icon name="arrowLeft" size={18} /></button>
         <h3 className="ticket-detail-title" style={{ margin: 0 }}>Log Repairs — {ticket.title}</h3>
       </div>
       <p className="muted" style={{ marginTop: -8, marginBottom: 16 }}>Main Issue: <strong>{ticket.ticket_title}</strong> (Ticket #{ticket.ticket_id}) — {ticket.maintenance_type}</p>

@@ -16,6 +16,7 @@ class Vehicle extends Model
         'model',
         'year_model',
         'capacity',
+        'acquisition_cost',
         'fuel_type',
         'hull_material',
         'engine_type',

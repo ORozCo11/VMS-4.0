@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Controllers\Concerns\ChecksRecurrence;
 use App\Http\Controllers\Concerns\UploadsImages;
 use App\Models\ActivityLog;
 use App\Models\MaintenanceTicket;
@@ -41,8 +42,23 @@ use Illuminate\Validation\Rule;
 class TicketController extends Controller
 {
     use UploadsImages;
+    use ChecksRecurrence;
 
     private array $priorities       = ['Low', 'Medium', 'High', 'Critical'];
+    // Standardized fault catalog (mirrors FleetController's issue types) so a
+    // ticket's fault_category groups reliably for recurrence (#9) and cost (#10).
+    private array $faultCategories  = [
+        'Engine Problem',
+        'Brake Problem',
+        'Tire Problem',
+        'Battery Problem',
+        'Electrical Problem',
+        'Fuel Problem',
+        'Body Damage',
+        'Overheating',
+        'Lights / Siren Problem',
+        'Other',
+    ];
     private array $maintenanceTypes = [
         'General Inspection',
         'Preventive Maintenance',
@@ -113,10 +129,29 @@ class TicketController extends Controller
             'custodians'            => User::havingRole('Custodian')->orderBy('name')->get(['id', 'name', 'email']),
             'maintenance_personnel' => User::havingRole('Maintenance Personnel')->orderBy('name')->get(['id', 'name', 'email']),
             'priorities'            => $this->priorities,
+            'fault_categories'      => $this->faultCategories,
             'maintenance_types'     => $this->maintenanceTypes,
             'ticket_statuses'       => ['Open', 'Active', 'Closed', 'Cancelled'],
             'sub_issue_statuses'    => ['Open', 'Under Repair', 'For Inspection', 'For Confirmation', 'Done', 'Deferred'],
         ]);
+    }
+
+    /**
+     * Layer 2 duplicate-prevention aid — every currently open (non-Closed/
+     * Cancelled) ticket on a vehicle, regardless of title wording. Title
+     * matching alone can never catch "Brake Problem" vs "Brakes Squeaking"
+     * being the same real Main Issue, so the Create Ticket form calls this
+     * as soon as a vehicle is picked and shows a non-blocking warning
+     * listing whatever comes back — letting the Admin catch it visually.
+     */
+    public function openTicketsForVehicle(Request $request, Vehicle $vehicle)
+    {
+        $this->requireRole($request, ['Admin']);
+
+        return MaintenanceTicket::where('vehicle_id', $vehicle->vehicle_id)
+            ->whereNotIn('status', ['Closed', 'Cancelled'])
+            ->orderByDesc('ticket_id')
+            ->get(['ticket_id', 'ticket_title', 'status', 'priority']);
     }
 
     public function archives(Request $request)
@@ -150,10 +185,23 @@ class TicketController extends Controller
             'vehicle_id'            => ['required', 'exists:vehicles,vehicle_id'],
             'issue_report_id'       => ['nullable', 'exists:vehicle_issue_reports,issue_report_id'],
             'ticket_title'          => ['required', 'string', 'max:255'],
+            'fault_category'        => ['nullable', Rule::in($this->faultCategories)],
             'ticket_description'    => ['required', 'string'],
             'priority'              => ['required', Rule::in($this->priorities)],
             'assigned_custodian_id' => ['required', 'exists:users,id'],
+            // #3 — when the vehicle actually became unavailable (may be backdated).
+            'down_since'            => ['nullable', 'date'],
+            // #1 — entry mode. 'inspection' = today's flow (Custodian diagnoses
+            // first). 'prediagnosed' = the problem is already known, so the
+            // ticket is born Active with its sub-issues and skips inspection.
+            'entry_mode'            => ['nullable', Rule::in(['inspection', 'prediagnosed'])],
+            'sub_issues'                    => ['required_if:entry_mode,prediagnosed', 'array', 'min:1'],
+            'sub_issues.*.title'            => ['required_with:sub_issues', 'string', 'max:255'],
+            'sub_issues.*.maintenance_type' => ['nullable', Rule::in($this->maintenanceTypes)],
         ]);
+
+        $entryMode = $data['entry_mode'] ?? 'inspection';
+        $preDiagnosed = $entryMode === 'prediagnosed';
 
         // A retired/archived vehicle is out of the fleet — no new work on it.
         $vehicle = Vehicle::findOrFail($data['vehicle_id']);
@@ -166,11 +214,13 @@ class TicketController extends Controller
         // A brand-new ticket is only blocked when an open ticket for the
         // SAME Main Issue already exists on this vehicle — a different
         // Main Issue (or a Closed/Cancelled ticket for the same one) is
-        // always allowed to open as its own ticket.
+        // always allowed to open as its own ticket. Compared after
+        // normalizing away any "[Issue #N] " prefix (see normalizeTicketTitle).
+        $normalizedIncomingTitle = $this->normalizeTicketTitle($data['ticket_title']);
         $duplicateMainIssue = MaintenanceTicket::where('vehicle_id', $data['vehicle_id'])
-            ->whereRaw('LOWER(TRIM(ticket_title)) = ?', [mb_strtolower(trim($data['ticket_title']))])
             ->whereNotIn('status', ['Closed', 'Cancelled'])
-            ->first();
+            ->get(['ticket_id', 'ticket_title'])
+            ->first(fn ($t) => $this->normalizeTicketTitle($t->ticket_title) === $normalizedIncomingTitle);
 
         if ($duplicateMainIssue) {
             return response()->json([
@@ -181,19 +231,23 @@ class TicketController extends Controller
         $custodian = User::findOrFail($data['assigned_custodian_id']);
         abort_unless($custodian->hasRole('Custodian'), 422, 'The selected user is not a Custodian.');
 
-        // Gap 3 — recurrence: how many times this same Main Issue was already
-        // fixed-and-closed on this vehicle in the last 90 days. Stamped now so
-        // a chronic unit surfaces as "Nth time" instead of hiding. Filtered on
-        // when it was CLOSED (fixed), not when it was originally opened — a
-        // ticket opened 120 days ago but only closed last week was just fixed
-        // recently and should still count.
-        $recurrence = MaintenanceTicket::where('vehicle_id', $data['vehicle_id'])
-            ->where('status', 'Closed')
-            ->whereRaw('LOWER(TRIM(ticket_title)) = ?', [mb_strtolower(trim($data['ticket_title']))])
-            ->where('closed_at', '>=', now()->subDays(90))
-            ->count();
+        // #8 — a ticket's fault category defaults to the linked issue report's
+        // standardized issue type when the Admin didn't pick one, so recurrence
+        // and cost grouping have a reliable category to key on.
+        $faultCategory = $data['fault_category'] ?? null;
+        if (!$faultCategory && !empty($data['issue_report_id'])) {
+            $faultCategory = optional(VehicleIssueReport::find($data['issue_report_id']))->issue_type;
+        }
 
-        $ticket = DB::transaction(function () use ($data, $request, $recurrence) {
+        // #9 — recurrence: how many times this same fault was already
+        // fixed on this vehicle in the last 90 days — via a Closed ticket OR
+        // a Completed Maintenance Record (a roadside/external-shop fix would
+        // otherwise be invisible here). Keyed on fault_category when
+        // available, else normalized title (best-effort).
+        $recurrenceInfo = $this->checkRecurrence((int) $data['vehicle_id'], $faultCategory, $data['ticket_title']);
+        $recurrence = $recurrenceInfo['count'];
+
+        $ticket = DB::transaction(function () use ($data, $request, $recurrence, $recurrenceInfo, $preDiagnosed, $faultCategory) {
             $vehicle = Vehicle::findOrFail($data['vehicle_id']);
 
             $ticket = MaintenanceTicket::create([
@@ -201,13 +255,48 @@ class TicketController extends Controller
                 'issue_report_id'       => $data['issue_report_id'] ?? null,
                 'created_by'            => $request->user()->id,
                 'ticket_title'          => $data['ticket_title'],
+                'fault_category'        => $faultCategory,
                 'ticket_description'    => $data['ticket_description'],
                 'priority'              => $data['priority'],
-                'status'                => 'Open',
+                // #1 — pre-diagnosed tickets are born Active (inspection skipped);
+                // inspection-mode tickets start Open awaiting the Custodian.
+                'status'                => $preDiagnosed ? 'Active' : 'Open',
+                // #3 — pre-diagnosed means the vehicle is already down; default
+                // the downtime clock to now unless a real (possibly backdated)
+                // time was supplied.
+                'down_since'            => $data['down_since'] ?? ($preDiagnosed ? now() : null),
                 'assigned_custodian_id' => $data['assigned_custodian_id'],
                 'assigned_at'           => now(),
                 'recurrence_count'      => $recurrence,
+                // #9 — the most recent prior occurrence, so "it broke again"
+                // is a clickable link, not just a count. This FK only ever
+                // points at another TICKET — when the last occurrence was a
+                // Maintenance Record instead, there's nothing to link here,
+                // but recurrence_count above still reflects it.
+                'recurrence_of_ticket_id' => $recurrenceInfo['last_type'] === 'ticket' ? $recurrenceInfo['last_id'] : null,
             ]);
+
+            if ($preDiagnosed) {
+                // The problem is already known: record the sub-issues now and
+                // stamp a skipped-inspection so the audit trail is honest.
+                foreach ($data['sub_issues'] as $sub) {
+                    TicketSubIssue::create([
+                        'ticket_id'        => $ticket->ticket_id,
+                        'created_by'       => $request->user()->id,
+                        'title'            => $sub['title'],
+                        'maintenance_type' => $sub['maintenance_type'] ?? null,
+                        'status'           => 'Open',
+                    ]);
+                }
+                $ticket->update([
+                    'inspection_result' => 'Needs Maintenance',
+                    'inspection_notes'  => 'Pre-diagnosed at creation — inspection skipped (issue already known).',
+                    'inspected_by'      => $request->user()->id,
+                    'inspected_at'      => now(),
+                ]);
+                // Known problem => the vehicle is out of service immediately.
+                $vehicle->update(['condition' => 'Needs Repair', 'status' => 'Under Maintenance']);
+            }
 
             if (!empty($data['issue_report_id'])) {
                 VehicleIssueReport::where('issue_report_id', $data['issue_report_id'])->update([
@@ -215,15 +304,44 @@ class TicketController extends Controller
                 ]);
             }
 
-            $this->log($request, 'Create Ticket', "Ticket #{$ticket->ticket_id} ({$data['ticket_title']}) created for {$vehicle->vehicle_name} and assigned to custodian.");
+            $modeLabel = $preDiagnosed ? 'pre-diagnosed (inspection skipped)' : 'assigned to custodian for inspection';
+            $this->log($request, 'Create Ticket', "Ticket #{$ticket->ticket_id} ({$data['ticket_title']}) created for {$vehicle->vehicle_name} — {$modeLabel}.");
 
-            $this->notifyUser(
-                $ticket->assigned_custodian_id,
-                'New Inspection Assignment',
-                "Ticket #{$ticket->ticket_id} for {$vehicle->vehicle_name} has been assigned to you for physical inspection.",
-                'inspection_assigned',
-                $ticket->ticket_id
-            );
+            if ($preDiagnosed) {
+                $this->notifyAdmins(
+                    'Pre-Diagnosed Ticket Ready for Assignment',
+                    "Ticket #{$ticket->ticket_id} ({$data['ticket_title']}) on {$vehicle->vehicle_name} is pre-diagnosed and ready — assign a mechanic to each sub-issue.",
+                    'ticket_prediagnosed',
+                    $ticket->ticket_id
+                );
+            } else {
+                $this->notifyUser(
+                    $ticket->assigned_custodian_id,
+                    'New Inspection Assignment',
+                    "Ticket #{$ticket->ticket_id} for {$vehicle->vehicle_name} has been assigned to you for physical inspection.",
+                    'inspection_assigned',
+                    $ticket->ticket_id
+                );
+            }
+
+            // #9 — a repeat failure is worth flagging loudly, not hiding in a counter.
+            if ($recurrence > 0) {
+                $lastFixSource = $recurrenceInfo['last_type'] === 'record'
+                    ? "Maintenance Record #{$recurrenceInfo['last_id']}"
+                    : "Ticket #{$recurrenceInfo['last_id']}";
+                // Was hardcoded "th" regardless of number ("3th time") — fixed
+                // to the same ordinal-suffix pattern used in the ticket detail
+                // page's own "Recurring — Nth time" badge.
+                // Indexed by $recurrence directly (not -1) — same convention as
+                // the ticket detail page's ['st','nd','rd'][ticket.recurrence_count].
+                $ordinal = ['st', 'nd', 'rd'][$recurrence] ?? 'th';
+                $this->notifyAdmins(
+                    'Recurring Fault Detected',
+                    "This is the " . ($recurrence + 1) . "{$ordinal} time \"" . ($faultCategory ?? $data['ticket_title']) . "\" has been logged on {$vehicle->vehicle_name} in 90 days — last fixed via {$lastFixSource} (Ticket #{$ticket->ticket_id}). Consider a deeper fix or decommission review.",
+                    'recurring_fault',
+                    $ticket->ticket_id
+                );
+            }
 
             return $ticket;
         });
@@ -465,6 +583,96 @@ class TicketController extends Controller
     }
 
     // ===================================================================
+    // Admin: Reassign the ticket's Custodian
+    // ===================================================================
+
+    /**
+     * The Custodian chosen at creation is hard-locked as BOTH the inspector
+     * (submitInspection) and the verifier (verifyRepair, via each sub-issue's
+     * verification_assigned_to). Without this endpoint, that person going on
+     * leave or leaving the barangay strands the ticket permanently: nobody
+     * else can inspect it, nobody else can verify its repairs, and a ticket
+     * still sitting at Open can't even be closed (closeTicket requires
+     * Active) — the only exits were cancel or delete.
+     *
+     * Deliberately narrow, mirroring reassignMechanic(): this changes WHO is
+     * responsible and nothing else. It cannot touch status, verdicts, costs,
+     * or sub-issue content, so it can't be used to rewrite history.
+     */
+    public function reassignCustodian(Request $request, MaintenanceTicket $ticket)
+    {
+        $this->requireRole($request, ['Admin']);
+
+        // Allowed while Open (stuck awaiting inspection — the main case this
+        // exists for) or Active. A finished ticket is left alone: reassigning
+        // responsibility for completed work would only muddy the audit trail.
+        abort_if(
+            in_array($ticket->status, ['Closed', 'Cancelled'], true),
+            422,
+            "A {$ticket->status} ticket's Custodian cannot be reassigned."
+        );
+
+        $data = $request->validate([
+            'assigned_custodian_id' => ['required', 'exists:users,id'],
+            'reassign_reason'       => ['required', 'string'],
+        ], [
+            'reassign_reason.required' => 'A reason is required so the audit trail shows why responsibility moved.',
+        ]);
+
+        $newCustodian = User::findOrFail($data['assigned_custodian_id']);
+        abort_unless($newCustodian->hasRole('Custodian'), 422, 'The selected user is not a Custodian.');
+        abort_if($newCustodian->id === $ticket->assigned_custodian_id, 422, 'That Custodian is already assigned to this ticket.');
+
+        $previousCustodianId = $ticket->assigned_custodian_id;
+
+        DB::transaction(function () use ($ticket, $data, $request, $newCustodian, $previousCustodianId) {
+            $previousName = User::find($previousCustodianId)?->name ?? 'the previous Custodian';
+
+            $ticket->update(['assigned_custodian_id' => $newCustodian->id]);
+
+            // Sub-issues already handed off for verification have the OLD
+            // custodian stamped on them (logRepairs copies it at that moment),
+            // and verifyRepair matches on that stamp — so without this cascade
+            // the reassignment wouldn't actually unstick those verifications.
+            // Sub-issues not yet at that stage need nothing: they'll pick up
+            // the new custodian from the ticket when they reach logRepairs.
+            $cascaded = $ticket->subIssues()
+                ->where('status', 'For Inspection')
+                ->update(['verification_assigned_to' => $newCustodian->id]);
+
+            $vehicleName = $ticket->vehicle->vehicle_name;
+            $this->log(
+                $request,
+                'Custodian Reassigned',
+                "Ticket #{$ticket->ticket_id} — Custodian reassigned from {$previousName} to {$newCustodian->name}."
+                . ($cascaded > 0 ? " {$cascaded} pending verification(s) moved with it." : '')
+                . " Reason: {$data['reassign_reason']}"
+            );
+
+            $this->notifyUser(
+                $newCustodian->id,
+                'Ticket Reassigned to You',
+                "You are now the Custodian for Ticket #{$ticket->ticket_id} ({$vehicleName})."
+                . ($cascaded > 0 ? " {$cascaded} repair(s) are awaiting your verification." : ''),
+                'ticket_reassigned',
+                $ticket->ticket_id
+            );
+
+            if ($previousCustodianId) {
+                $this->notifyUser(
+                    $previousCustodianId,
+                    'Ticket Reassigned',
+                    "Ticket #{$ticket->ticket_id} ({$vehicleName}) was reassigned to {$newCustodian->name}.",
+                    'ticket_reassigned',
+                    $ticket->ticket_id
+                );
+            }
+        });
+
+        return $ticket->fresh($this->eagerLoads());
+    }
+
+    // ===================================================================
     // PHASE 3 — Mechanic: Log Repair on a Sub-Issue
     // ===================================================================
 
@@ -491,15 +699,16 @@ class TicketController extends Controller
             $existingLogs = $subIssue->repair_logs ? $subIssue->repair_logs . "\n\n" : '';
 
             $subIssue->update([
-                'status'              => 'For Inspection',
-                'repair_logs'         => $existingLogs . '[' . now()->format('Y-m-d H:i') . '] ' . $data['repair_logs'],
-                'parts_used'          => $data['parts_used'] ?? $subIssue->parts_used,
-                'attachment_url'      => $request->hasFile('photo')
+                'status'                    => 'For Inspection',
+                'verification_assigned_to'  => $ticket->assigned_custodian_id,
+                'repair_logs'               => $existingLogs . '[' . now()->format('Y-m-d H:i') . '] ' . $data['repair_logs'],
+                'parts_used'                => $data['parts_used'] ?? $subIssue->parts_used,
+                'attachment_url'            => $request->hasFile('photo')
                     ? $this->storeUploadedImage($request->file('photo'), 'repair-attachments')
                     : $subIssue->attachment_url,
-                'repair_started_at'   => $data['repair_started_at'] ?? $subIssue->repair_started_at,
-                'repair_completed_at' => $data['repair_completed_at'] ?? null,
-                'maintenance_cost'    => $data['maintenance_cost'] ?? $subIssue->maintenance_cost,
+                'repair_started_at'         => $data['repair_started_at'] ?? $subIssue->repair_started_at,
+                'repair_completed_at'       => $data['repair_completed_at'] ?? null,
+                'maintenance_cost'          => $data['maintenance_cost'] ?? $subIssue->maintenance_cost,
             ]);
 
             if (array_key_exists('estimated_return_date', $data) && $data['estimated_return_date']) {
@@ -531,7 +740,7 @@ class TicketController extends Controller
         $this->requireRole($request, ['Custodian']);
         $this->assertBelongsToTicket($ticket, $subIssue);
 
-        abort_unless($ticket->assigned_custodian_id === $request->user()->id, 403, 'This ticket is not assigned to you.');
+        abort_unless($subIssue->verification_assigned_to === $request->user()->id, 403, "This verification is assigned to {$subIssue->verificationAssignedTo?->name}.");
         abort_unless($ticket->status === 'Active', 422, "Verification can only be submitted while the ticket is Active. Current status: {$ticket->status}.");
         abort_unless($subIssue->status === 'For Inspection', 422, "Verification can only be submitted when the sub-issue is For Inspection. Current: {$subIssue->status}.");
 
@@ -707,6 +916,52 @@ class TicketController extends Controller
                     $ticket->ticket_id
                 );
             }
+        });
+
+        return $subIssue->fresh();
+    }
+
+    public function reopenConfirmedSubIssue(Request $request, MaintenanceTicket $ticket, TicketSubIssue $subIssue)
+    {
+        $this->requireRole($request, ['Admin']);
+        $this->assertBelongsToTicket($ticket, $subIssue);
+
+        abort_unless($subIssue->status === 'Done', 422, "Only Done sub-issues can be unconfirmed. Current status: {$subIssue->status}.");
+        abort_unless($subIssue->confirmation_verdict === 'Confirmed', 422, "Only confirmed sub-issues can be unconfirmed.");
+        abort_unless($ticket->status === 'Active', 422, "Ticket must be Active to unconfirm a sub-issue.");
+
+        $data = $request->validate([
+            'reopen_reason' => ['nullable', 'string'],
+        ]);
+
+        DB::transaction(function () use ($ticket, $subIssue, $data, $request) {
+            $subIssue->update([
+                'status'               => 'For Inspection',
+                'verification_verdict' => null,
+                'verification_notes'   => null,
+                'verified_by'          => null,
+                'verified_at'          => null,
+                'confirmation_verdict' => null,
+                'confirmation_notes'   => $data['reopen_reason'] ?? null,
+                'confirmed_by'         => null,
+                'confirmed_at'         => null,
+                'reopened_by'          => $request->user()->id,
+                'reopened_at'          => now(),
+            ]);
+
+            $this->log($request, 'Confirmed Sub-Issue Reopened', "Ticket #{$ticket->ticket_id} — sub-issue \"{$subIssue->title}\" reopened by Admin. Reason: {$data['reopen_reason']}");
+
+            $vehicleName = $ticket->vehicle->vehicle_name;
+            $adminName = $request->user()->name;
+            $reason = $data['reopen_reason'] ? "Reason: {$data['reopen_reason']}" : 'Admin request for re-verification.';
+
+            $this->notifyUser(
+                $ticket->assigned_custodian_id,
+                'Repair Re-Verification Required',
+                "Admin {$adminName} has reopened \"{$subIssue->title}\" on Ticket #{$ticket->ticket_id} ({$vehicleName}) for re-verification. {$reason}",
+                'repair_reopened_for_verification',
+                $ticket->ticket_id
+            );
         });
 
         return $subIssue->fresh();
@@ -968,10 +1223,11 @@ class TicketController extends Controller
 
         $snapshot = $archive->full_ticket_snapshot;
 
+        $normalizedSnapshotTitle = $this->normalizeTicketTitle($snapshot['ticket_title']);
         $duplicateMainIssue = MaintenanceTicket::where('vehicle_id', $archive->vehicle_id)
-            ->whereRaw('LOWER(TRIM(ticket_title)) = ?', [mb_strtolower(trim($snapshot['ticket_title']))])
             ->whereNotIn('status', ['Closed', 'Cancelled'])
-            ->exists();
+            ->get(['ticket_title'])
+            ->contains(fn ($t) => $this->normalizeTicketTitle($t->ticket_title) === $normalizedSnapshotTitle);
 
         abort_if($duplicateMainIssue, 422, 'This vehicle already has an open ticket for this Main Issue — cannot reopen a duplicate.');
 
@@ -1154,12 +1410,15 @@ class TicketController extends Controller
             'assignedCustodian',
             'inspectedBy',
             'closedBy',
+            'recurrenceOf:ticket_id,ticket_title,closed_at',
             'subIssues.assignedMechanic',
             'subIssues.mechanicAssignedBy',
             'subIssues.verifiedBy',
             'subIssues.confirmedBy',
+            'subIssues.reopenedBy',
             'subIssues.deferredBy',
             'subIssues.createdBy',
+            'subIssues.verificationAssignedTo',
         ];
     }
 
