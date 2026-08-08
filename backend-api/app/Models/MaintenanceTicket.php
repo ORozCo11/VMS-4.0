@@ -13,9 +13,11 @@ class MaintenanceTicket extends Model
         'issue_report_id',
         'created_by',
         'ticket_title',
+        'fault_category',
         'ticket_description',
         'priority',
         'status',
+        'down_since',
         'assigned_custodian_id',
         'assigned_at',
         'inspection_notes',
@@ -28,10 +30,12 @@ class MaintenanceTicket extends Model
         'archived_at',
         'returned_to_service',
         'recurrence_count',
+        'recurrence_of_ticket_id',
     ];
 
     protected $casts = [
         'assigned_at'         => 'datetime',
+        'down_since'          => 'datetime',
         'inspected_at'        => 'datetime',
         'closed_at'           => 'datetime',
         'archived_at'         => 'datetime',
@@ -82,6 +86,23 @@ class MaintenanceTicket extends Model
     public function subIssues()
     {
         return $this->hasMany(TicketSubIssue::class, 'ticket_id', 'ticket_id');
+    }
+
+    /**
+     * #9 — the prior closed ticket this one is a recurrence of, if any.
+     */
+    public function recurrenceOf()
+    {
+        return $this->belongsTo(MaintenanceTicket::class, 'recurrence_of_ticket_id', 'ticket_id');
+    }
+
+    /**
+     * #9 — later tickets that recurred from this one, forming the other
+     * direction of the same trail.
+     */
+    public function recurrences()
+    {
+        return $this->hasMany(MaintenanceTicket::class, 'recurrence_of_ticket_id', 'ticket_id');
     }
 
     // -------------------------------------------------------

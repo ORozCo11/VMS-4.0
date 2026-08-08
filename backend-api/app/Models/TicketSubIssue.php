@@ -35,6 +35,7 @@ class TicketSubIssue extends Model
         'verification_notes',
         'verified_by',
         'verified_at',
+        'verification_assigned_to',
         // Problem 2 — functional test ("UAT") recorded at the verify gate
         'functional_test',
         'test_attested',
@@ -42,6 +43,8 @@ class TicketSubIssue extends Model
         'confirmation_notes',
         'confirmed_by',
         'confirmed_at',
+        'reopened_by',
+        'reopened_at',
         // Problem 1 — "Deferred" outcome (a recorded decision not to fix now)
         'deferred_reason',
         'deferred_by',
@@ -89,9 +92,19 @@ class TicketSubIssue extends Model
         return $this->belongsTo(User::class, 'verified_by');
     }
 
+    public function verificationAssignedTo()
+    {
+        return $this->belongsTo(User::class, 'verification_assigned_to');
+    }
+
     public function confirmedBy()
     {
         return $this->belongsTo(User::class, 'confirmed_by');
+    }
+
+    public function reopenedBy()
+    {
+        return $this->belongsTo(User::class, 'reopened_by');
     }
 
     public function deferredBy()

@@ -15,6 +15,7 @@ class VehicleIssueReport extends Model
         'severity_level',
         'photo_url',
         'reported_by',
+        'reported_on_behalf_of',
         'status',
         'remarks',
     ];

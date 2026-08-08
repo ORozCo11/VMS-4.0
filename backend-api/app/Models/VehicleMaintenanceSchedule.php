@@ -19,6 +19,7 @@ class VehicleMaintenanceSchedule extends Model
         'created_by',
         'assigned_to',
         'recurrence_months',
+        'resulting_maintenance_id',
     ];
 
     protected $casts = [
@@ -35,8 +36,21 @@ class VehicleMaintenanceSchedule extends Model
         return $this->belongsTo(User::class, 'created_by');
     }
 
-    public function assignedTo()
+    // Named assignedToUser (not assignedTo) deliberately — Eloquent appends
+    // an eager-loaded relation to the array/JSON output under the snake_case
+    // of the relation's method name. "assignedTo" snake-cases to "assigned_to",
+    // the EXACT name of the raw FK column below, so the loaded User object
+    // would silently overwrite the plain id in every response.
+    public function assignedToUser()
     {
         return $this->belongsTo(User::class, 'assigned_to');
+    }
+
+    // The Maintenance Record this schedule produced once marked done — lets a
+    // completed row show real completion detail (date, cost, verification)
+    // and link straight to it, instead of only ever showing scheduled_date.
+    public function resultingMaintenance()
+    {
+        return $this->belongsTo(VehicleMaintenanceRecord::class, 'resulting_maintenance_id', 'maintenance_id');
     }
 }
