@@ -410,6 +410,16 @@ function Workspace() {
       // saves a click for the common case; still fully editable.
       : { scheduled_date: new Date(Date.now() + 86400000).toISOString().slice(0, 10), ...(prefilledScheduleData ?? {}) }
   ), [editScheduleId, records.schedules, prefilledScheduleData]);
+  // Legacy rows may have no `roles` list yet — seed it from the primary role.
+  // Memoized (not an inline IIFE) for the same reason as scheduleInitialValues
+  // above — otherwise this object gets a new reference on every render and
+  // SmartForm keeps resetting the form back over whatever was just typed.
+  const editUserInitialValues = useMemo(() => {
+    if (!editUserId) return EMPTY_OBJ;
+    const u = (records.users ?? []).find((x) => String(x.id) === String(editUserId));
+    if (u && (!Array.isArray(u.roles) || !u.roles.length) && u.role) return { ...u, roles: [u.role] };
+    return u;
+  }, [records.users, editUserId]);
   const [dashboard, setDashboard] = useState(null);
   const [editTarget, setEditTarget] = useState(null);
   const [completeScheduleTarget, setCompleteScheduleTarget] = useState(null);
@@ -737,7 +747,11 @@ function Workspace() {
       ticket_description: `Original Reported Issue: ${issue.issue_description}\nSeverity: ${issue.severity_level}`,
       issue_report_id: issue.issue_report_id,
       entry_mode: 'prediagnosed',
-      sub_issues_text: `${issue.issue_type}: ${issue.issue_description}`,
+      // The custodian's report is now a list of distinct problems (one per
+      // line, see issueFields' 'list' field) — carry each one over as its
+      // own sub-issue instead of dumping the whole report into a single line.
+      sub_issues_text: (issue.issue_description ?? '').split('\n').map((s) => s.trim()).filter(Boolean)
+        .map((line) => `${issue.issue_type}: ${line}`).join('\n'),
       // Defaulted, not locked — Admin can still pick someone else (workload,
       // availability), but the person who already knows this is the sane
       // starting point instead of a blank "Select."
@@ -784,7 +798,7 @@ function Workspace() {
       vehicle_id,
       issue_report_id,
       problem_reason,
-      is_external: 1,
+      repair_type: 'external',
     });
     navigate(`${roleRoutes[user.role]}/maintenance/new`);
   };
@@ -1090,6 +1104,9 @@ function Workspace() {
         if (activeModule === 'issues') {
           return row.severity_level === filterPriority;
         }
+        if (activeModule === 'maintenance') {
+          return row.maintenance_personnel?.name === filterPriority;
+        }
         return row.priority === filterPriority;
       });
     }
@@ -1355,7 +1372,11 @@ function Workspace() {
   useEffect(() => {
     if (!import.meta.env.DEV) return;
     api.get('/impersonate/candidates').then((r) => setImpersonateCandidates(r.data)).catch(() => {});
-  }, []);
+    // Re-fetch whenever the Users list itself refreshes (add/edit/delete a
+    // user) — otherwise a newly-created account never appears here until a
+    // full page reload, since this effect would otherwise only ever run once
+    // on mount.
+  }, [records.users]);
   const doImpersonate = async () => {
     if (!impersonateId) return;
     try {
@@ -1714,11 +1735,12 @@ function Workspace() {
               description="Directly log external, historical, or third-party vehicle maintenance records and expenses without running the 5-phase ticket workflow."
               onBack={() => { setPrefilledMaintenanceData(null); returnToModule('maintenance'); }}
               fields={(vals) => maintenanceFields(lookups, user.role, vals)}
-              initialValues={editMaintenanceId ? (records.maintenance ?? []).find((m) => String(m.maintenance_id) === String(editMaintenanceId)) : (prefilledMaintenanceData ?? EMPTY_OBJ)}
-              onSubmit={(payload) => submitFormPage('maintenance', editMaintenanceId ? { maintenance_id: editMaintenanceId } : null, payload)}
+              initialValues={editMaintenanceId ? withRepairType((records.maintenance ?? []).find((m) => String(m.maintenance_id) === String(editMaintenanceId))) : (prefilledMaintenanceData ?? EMPTY_OBJ)}
+              onSubmit={(payload) => submitFormPage('maintenance', editMaintenanceId ? { maintenance_id: editMaintenanceId } : null, applyRepairType(payload))}
               submitLabel={editMaintenanceId ? 'Update Maintenance' : 'Add Maintenance'}
               contextVehicles={lookups.vehicles}
               hubs={allHubs}
+              reviewStep
             />
           ) : viewUserId ? (
             <UserViewPage
@@ -1731,13 +1753,8 @@ function Workspace() {
             <FormPage
               description="Create and manage user accounts — Admin, Custodian, and Maintenance Personnel."
               onBack={() => returnToModule('users')}
-              fields={userFields(Boolean(editUserId))}
-              initialValues={editUserId ? (() => {
-                const u = (records.users ?? []).find((x) => String(x.id) === String(editUserId));
-                // Legacy rows may have no `roles` list yet — seed it from the primary role.
-                if (u && (!Array.isArray(u.roles) || !u.roles.length) && u.role) return { ...u, roles: [u.role] };
-                return u;
-              })() : EMPTY_OBJ}
+              fields={(vals) => userFields(Boolean(editUserId), vals)}
+              initialValues={editUserInitialValues}
               onSubmit={(payload) => submitFormPage('users', editUserId ? { id: editUserId } : null, payload)}
               submitLabel={editUserId ? 'Update User' : 'Add User'}
             />
@@ -2199,6 +2216,10 @@ function Workspace() {
             setFilterStatus={setFilterStatus}
             statusOptions={lookups.maintenance_statuses}
             statusLabel="Progress"
+            filterPriority={filterPriority}
+            setFilterPriority={setFilterPriority}
+            priorityOptions={(lookups.maintenance_personnel ?? []).map((p) => p.name)}
+            priorityLabel="Mechanic"
           />
           {maintenanceViewMode === 'card' ? (
             <PaginatedCardGrid
@@ -2843,6 +2864,7 @@ function Workspace() {
 // it should look like — one place to keep type/icon/route in sync.
 const ACTION_QUEUE_META = {
   issue_pending:           { icon: 'alert',       color: '#b45309', route: (basePath, id) => `${basePath}/issues/${id}` },
+  subissue_needs_mechanic: { icon: 'wrench',      color: '#7c3aed', route: (basePath, id) => `${basePath}/tickets/${id}` },
   ticket_confirm:          { icon: 'checkCircle', color: '#9d174d', route: (basePath, id) => `${basePath}/tickets/${id}` },
   ticket_close:            { icon: 'checkCircle', color: '#16a34a', route: (basePath, id) => `${basePath}/tickets/${id}` },
   recurring_fault_review:  { icon: 'undo',        color: '#c2410c', route: (basePath, id) => `${basePath}/tickets/${id}` },
@@ -3024,6 +3046,7 @@ function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedu
 
   return (
     <div className="dashboard-grid">
+      {/* SECTION 1: Welcome Header */}
       <div className="dashboard-banner">
         <div className="dashboard-banner-welcome">
           <span className="dashboard-greeting-role">{greetingRole}</span>
@@ -3058,8 +3081,30 @@ function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedu
         </div>
       </div>
 
-      {/* Above even the readiness hero number — this is the one thing the
-          dashboard should answer first: what needs me right now. */}
+      {/* SECTION 2: Top Executive KPI Metrics Summary */}
+      <section className="metric-grid full-span">
+        {data.metrics.map((metric) => {
+          const isReportedIssueAlert = metric.label === 'Reported Issues' && reportedIssues > 0;
+          const style = DASHBOARD_METRIC_STYLES[metric.label] ?? DASHBOARD_METRIC_STYLE_DEFAULT;
+
+          return (
+            <article
+              className={`metric-card metric-card-iconic dashboard-metric-card${isReportedIssueAlert ? ' metric-card-alert' : ''}`}
+              key={metric.label}
+            >
+              <span className="metric-card-icon" style={{ background: style.bg, color: style.color }}>
+                <Icon name={style.icon} size={16} />
+              </span>
+              <div className="metric-card-body">
+                <span>{metric.label}</span>
+                <strong>{metric.value}</strong>
+              </div>
+            </article>
+          );
+        })}
+      </section>
+
+      {/* SECTION 3: Action Center / Priority Work Queue */}
       {hasRole(user, 'Admin') && (
         <section className="panel full-span action-queue-panel">
           <div className="panel-header-bar">
@@ -3084,10 +3129,6 @@ function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedu
         </section>
       )}
 
-      {/* Counterpart to the Admin's Action Queue above: not "what needs a
-          decision" but "what's assigned to me". Only shows for Maintenance
-          Personnel — an Admin viewing their own dashboard already has the
-          Action Queue for this. */}
       {hasRole(user, 'Maintenance Personnel') && (
         <section className="panel full-span action-queue-panel">
           <div className="panel-header-bar">
@@ -3110,41 +3151,19 @@ function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedu
         </section>
       )}
 
-      <section className="metric-grid">
-        {data.metrics.map((metric) => {
-          const isReportedIssueAlert = metric.label === 'Reported Issues' && reportedIssues > 0;
-          const style = DASHBOARD_METRIC_STYLES[metric.label] ?? DASHBOARD_METRIC_STYLE_DEFAULT;
-
-          return (
-            <article
-              className={`metric-card metric-card-iconic dashboard-metric-card${isReportedIssueAlert ? ' metric-card-alert' : ''}`}
-              key={metric.label}
-            >
-              <span className="metric-card-icon" style={{ background: style.bg, color: style.color }}>
-                <Icon name={style.icon} size={16} />
-              </span>
-              <div className="metric-card-body">
-                <span>{metric.label}</span>
-                <strong>{metric.value}</strong>
-              </div>
-            </article>
-          );
-        })}
-      </section>
-
+      {/* SECTION 4: Emergency Readiness Banner */}
       {readiness.length > 0 && (
         <section className="panel full-span">
           <div className="panel-header-bar">
             <h3><Icon name="checkCircle" size={16} /> Emergency Readiness</h3>
             <span className="area-chart-tag">Coverage by vehicle type</span>
           </div>
-          {/* #12 — one fleet-wide headline before the per-type breakdown. */}
           {fleetSummary && (
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, margin: '0 0 14px', padding: '12px 16px', borderRadius: 10, background: fleetSummary.coverage_alert ? '#fff5f5' : '#f0fdf4', border: `1px solid ${fleetSummary.coverage_alert ? '#fecaca' : '#bbf7d0'}` }}>
               <span style={{ fontSize: '1.8rem', fontWeight: 800, color: fleetSummary.coverage_alert ? '#dc2626' : '#16a34a' }}>
                 {fleetSummary.verified_ready}
               </span>
-              <span style={{ fontSize: '0.95rem', color: '#334155', fontWeight: 600 }}>
+              <span style={{ fontSize: '0.95rem', color: 'var(--text-strong, #334155)', fontWeight: 600 }}>
                 of {fleetSummary.operational_total} emergency vehicles verified ready to respond right now
               </span>
             </div>
@@ -3160,9 +3179,6 @@ function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedu
               const ok = !r.no_coverage;
               const verifiedReady = typeof r.verified_ready === 'number' ? r.verified_ready : r.ready;
               const unverified = r.ready - verifiedReady;
-              // The hero number answers "how many can we deploy RIGHT NOW with
-              // confidence" — that's verified-ready, not merely Available. A
-              // vehicle can be Available yet never (or no longer) proven ready.
               const heroColor = verifiedReady === 0 ? '#dc2626' : (verifiedReady < r.ready ? '#b45309' : '#16a34a');
               const breakdown = [
                 `${r.ready} available`,
@@ -3170,7 +3186,7 @@ function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedu
                 r.down > 0 ? `${r.down} down` : null,
               ].filter(Boolean).join(' · ');
               return (
-                <div key={r.category} style={{ padding: 14, borderRadius: 12, border: `1px solid ${r.no_coverage ? '#fecaca' : '#e2e8f0'}`, background: r.no_coverage ? '#fff5f5' : '#fff' }}>
+                <div key={r.category} style={{ padding: 14, borderRadius: 12, border: `1px solid ${r.no_coverage ? '#fecaca' : 'var(--border, #e2e8f0)'}`, background: r.no_coverage ? '#fff5f5' : 'var(--bg-card, #fff)' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                     <strong style={{ fontSize: '0.9rem' }}>{r.category}</strong>
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: '0.72rem', fontWeight: 700, padding: '3px 9px', borderRadius: 999, background: ok ? '#ecfdf5' : '#fef2f2', color: ok ? '#065f46' : '#991b1b', border: `1px solid ${ok ? '#a7f3d0' : '#fecaca'}` }}>
@@ -3179,9 +3195,9 @@ function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedu
                   </div>
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }} title="Passed a recent pre-deployment readiness check.">
                     <span style={{ fontSize: '1.6rem', fontWeight: 800, color: heroColor }}>{verifiedReady}</span>
-                    <span style={{ fontSize: '0.9rem', color: '#64748b' }}>of {r.total} verified ready</span>
+                    <span style={{ fontSize: '0.9rem', color: 'var(--text-muted, #64748b)' }}>of {r.total} verified ready</span>
                   </div>
-                  <span style={{ display: 'block', marginTop: 2, fontSize: '0.76rem', color: '#64748b' }}>{breakdown}</span>
+                  <span style={{ display: 'block', marginTop: 2, fontSize: '0.76rem', color: 'var(--text-muted, #64748b)' }}>{breakdown}</span>
                 </div>
               );
             })}
@@ -3189,116 +3205,125 @@ function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedu
         </section>
       )}
 
-      {showRiskWatch && (
-        <section className="panel dashboard-half" style={{ gridColumn: 'span 6' }}>
-          <div className="panel-header-bar">
-            <h3><Icon name="alert" size={16} /> Risk &amp; Readiness Watch</h3>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 16 }}>
-            {fragility.length > 0 && (
-              <div>
-                <h4 style={{ margin: '0 0 8px', fontSize: '0.85rem', color: '#334155' }}>Single points of failure</h4>
-                {fragility.map((f) => (
-                  <div key={f.category} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', marginBottom: 6, borderRadius: 8, background: f.critical ? '#fef2f2' : '#fffbeb', border: `1px solid ${f.critical ? '#fecaca' : '#fde68a'}`, color: f.critical ? '#991b1b' : '#92400e', fontSize: '0.83rem' }}>
-                    <Icon name="alert" size={14} />
-                    <span><strong>Only 1 {f.category}</strong> — {f.critical ? 'and it is currently DOWN. No coverage.' : 'no backup if it goes down.'}</span>
-                  </div>
-                ))}
+      {/* SECTION 5: Operational Risk & Forecast Side-by-Side Row */}
+      {(showRiskWatch || forecastOut.length > 0 || preventiveWatch.length > 0 || overdueSchedules.length > 0) && (
+        <div className="dashboard-2col-grid">
+          {showRiskWatch && (
+            <section className="panel dashboard-card-panel">
+              <div className="panel-header-bar">
+                <h3><Icon name="alert" size={16} /> Risk &amp; Readiness Watch</h3>
               </div>
-            )}
-            {readinessWatch.length > 0 && (
-              <div>
-                <h4 style={{ margin: '0 0 8px', fontSize: '0.85rem', color: '#334155' }}>Available but not verified ready</h4>
-                {readinessWatch.map((r) => (
-                  <div key={r.vehicle_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '8px 12px', marginBottom: 6, borderRadius: 8, background: '#f8fafc', border: '1px solid #e2e8f0', fontSize: '0.83rem' }}>
-                    <span>{r.vehicle_name} <span className="muted">· {r.category ?? '—'}</span></span>
-                    <span style={{ fontSize: '0.72rem', fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: r.state === 'not_ready' ? '#fee2e2' : '#fef3c7', color: r.state === 'not_ready' ? '#b91c1c' : '#92400e' }}>
-                      {READINESS_STATE_LABEL[r.state] ?? r.state}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </section>
-      )}
-
-      <section className="panel dashboard-half" style={{ gridColumn: showRiskWatch ? 'span 6' : 'span 12' }}>
-        <div className="panel-header-bar">
-          <h3>Availability Forecast</h3>
-          <span className="area-chart-tag">{forecast.available_now} ready now</span>
-        </div>
-        {forecastOut.length === 0 ? (
-          <p className="empty-state">All vehicles are currently available — nothing is out for maintenance.</p>
-        ) : (
-          <div className="forecast-list">
-            {forecastOut.map((v) => (
-              <div className="forecast-row" key={v.vehicle_id}>
-                <div className="forecast-veh">
-                  <Icon name="wrench" size={14} />
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 16 }}>
+                {fragility.length > 0 && (
                   <div>
-                    <strong>{v.vehicle_name}</strong>
-                    <span>{v.plate_number}</span>
+                    <h4 style={{ margin: '0 0 8px', fontSize: '0.85rem', color: 'var(--text-strong, #334155)' }}>Single points of failure</h4>
+                    {fragility.map((f) => (
+                      <div key={f.category} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', marginBottom: 6, borderRadius: 8, background: f.critical ? '#fef2f2' : '#fffbeb', border: `1px solid ${f.critical ? '#fecaca' : '#fde68a'}`, color: f.critical ? '#991b1b' : '#92400e', fontSize: '0.83rem' }}>
+                        <Icon name="alert" size={14} />
+                        <span><strong>Only 1 {f.category}</strong> — {f.critical ? 'and it is currently DOWN. No coverage.' : 'no backup if it goes down.'}</span>
+                      </div>
+                    ))}
                   </div>
-                </div>
-                <div className="forecast-eta">
-                  {v.estimated_return_date ? (
-                    <>Ready by <strong>{formatForecastDate(v.estimated_return_date)}</strong></>
-                  ) : (
-                    <span className="forecast-eta-none">No estimate yet</span>
-                  )}
-                </div>
+                )}
+                {readinessWatch.length > 0 && (
+                  <div>
+                    <h4 style={{ margin: '0 0 8px', fontSize: '0.85rem', color: 'var(--text-strong, #334155)' }}>Available but not verified ready</h4>
+                    {readinessWatch.map((r) => (
+                      <div key={r.vehicle_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '8px 12px', marginBottom: 6, borderRadius: 8, background: 'var(--bg-subtle, #f8fafc)', border: '1px solid var(--border, #e2e8f0)', fontSize: '0.83rem' }}>
+                        <span>{r.vehicle_name} <span className="muted">· {r.category ?? '—'}</span></span>
+                        <span style={{ fontSize: '0.72rem', fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: r.state === 'not_ready' ? '#fee2e2' : '#fef3c7', color: r.state === 'not_ready' ? '#b91c1c' : '#92400e' }}>
+                          {READINESS_STATE_LABEL[r.state] ?? r.state}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
-            ))}
-          </div>
-        )}
-        {preventiveWatch.length > 0 ? (
-          <div className="forecast-overdue">
-            <h4><Icon name="alert" size={14} /> Preventive Maintenance Watch</h4>
-            {preventiveWatch.map((s) => (
-              <div className="forecast-overdue-row" key={s.schedule_id}>
-                <span>
-                  <span style={{ display: 'inline-block', fontSize: '0.68rem', fontWeight: 700, padding: '1px 7px', borderRadius: 999, marginRight: 6, background: s.state === 'overdue' ? '#fee2e2' : '#fef3c7', color: s.state === 'overdue' ? '#b91c1c' : '#92400e' }}>
-                    {s.state === 'overdue' ? 'OVERDUE' : 'DUE SOON'}
-                  </span>
-                  {s.vehicle_name} · {s.maintenance_type}
-                </span>
-                <span className="forecast-overdue-date">{s.state === 'overdue' ? 'was due' : 'due'} {formatForecastDate(s.scheduled_date)}</span>
-              </div>
-            ))}
-          </div>
-        ) : overdueSchedules.length > 0 && (
-          <div className="forecast-overdue">
-            <h4><Icon name="alert" size={14} /> Overdue scheduled maintenance</h4>
-            {overdueSchedules.map((s) => (
-              <div className="forecast-overdue-row" key={s.schedule_id}>
-                <span>{s.vehicle?.vehicle_name ?? '—'} · {s.maintenance_type}</span>
-                <span className="forecast-overdue-date">was due {formatForecastDate(s.scheduled_date)}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
+            </section>
+          )}
 
-      {showBreakingMost && (
-        <section className="panel dashboard-half" style={{ gridColumn: 'span 6' }}>
-          <div className="panel-header-bar">
-            <h3><Icon name="wrench" size={16} /> What's Breaking Most</h3>
-            <span className="area-chart-tag">Fleet-wide · last 12 months</span>
-          </div>
-          <HorizontalBarChart rows={failurePatterns.map((p) => ({ label: p.type, value: p.count }))} />
-          <p className="muted" style={{ marginTop: 8, fontSize: '0.82rem' }}>A single common failure across many vehicles often points to a systemic cause (rough roads, a bad parts batch) worth fixing at the root.</p>
-        </section>
+          <section className="panel dashboard-card-panel">
+            <div className="panel-header-bar">
+              <h3>Availability Forecast</h3>
+              <span className="area-chart-tag">{forecast.available_now} ready now</span>
+            </div>
+            {forecastOut.length === 0 ? (
+              <p className="empty-state">All vehicles are currently available — nothing is out for maintenance.</p>
+            ) : (
+              <div className="forecast-list">
+                {forecastOut.map((v) => (
+                  <div className="forecast-row" key={v.vehicle_id}>
+                    <div className="forecast-veh">
+                      <Icon name="wrench" size={14} />
+                      <div>
+                        <strong>{v.vehicle_name}</strong>
+                        <span>{v.plate_number}</span>
+                      </div>
+                    </div>
+                    <div className="forecast-eta">
+                      {v.estimated_return_date ? (
+                        <>Ready by <strong>{formatForecastDate(v.estimated_return_date)}</strong></>
+                      ) : (
+                        <span className="forecast-eta-none">No estimate yet</span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {preventiveWatch.length > 0 ? (
+              <div className="forecast-overdue">
+                <h4><Icon name="alert" size={14} /> Preventive Maintenance Watch</h4>
+                {preventiveWatch.map((s) => (
+                  <div className="forecast-overdue-row" key={s.schedule_id}>
+                    <span>
+                      <span style={{ display: 'inline-block', fontSize: '0.68rem', fontWeight: 700, padding: '1px 7px', borderRadius: 999, marginRight: 6, background: s.state === 'overdue' ? '#fee2e2' : '#fef3c7', color: s.state === 'overdue' ? '#b91c1c' : '#92400e' }}>
+                        {s.state === 'overdue' ? 'OVERDUE' : 'DUE SOON'}
+                      </span>
+                      {s.vehicle_name} · {s.maintenance_type}
+                    </span>
+                    <span className="forecast-overdue-date">{s.state === 'overdue' ? 'was due' : 'due'} {formatForecastDate(s.scheduled_date)}</span>
+                  </div>
+                ))}
+              </div>
+            ) : overdueSchedules.length > 0 && (
+              <div className="forecast-overdue">
+                <h4><Icon name="alert" size={14} /> Overdue scheduled maintenance</h4>
+                {overdueSchedules.map((s) => (
+                  <div className="forecast-overdue-row" key={s.schedule_id}>
+                    <span>{s.vehicle?.vehicle_name ?? '—'} · {s.maintenance_type}</span>
+                    <span className="forecast-overdue-date">was due {formatForecastDate(s.scheduled_date)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
       )}
 
-      <section className="panel dashboard-half area-chart-panel" style={{ gridColumn: showBreakingMost ? 'span 6' : 'span 12' }}>
-        <div className="panel-header-bar">
-          <h3>Fleet Activity by Day</h3>
-          <span className="area-chart-tag">Last 14 days</span>
-        </div>
-        <ActivityChart rows={data.activity_by_day ?? []} />
-      </section>
+      {/* SECTION 6: Activity & Pattern Analytics Row */}
+      <div className="dashboard-2col-grid">
+        <section className="panel dashboard-card-panel area-chart-panel">
+          <div className="panel-header-bar">
+            <h3>Fleet Activity by Day</h3>
+            <span className="area-chart-tag">Last 14 days</span>
+          </div>
+          <ActivityChart rows={data.activity_by_day ?? []} />
+        </section>
 
+        {showBreakingMost && (
+          <section className="panel dashboard-card-panel">
+            <div className="panel-header-bar">
+              <h3><Icon name="wrench" size={16} /> What's Breaking Most</h3>
+              <span className="area-chart-tag">Fleet-wide · last 12 months</span>
+            </div>
+            <HorizontalBarChart rows={failurePatterns.map((p) => ({ label: p.type, value: p.count }))} />
+            <p className="muted" style={{ marginTop: 8, fontSize: '0.82rem' }}>A single common failure across many vehicles often points to a systemic cause (rough roads, a bad parts batch) worth fixing at the root.</p>
+          </section>
+        )}
+      </div>
+
+      {/* SECTION 7: Deep Visual Breakdown Charts Grid (2x2) */}
       <section className="dashboard-graphs full-span" aria-label="Dashboard graphs">
         <GraphPanel title="Fleet Status" stat={`${availabilityRate}% available`}>
           <DonutChart
@@ -3325,15 +3350,6 @@ function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedu
           </div>
         </GraphPanel>
       </section>
-
-      {hasRole(user, 'Admin') && (
-        <section className="panel full-span">
-          <div className="panel-header-bar">
-            <h3>Recent Updates</h3>
-          </div>
-          <DataTable columns={historyColumns.slice(1)} rows={data.recent_updates} />
-        </section>
-      )}
     </div>
   );
 }
@@ -4445,6 +4461,9 @@ function SelectOrOtherField({ field, value, onChange }) {
 function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, onSubmit, submitLabel, title, onValuesChange }) {
   const [values, setValues] = useState(() => valuesFromFields(fields, initialValues));
   const [submitting, setSubmitting] = useState(false);
+  // Per-field show/hide toggle for password inputs — keyed by field name so
+  // e.g. Old/New/Confirm Password on the same form toggle independently.
+  const [visiblePasswords, setVisiblePasswords] = useState({});
 
   useEffect(() => {
     setValues(valuesFromFields(fields, initialValues));
@@ -4464,9 +4483,43 @@ function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, onSubmit, subm
 
   const handleSubmit = async (event) => {
     event.preventDefault();
+
+    // A 'confirmOf' field (e.g. Confirm Password) must match the field it
+    // confirms — checked here (not per-keystroke) and reported through the
+    // browser's own validation bubble, same mechanism `required` already
+    // uses on every other field in this form.
+    let mismatched = false;
+    fields.forEach((field) => {
+      if (!field.confirmOf) return;
+      const input = event.target.elements[field.name];
+      if (!input) return;
+      const matches = !values[field.name] || values[field.name] === values[field.confirmOf];
+      input.setCustomValidity(matches ? '' : 'Passwords do not match.');
+      if (!matches) mismatched = true;
+    });
+    if (mismatched) {
+      event.target.reportValidity();
+      return;
+    }
+
     setSubmitting(true);
     try {
-      await onSubmit(values);
+      // 'list' fields edit as an array of rows; flatten back to the
+      // newline-joined string the backend column actually stores.
+      // 'confirmOf' fields are sent through as-is (not stripped) — some
+      // backends (e.g. the self-service password change) rely on Laravel's
+      // `confirmed` rule convention, which expects the `{field}_confirmation`
+      // value to actually be present in the request; others just ignore it.
+      const payload = { ...values };
+      fields.forEach((field) => {
+        if (field.type === 'list') {
+          payload[field.name] = (Array.isArray(payload[field.name]) ? payload[field.name] : [])
+            .map((row) => row.trim())
+            .filter(Boolean)
+            .join('\n');
+        }
+      });
+      await onSubmit(payload);
     } finally {
       setSubmitting(false);
     }
@@ -4551,31 +4604,125 @@ function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, onSubmit, subm
           ) : null}
           {field.type === 'checkboxes' ? (
             <div className="checkbox-group" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {field.options.map((option) => {
-                const val = option?.value ?? option;
-                const label = option?.label ?? option;
-                const selected = Array.isArray(values[field.name]) && values[field.name].includes(val);
+              {(() => {
+                const groupHasSelection = Array.isArray(values[field.name]) && values[field.name].length > 0;
+                // A native checkbox's `required` only ever means "this exact
+                // box must be checked" — there's no built-in "at least one of
+                // these" semantic. Marking every box required only while the
+                // group is empty gets that behavior for free: checking any
+                // one of them clears `required` from the whole group on the
+                // very next render, so the browser's own validation bubble
+                // (same one every other required field already uses) fires
+                // correctly instead of a confusing raw backend error surfacing
+                // after a round-trip.
+                return field.options.map((option) => {
+                  const val = option?.value ?? option;
+                  const label = option?.label ?? option;
+                  const selected = Array.isArray(values[field.name]) && values[field.name].includes(val);
+                  return (
+                    <label key={val} style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 400, cursor: 'pointer', margin: 0 }}>
+                      <input
+                        type="checkbox"
+                        checked={selected}
+                        required={field.required && !groupHasSelection}
+                        title={field.required ? 'Select at least one.' : undefined}
+                        onChange={() => setValues((current) => {
+                          const list = Array.isArray(current[field.name]) ? current[field.name] : [];
+                          const next = selected ? list.filter((r) => r !== val) : [...list, val];
+                          const merged = { ...current, [field.name]: next };
+                          onValuesChange?.(merged);
+                          return merged;
+                        })}
+                        style={{ width: 'auto' }}
+                      />
+                      <span style={{ margin: 0 }}>{label}</span>
+                    </label>
+                  );
+                });
+              })()}
+            </div>
+          ) : null}
+          {field.type === 'list' ? (
+            <div className="list-field">
+              {(Array.isArray(values[field.name]) ? values[field.name] : ['']).map((row, index) => {
+                const rows = Array.isArray(values[field.name]) ? values[field.name] : [''];
                 return (
-                  <label key={val} style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 400, cursor: 'pointer', margin: 0 }}>
+                  <div key={index} style={{ display: 'flex', gap: 8, marginBottom: 10, alignItems: 'center' }}>
+                    <span className="muted" style={{ flex: '0 0 20px', textAlign: 'right' }}>{index + 1}.</span>
                     <input
-                      type="checkbox"
-                      checked={selected}
-                      onChange={() => setValues((current) => {
-                        const list = Array.isArray(current[field.name]) ? current[field.name] : [];
-                        const next = selected ? list.filter((r) => r !== val) : [...list, val];
-                        const merged = { ...current, [field.name]: next };
+                      type="text"
+                      placeholder={field.placeholder}
+                      value={row}
+                      required={field.required && index === 0}
+                      onChange={(e) => setValues((current) => {
+                        const list = [...(Array.isArray(current[field.name]) ? current[field.name] : [''])];
+                        list[index] = e.target.value;
+                        const merged = { ...current, [field.name]: list };
                         onValuesChange?.(merged);
                         return merged;
                       })}
-                      style={{ width: 'auto' }}
+                      style={{ flex: 1 }}
                     />
-                    <span style={{ margin: 0 }}>{label}</span>
-                  </label>
+                    <button
+                      type="button"
+                      className="danger-button"
+                      onClick={() => setValues((current) => {
+                        const list = (Array.isArray(current[field.name]) ? current[field.name] : ['']).filter((_, i) => i !== index);
+                        const merged = { ...current, [field.name]: list.length ? list : [''] };
+                        onValuesChange?.(merged);
+                        return merged;
+                      })}
+                      disabled={rows.length === 1}
+                      title="Remove issue"
+                      aria-label="Remove issue"
+                      style={{ padding: '8px 12px' }}
+                    >
+                      <Icon name="close" size={14} />
+                    </button>
+                  </div>
                 );
               })}
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={() => setValues((current) => {
+                  const merged = { ...current, [field.name]: [...(Array.isArray(current[field.name]) ? current[field.name] : ['']), ''] };
+                  onValuesChange?.(merged);
+                  return merged;
+                })}
+              >
+                <Icon name="clipboard" size={14} /> {field.addLabel ?? 'Add Another Issue'}
+              </button>
             </div>
           ) : null}
-          {!['textarea', 'select', 'quantity', 'checkboxes', 'select-or-other'].includes(field.type) ? (
+          {field.type === 'password' ? (
+            <div className="password-field">
+              <input
+                name={field.name}
+                onChange={(e) => {
+                  handleChange(e);
+                  // Re-validate a previously-flagged confirm field live, so
+                  // fixing the mismatch clears the error without resubmitting.
+                  if (field.confirmOf) e.target.setCustomValidity('');
+                }}
+                placeholder={field.placeholder}
+                required={field.required}
+                title={field.title}
+                type={visiblePasswords[field.name] ? 'text' : 'password'}
+                value={values[field.name] ?? ''}
+              />
+              <button
+                type="button"
+                className="password-field-toggle"
+                onClick={() => setVisiblePasswords((current) => ({ ...current, [field.name]: !current[field.name] }))}
+                title={visiblePasswords[field.name] ? 'Hide password' : 'Show password'}
+                aria-label={visiblePasswords[field.name] ? 'Hide password' : 'Show password'}
+              >
+                <Icon name={visiblePasswords[field.name] ? 'eyeOff' : 'eye'} size={16} />
+              </button>
+            </div>
+          ) : null}
+          {!['textarea', 'select', 'quantity', 'checkboxes', 'select-or-other', 'list', 'password'].includes(field.type) ? (
             <input
               accept={field.accept}
               name={field.name}
@@ -4741,7 +4888,12 @@ const categoryFields = [
   { label: 'Description', name: 'description', type: 'textarea' },
 ];
 
-function userFields(isEditing) {
+// `liveValues` lets Confirm Password become required only once a new
+// password has actually been typed — editing an Admin resets someone
+// else's password, so unlike the self-service My Profile flow there's
+// deliberately no Current Password field: the whole point of an admin
+// reset is that they don't (and shouldn't need to) know the old one.
+function userFields(isEditing, liveValues = EMPTY_OBJ) {
   return [
     { label: 'Full Name', name: 'name', required: true, type: 'text' },
     { label: 'Email', name: 'email', required: true, type: 'text' },
@@ -4755,6 +4907,13 @@ function userFields(isEditing) {
       required: !isEditing,
       type: 'password',
     },
+    {
+      label: isEditing ? 'Confirm New Password' : 'Confirm Password',
+      name: 'password_confirmation',
+      required: isEditing ? Boolean(liveValues.password) : true,
+      type: 'password',
+      confirmOf: 'password',
+    },
   ];
 }
 
@@ -4766,7 +4925,7 @@ const verificationFields = [
 const passwordFields = [
   { label: 'Old Password', name: 'old_password', required: true, type: 'password' },
   { label: 'New Password', name: 'new_password', required: true, type: 'password' },
-  { label: 'Confirm New Password', name: 'new_password_confirmation', required: true, type: 'password' },
+  { label: 'Confirm New Password', name: 'new_password_confirmation', required: true, type: 'password', confirmOf: 'new_password' },
 ];
 
 const FUEL_TYPE_OPTIONS = ['Diesel', 'Gasoline', 'Electric', 'Hybrid', 'CNG', 'LPG'];
@@ -4897,6 +5056,10 @@ function formSummaryValue(field, raw) {
     if (label != null) return String(label);
   }
   if (field.type === 'date') return formatForecastDate(raw) || String(raw);
+  if (field.type === 'list') {
+    const rows = (Array.isArray(raw) ? raw : [raw]).map((r) => String(r).trim()).filter(Boolean);
+    return rows.length ? rows.join(' · ') : null;
+  }
   return String(raw);
 }
 
@@ -4950,12 +5113,20 @@ function OpenItemsWarning({ kind, rows, basePath }) {
 // When `contextVehicles` is provided, the page renders Realcore-style: the form
 // fields sit in a card on the right, and the left side live-previews the
 // selected vehicle (photo, info, location map) as the user picks one.
-function FormPage({ description, onBack, fields, initialValues, onSubmit, submitLabel, contextVehicles, hubs, warnEndpoint, warnRender }) {
+function FormPage({ description, onBack, fields, initialValues, onSubmit, submitLabel, contextVehicles, hubs, warnEndpoint, warnRender, reviewStep = false }) {
   const [liveValues, setLiveValues] = useState(initialValues ?? EMPTY_OBJ);
   const [warnRows, setWarnRows] = useState([]);
+  // Opt-in two-step flow (Maintenance Records today): fill the fields, hit
+  // Next, then review everything on its own full-width step before it
+  // actually saves — instead of a live summary sidebar fighting the form for
+  // space the whole time it's being filled in. Every other FormPage caller
+  // leaves reviewStep unset and keeps the original single-step behavior.
+  const [step, setStep] = useState(1);
+  const [confirming, setConfirming] = useState(false);
 
   useEffect(() => {
     setLiveValues(initialValues ?? EMPTY_OBJ);
+    setStep(1);
   }, [initialValues]);
 
   const hasContext = Boolean(contextVehicles?.length);
@@ -4980,44 +5151,88 @@ function FormPage({ description, onBack, fields, initialValues, onSubmit, submit
   // fields in response to what the user picked (e.g. "+ Add New Issue").
   const resolvedFields = typeof fields === 'function' ? fields(liveValues) : fields;
 
-  const form = (
+  const handleReviewConfirm = async () => {
+    setConfirming(true);
+    try {
+      await onSubmit(liveValues);
+    } finally {
+      setConfirming(false);
+    }
+  };
+
+  // Reused on its own in the plain sidebar layout, and folded into the
+  // review step (together with the field summary) when reviewStep is on —
+  // "put this together with the summary in the next section" instead of it
+  // sitting in a separate persistent side panel throughout.
+  const vehicleInfoCard = vehicle ? (
+    <section className="veh-card">
+      <div className="veh-card-head"><Icon name="vehicle" size={16} /><h4>Selected Vehicle</h4></div>
+      {vehicle.photo_url && (
+        <div className="form-context-photo">
+          <img src={resolvePhotoUrl(vehicle.photo_url)} alt={vehicle.vehicle_name} />
+        </div>
+      )}
+      <dl className="veh-kv">
+        <div><dt>Vehicle</dt><dd>{vehicle.vehicle_name}</dd></div>
+        <div><dt>Plate Number</dt><dd>{vehicle.plate_number}</dd></div>
+        <div><dt>Type</dt><dd>{vehicle.category?.category_name ?? 'Unassigned'}</dd></div>
+        <div><dt>Brand / Model</dt><dd>{`${vehicle.brand ?? '-'} ${vehicle.model ?? ''}`.trim() || '-'}</dd></div>
+        <div><dt>Status</dt><dd><StatusBadge value={vehicle.status} /></dd></div>
+        <div><dt>Condition</dt><dd><StatusBadge value={vehicle.condition} /></dd></div>
+      </dl>
+    </section>
+  ) : null;
+
+  const form = reviewStep && step === 2 ? (
+    <div className="form-review-step">
+      <h3 className="form-review-title">Review before saving</h3>
+      {vehicleInfoCard}
+      <dl className="veh-kv form-review-grid">
+        {resolvedFields.filter((f) => f.name !== 'vehicle_id' && f.type !== 'file').map((f) => {
+          const val = formSummaryValue(f, liveValues?.[f.name]);
+          return (
+            <div key={f.name}>
+              <dt>{f.label}</dt>
+              <dd className={val ? 'summary-val' : 'summary-empty'}>{val ?? '—'}</dd>
+            </div>
+          );
+        })}
+      </dl>
+      <div className="form-review-actions">
+        <button type="button" className="ghost-button" onClick={() => setStep(1)} disabled={confirming}>Back</button>
+        <button type="button" className="primary-button" onClick={handleReviewConfirm} disabled={confirming}>
+          {confirming ? 'Saving…' : `Confirm & ${submitLabel}`}
+        </button>
+      </div>
+    </div>
+  ) : (
     <>
       {warnRender && warnRows.length > 0 ? warnRender(warnRows) : null}
       <SmartForm
         fields={resolvedFields}
         initialValues={initialValues ?? EMPTY_OBJ}
         onCancel={onBack}
-        onSubmit={onSubmit}
+        onSubmit={reviewStep ? (payload) => { setLiveValues(payload); setStep(2); } : onSubmit}
         onValuesChange={setLiveValues}
-        submitLabel={submitLabel}
+        submitLabel={reviewStep ? 'Next' : submitLabel}
         title=""
       />
     </>
   );
 
+  // reviewStep forms skip the persistent side panel entirely — step 1 gets
+  // the form full-width (no vehicle card competing for space while typing),
+  // and step 2 (above) folds the vehicle card back in alongside the summary.
+  const useSideLayout = hasContext && !reviewStep;
+
   return (
     <ModulePanel description={description}>
-      {hasContext ? (
+      {useSideLayout ? (
         <div className="form-context-layout">
           <div className="form-context-side">
             {vehicle ? (
               <>
-                <section className="veh-card">
-                  <div className="veh-card-head"><Icon name="vehicle" size={16} /><h4>Selected Vehicle</h4></div>
-                  {vehicle.photo_url && (
-                    <div className="form-context-photo">
-                      <img src={resolvePhotoUrl(vehicle.photo_url)} alt={vehicle.vehicle_name} />
-                    </div>
-                  )}
-                  <dl className="veh-kv">
-                    <div><dt>Vehicle</dt><dd>{vehicle.vehicle_name}</dd></div>
-                    <div><dt>Plate Number</dt><dd>{vehicle.plate_number}</dd></div>
-                    <div><dt>Type</dt><dd>{vehicle.category?.category_name ?? 'Unassigned'}</dd></div>
-                    <div><dt>Brand / Model</dt><dd>{`${vehicle.brand ?? '-'} ${vehicle.model ?? ''}`.trim() || '-'}</dd></div>
-                    <div><dt>Status</dt><dd><StatusBadge value={vehicle.status} /></dd></div>
-                    <div><dt>Condition</dt><dd><StatusBadge value={vehicle.condition} /></dd></div>
-                  </dl>
-                </section>
+                {vehicleInfoCard}
                 <section className="veh-card">
                   <div className="veh-card-head"><Icon name="pin" size={16} /><h4>{vehicle.current_location ?? 'Location unknown'}</h4></div>
                   <div className="veh-map-wrap form-context-map">
@@ -5106,7 +5321,11 @@ function issueFields(lookups, editTarget, role) {
   if (editTarget?.issue_report_id && role === 'Custodian') {
     return [
       { label: 'Issue Type', name: 'issue_type', options: lookups.issue_types, required: true, type: 'select' },
-      { label: 'Issue Description', name: 'issue_description', required: true, type: 'textarea' },
+      // A list, not one paragraph — each row becomes its own line-item, so
+      // when this report is later converted into a Pre-Diagnosed ticket,
+      // every distinct problem lands as its own sub-issue instead of the
+      // whole description getting dumped into a single sub-issue.
+      { label: 'Issues Found', name: 'issue_description', required: true, type: 'list', placeholder: 'e.g. Low coolant level', addLabel: 'Add Another Issue' },
       { label: 'Severity Level', name: 'severity_level', options: lookups.severity_levels, required: true, type: 'select' },
       { label: 'Reported On Behalf Of (driver, optional)', name: 'reported_on_behalf_of', placeholder: 'e.g. Driver Mang Tonio', type: 'text' },
       { label: 'Attachment / Photo', name: 'photo', accept: 'image/*', type: 'file' },
@@ -5132,6 +5351,31 @@ function issueFields(lookups, editTarget, role) {
   ];
 }
 
+// "Repair Type" is a single virtual selector standing in for two genuinely
+// independent backend facts — which vehicle a part came off of, vs. who
+// performed the labor — that used to render as two separate dropdowns next
+// to each other and read as related when they weren't. repairTypeOf derives
+// the selector's value from an existing record (for editing); applyRepairType
+// converts it back to the real is_external/source_vehicle_id fields the
+// backend expects (for submitting). See FleetController::storeMaintenanceRecord.
+function repairTypeOf(record) {
+  if (record?.source_vehicle_id) return 'cannibalized';
+  if (record?.is_external === 1 || record?.is_external === true || record?.is_external === '1') return 'external';
+  return 'in_house';
+}
+
+function withRepairType(record) {
+  if (!record) return EMPTY_OBJ;
+  return { ...record, repair_type: repairTypeOf(record) };
+}
+
+function applyRepairType(payload) {
+  const { repair_type, ...rest } = payload;
+  if (repair_type === 'cannibalized') return { ...rest, is_external: 0 };
+  if (repair_type === 'external') return { ...rest, is_external: 1, source_vehicle_id: null };
+  return { ...rest, is_external: 0, source_vehicle_id: null };
+}
+
 function maintenanceFields(lookups, role, liveValues = EMPTY_OBJ) {
   const fields = [
     { label: 'Vehicle', name: 'vehicle_id', options: vehicleOptions(lookups), required: true, type: 'select' },
@@ -5142,36 +5386,40 @@ function maintenanceFields(lookups, role, liveValues = EMPTY_OBJ) {
     { label: 'Date Completed', name: 'date_completed', type: 'date' },
     { label: 'Action Taken', name: 'action_taken', type: 'textarea' },
     { label: 'Parts / Materials Used', name: 'parts_used', type: 'textarea' },
-    // Vehicle cannibalization: a part removed from another vehicle rather
-    // than newly acquired. Optional — leave blank for a normally-sourced
-    // part. Setting it also logs the loss on the donor vehicle's own
-    // history (see FleetController::storeMaintenanceRecord) — it does NOT
-    // change that vehicle's status/condition; that stays a human call.
+    // Single "what kind of repair was this" selector, in place of the old
+    // "Source Vehicle" + "External Repair?" dropdowns sitting side by side —
+    // picking one here decides which (if any) follow-up fields appear below.
+    // Placed before Maintenance Cost since it's the more consequential
+    // choice (it decides which other fields even show up), and full-width so
+    // its follow-up field(s) clearly read as belonging to it, on their own
+    // row directly underneath, instead of sharing a row side by side.
     {
-      label: 'Source Vehicle (if part was cannibalized)',
-      name: 'source_vehicle_id',
-      options: vehicleOptions(lookups).filter((v) => String(v.value) !== String(liveValues?.vehicle_id)),
+      label: 'Repair Type',
+      name: 'repair_type',
       type: 'select',
-      hint: 'Only set this if the part came off another vehicle instead of being newly acquired.',
+      fullWidth: true,
+      options: [
+        { value: 'in_house', label: 'In-House Repair' },
+        { value: 'cannibalized', label: 'In-House — Used a Cannibalized Part' },
+        { value: 'external', label: 'Sent to External Shop' },
+      ],
     },
     { label: 'Maintenance Cost (PHP)', name: 'maintenance_cost', type: 'number', min: 0, placeholder: 'e.g. 1500' },
-    // #5 — third-party shop repairs: who did it and any warranty window.
-    { label: 'External Repair?', name: 'is_external', type: 'select', options: [
-      { value: 0, label: 'No — in-house' },
-      { value: 1, label: 'Yes — third-party shop' },
-    ] },
     // Proof-of-completion fast close: what actually justifies skipping
     // Custodian verification is that something REAL is attached — a receipt
     // for an external shop repair, or a photo of the finished work for an
     // in-house fix (e.g. a roadside tire change). Either counts; a typed
-    // note does not, so this isn't gated behind "External?" — it works the
-    // same way for both cases.
+    // note does not, so this isn't gated behind Repair Type — only its
+    // label/hint change to match, so it's obvious which kind of proof is
+    // expected instead of a generic either/or description every time.
     {
-      label: 'Receipt / Proof of Completion',
+      label: liveValues?.repair_type === 'external' ? 'Receipt (Proof of Payment)' : 'Photo of Completed Repair',
       name: 'receipt',
       type: 'file',
       accept: 'image/*,.pdf',
-      hint: 'Attach a receipt (external shop) or a photo of the completed repair (in-house), then set Progress Status to Completed — this closes the record immediately with no separate verification step.',
+      hint: liveValues?.repair_type === 'external'
+        ? "Attach the shop's receipt, then set Progress Status to Completed — this closes the record immediately with no separate verification step."
+        : 'Attach a photo of the completed repair, then set Progress Status to Completed — this closes the record immediately with no separate verification step.',
     },
     { label: 'Progress Status', name: 'progress_status', options: lookups.maintenance_statuses, type: 'select' },
     { label: 'Remarks', name: 'remarks', type: 'textarea' },
@@ -5187,12 +5435,20 @@ function maintenanceFields(lookups, role, liveValues = EMPTY_OBJ) {
     });
   }
 
-  // #5 — vendor + warranty are only meaningful for an external repair, so
-  // those two stay conditional (the receipt/photo field above does not).
-  const external = liveValues?.is_external === 1 || liveValues?.is_external === '1' || liveValues?.is_external === true;
-  if (external) {
-    const costIndex = fields.findIndex((f) => f.name === 'is_external');
-    fields.splice(costIndex + 1, 0,
+  // Only one of these ever applies at a time — that's the whole point of
+  // collapsing them into one selector above instead of two independent
+  // toggles that could (confusingly) both be filled in at once.
+  const repairTypeIndex = fields.findIndex((f) => f.name === 'repair_type');
+  if (liveValues?.repair_type === 'cannibalized') {
+    fields.splice(repairTypeIndex + 1, 0, {
+      label: 'Source Vehicle',
+      name: 'source_vehicle_id',
+      options: vehicleOptions(lookups).filter((v) => String(v.value) !== String(liveValues?.vehicle_id)),
+      type: 'select',
+      hint: 'Which vehicle the part was taken from.',
+    });
+  } else if (liveValues?.repair_type === 'external') {
+    fields.splice(repairTypeIndex + 1, 0,
       { label: 'External Shop / Vendor', name: 'external_vendor', type: 'text', placeholder: 'e.g. Bautista Auto Shop' },
       { label: 'Warranty Until', name: 'warranty_until', type: 'date' },
     );
@@ -5453,7 +5709,11 @@ const TICKET_STAT_CARDS = [
 
 const TICKET_INSPECTION_STAT_CARDS = [
   { key: 'Pending', label: 'Pending', icon: 'search', bg: '#fef3c7', color: '#d97706' },
-  { key: 'Inspected', label: 'Inspected', icon: 'checkCircle', bg: '#dcfce7', color: '#16a34a' },
+  // Label says "Diagnosed", not "Inspected" — this bucket also holds
+  // Pre-Diagnosed tickets this Custodian never actually inspected (the key
+  // stays 'Inspected' since that's what the status !== 'Open' filter above
+  // keys off of).
+  { key: 'Inspected', label: 'Diagnosed', icon: 'checkCircle', bg: '#dcfce7', color: '#16a34a' },
 ];
 
 const TICKET_WORK_ORDER_STAT_CARDS = [
@@ -5760,7 +6020,7 @@ function issueColumns(role, onEdit, onCreateTicketFromIssue, setUserInfoTarget, 
     { label: 'ID', width: '5%', render: (row) => row.issue_report_id },
     {
       label: 'Issue',
-      width: '35%',
+      width: '27%',
       render: (row) => (
         <div className="issue-cell">
           <div className="issue-cell-top">
@@ -5785,6 +6045,7 @@ function issueColumns(role, onEdit, onCreateTicketFromIssue, setUserInfoTarget, 
           : <span className="issue-reporter">-</span>
       ),
     },
+    { label: 'Date', width: '9%', render: (row) => <DateBadge value={row.created_at} /> },
   ];
 
   if (['Admin', 'Maintenance Personnel'].includes(role)) {
@@ -5855,7 +6116,8 @@ function maintenanceColumns(role, setEditTarget, updateRecord, onViewRecord) {
         </div>
       ),
     },
-    { label: 'Problem / Reason', width: '20%', className: 'cell-text', render: (row) => <ExpandableText text={row.problem_reason} /> },
+    { label: 'Source', width: '9%', render: (row) => <StatusBadge value={row.source} /> },
+    { label: 'Problem / Reason', width: '14%', className: 'cell-text', render: (row) => <ExpandableText text={row.problem_reason} /> },
     { label: 'Personnel', width: '10%', render: (row) => <UserAvatarName user={row.maintenance_personnel} /> },
     { label: 'Progress', width: '8%', render: (row) => <StatusBadge value={row.progress_status} /> },
     { label: 'Verification', width: '8%', render: (row) => row.verification_result ? <StatusBadge value={row.verification_result} /> : '-' },
@@ -5917,7 +6179,10 @@ function MaintenanceRecordCard({ record, onClick }) {
         <div className="ticket-card-info">
           <div className="ticket-card-top">
             <span className="ticket-card-id">#{record.maintenance_id}</span>
-            <StatusBadge value={record.progress_status} />
+            <div style={{ display: 'flex', gap: 6 }}>
+              <StatusBadge value={record.source} />
+              <StatusBadge value={record.progress_status} />
+            </div>
           </div>
           <p className="ticket-card-title">{record.maintenance_type}</p>
           <p className="ticket-card-vehicle">
@@ -6003,6 +6268,7 @@ function MaintenanceRecordDetail({ record, onConfirm, onReopen, onDecisionClose,
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <VehicleCell vehicle={record.vehicle} />
           <span className="muted">{record.maintenance_type}</span>
+          <StatusBadge value={record.source} />
           {onHold && (
             <span style={{ fontSize: '0.7rem', fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: '#fef3c7', color: '#92400e', border: '1px solid #fde68a' }}>ON HOLD — AWAITING PARTS</span>
           )}
@@ -6202,6 +6468,7 @@ function maintenanceStatusColumns(setEditTarget) {
     { label: 'ID', render: (row) => row.maintenance_id },
     { label: 'Vehicle', render: (row) => <VehicleCell vehicle={row.vehicle} /> }, { label: 'Plate', render: (row) => row.vehicle?.plate_number ?? '-' },
     { label: 'Type', render: (row) => row.maintenance_type },
+    { label: 'Source', render: (row) => <StatusBadge value={row.source} /> },
     { label: 'Problem / Reason', className: 'cell-text', render: (row) => <ExpandableText text={row.problem_reason} /> },
     { label: 'Action Taken', className: 'cell-text', render: (row) => <ExpandableText text={row.action_taken} /> },
     { label: 'Personnel', render: (row) => <UserAvatarName user={row.maintenance_personnel} /> },
@@ -6855,6 +7122,13 @@ function valuesFromFields(fields, initialValues) {
     const raw = initialValues?.[field.name];
     if (field.type === 'checkboxes') {
       return [field.name, Array.isArray(raw) && raw.length ? raw : []];
+    }
+    // A 'list' field edits as separate rows but is stored as one
+    // newline-joined string (see handleSubmit) — no backend/schema change
+    // needed, and it stays a plain string for any code that just displays it.
+    if (field.type === 'list') {
+      const rows = typeof raw === 'string' && raw.trim() ? raw.split('\n') : (Array.isArray(raw) ? raw : []);
+      return [field.name, rows.length ? rows : ['']];
     }
     return [field.name, raw ?? ''];
   }));
@@ -7531,11 +7805,16 @@ function VerificationForm({ target, onCancel, onSubmit }) {
 
   const allAnswered = results.every((r) => r.passed !== null);
   const anyFailed = results.some((r) => r.passed === false);
+  const allPassed = results.length > 0 && results.every((r) => r.passed === true);
   const verdict = anyFailed ? 'Rejected' : 'Approved';
   const needsAttestation = !anyFailed;
   const canSubmit = allAnswered && (!needsAttestation || attested) && !submitting;
 
   const setResult = (i, passed) => setResults((rs) => rs.map((r, idx) => (idx === i ? { ...r, passed } : r)));
+  // Same shortcut as the Readiness Check form — most checks are routine
+  // passes, so bulk-marking everything Pass and flipping the odd real
+  // failure afterward beats clicking Pass on every single row.
+  const toggleAllPassed = (checked) => setResults((rs) => rs.map((r) => ({ ...r, passed: checked ? true : null })));
   const addTest = () => {
     if (newTestInput.trim()) {
       setResults((rs) => [...rs, { item: newTestInput.trim(), passed: null }]);
@@ -7564,6 +7843,10 @@ function VerificationForm({ target, onCancel, onSubmit }) {
       <p className="muted" style={{ margin: '0 0 12px', fontSize: '0.85rem' }}>
         Physically operate the vehicle and mark each check. A repair is only accepted once it actually works — any failed check sends it back to the mechanic.
       </p>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', marginBottom: 8, borderRadius: 8, background: '#eff6ff', border: '1px solid #bfdbfe', fontSize: '0.83rem', fontWeight: 600, color: '#1e40af', cursor: 'pointer' }}>
+        <input type="checkbox" checked={allPassed} onChange={(e) => toggleAllPassed(e.target.checked)} style={{ width: 16, height: 16, cursor: 'pointer' }} />
+        Mark all as Pass
+      </label>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {results.map((r, i) => (
@@ -7781,13 +8064,22 @@ function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, on
               )}
             </div>
           </div>
-          {/* As a full page, the breadcrumb above already says "back to
-              Maintenance Tickets" and the sidebar is always one click away —
-              a redundant arrow here just duplicates that. Only the modal
-              variant (opened over another page) needs its own close button. */}
-          {asPage ? null : (
-            <button className="icon-btn" onClick={onClose} type="button" title="Close" aria-label="Close"><Icon name="close" size={18} /></button>
-          )}
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+            {/* Ticket-wide "what's needed next" — the same badge used on the
+                ticket cards, reused here rather than promoting one
+                sub-issue's own note (below) to this spot. With more than one
+                sub-issue, each can be at a different stage, so only a
+                ticket-level summary generalizes; a single sub-issue's note
+                wouldn't. */}
+            <TicketStageBadge ticket={ticket} />
+            {/* As a full page, the breadcrumb above already says "back to
+                Maintenance Tickets" and the sidebar is always one click away —
+                a redundant arrow here just duplicates that. Only the modal
+                variant (opened over another page) needs its own close button. */}
+            {asPage ? null : (
+              <button className="icon-btn" onClick={onClose} type="button" title="Close" aria-label="Close"><Icon name="close" size={18} /></button>
+            )}
+          </div>
         </div>
 
         {ticket.status === 'Cancelled' ? (
@@ -7860,7 +8152,15 @@ function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, on
                   )}
                   {ticket.inspected_by && (
                     <div>
-                      <span style={{ display: 'block', fontSize: '0.66rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 2 }}>Inspected By</span>
+                      {/* A Pre-Diagnosed ticket skips inspection entirely — the
+                          backend stamps inspected_by with whoever CREATED the
+                          ticket (usually the Admin), not the Custodian shown
+                          above as "Assigned To". Labeling that "Inspected By"
+                          made it look like the Custodian did an inspection
+                          that never actually happened. */}
+                      <span style={{ display: 'block', fontSize: '0.66rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 2 }}>
+                        {ticket.inspected_by.id === ticket.assigned_custodian_id ? 'Inspected By' : 'Pre-Diagnosed By'}
+                      </span>
                       <UserAvatarName user={ticket.inspected_by} />
                     </div>
                   )}
@@ -8189,8 +8489,12 @@ function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, on
                   )}
 
                   {/* Escape hatch for a line item that can't be finished (no
-                      budget, part unavailable). Available while unresolved. */}
-                  {isAdmin && ticket.status === 'Active' && !isResolvedStatus(si.status) && deferringId !== si.sub_issue_id && (
+                      budget, part unavailable) — i.e. it was never actually
+                      fixed. Once it reaches For Confirmation the Custodian
+                      has already verified the repair works, so there's
+                      nothing left to "not fix" — Confirm or Reopen is the
+                      only choice that still makes sense there. */}
+                  {isAdmin && ticket.status === 'Active' && !isResolvedStatus(si.status) && si.status !== 'For Confirmation' && deferringId !== si.sub_issue_id && (
                     <button
                       type="button"
                       onClick={() => { setDeferringId(si.sub_issue_id); setAssigningId(null); setConfirmingId(null); }}
@@ -8385,6 +8689,11 @@ function NewTicketPage({ onBack, ticketLookups, prefilledTicketData, onCreateTic
     const seeded = (prefilledTicketData?.sub_issues_text ?? '').split('\n').map((s) => s.trim()).filter(Boolean);
     return seeded.length ? seeded : [''];
   });
+  // Captured once here, up front — same reasoning as the Custodian's
+  // inspection form: "pre-diagnosed" means the Admin already knows what
+  // kind of repair this is, so asking again when a mechanic gets assigned
+  // later would just be re-asking something already known.
+  const [subIssueCategory, setSubIssueCategory] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const selectedVehicleId = liveValues.vehicle_id ?? null;
   const [openTicketsOnVehicle, setOpenTicketsOnVehicle] = useState([]);
@@ -8442,7 +8751,7 @@ function NewTicketPage({ onBack, ticketLookups, prefilledTicketData, onCreateTic
         issue_report_id: prefilledTicketData?.issue_report_id,
       };
       if (preDiagnosed) {
-        out.sub_issues = subIssueRows.map((t) => t.trim()).filter(Boolean).map((title) => ({ title, maintenance_type: null }));
+        out.sub_issues = subIssueRows.map((t) => t.trim()).filter(Boolean).map((title) => ({ title, maintenance_type: subIssueCategory || null }));
         out.down_since = liveValues.down_since || undefined;
       }
       await onCreateTicket(out);
@@ -8579,17 +8888,23 @@ function NewTicketPage({ onBack, ticketLookups, prefilledTicketData, onCreateTic
           <div className="veh-card-head"><Icon name="alert" size={16} /><h4>Issue Details</h4></div>
           <div style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 16 }}>
             <div className="ticket-form-grid-2" style={{ padding: 0 }}>
-              <label>
-                <span>Ticket Title (Main Issue)</span>
+              <label style={!preDiagnosed ? { gridColumn: '1 / -1' } : undefined}>
+                <span>Ticket Title</span>
                 <input required type="text" value={liveValues.ticket_title ?? ''} onChange={(e) => setField('ticket_title', e.target.value)} />
               </label>
-              <label>
-                <span>Fault Category</span>
-                <select value={liveValues.fault_category ?? ''} onChange={(e) => setField('fault_category', e.target.value)}>
-                  <option value="">Select</option>
-                  {faultCategoryOptions.map((f) => <option key={f} value={f}>{f}</option>)}
-                </select>
-              </label>
+              {/* Fault Category classifies the confirmed symptom — asking for
+                  it in Needs Inspection mode would mean guessing at a
+                  diagnosis nobody has made yet. Only Pre-Diagnosed tickets
+                  already know what's wrong, so this only makes sense there. */}
+              {preDiagnosed && (
+                <label>
+                  <span>Fault Category</span>
+                  <select value={liveValues.fault_category ?? ''} onChange={(e) => setField('fault_category', e.target.value)}>
+                    <option value="">Select</option>
+                    {faultCategoryOptions.map((f) => <option key={f} value={f}>{f}</option>)}
+                  </select>
+                </label>
+              )}
             </div>
             <label>
               <span>Description / Details</span>
@@ -8609,7 +8924,16 @@ function NewTicketPage({ onBack, ticketLookups, prefilledTicketData, onCreateTic
           <section className="veh-card">
             <div className="veh-card-head"><Icon name="wrench" size={16} /><h4>Known Sub-Issues</h4></div>
             <div style={{ padding: 18 }}>
-              <p className="muted" style={{ marginTop: 0, marginBottom: 14 }}>List each specific problem already found — a mechanic will be assigned to each one.</p>
+              <p className="muted" style={{ marginTop: 0, marginBottom: 14 }}>List each specific problem already found — a mechanic will be assigned to each one. All sub-issues here share one category.</p>
+
+              <label style={{ display: 'block', marginBottom: 16, maxWidth: 320 }}>
+                <span style={{ display: 'block', fontSize: '0.72rem', fontWeight: 600, color: '#64748b', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.02em' }}>Category</span>
+                <select value={subIssueCategory} onChange={(e) => setSubIssueCategory(e.target.value)} style={{ width: '100%' }}>
+                  <option value="">Select a category</option>
+                  {(ticketLookups?.maintenance_types ?? []).map((t) => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </label>
+
               {subIssueRows.map((title, index) => (
                 <div key={index} style={{ display: 'flex', gap: 8, marginBottom: 10, alignItems: 'center' }}>
                   <span className="muted" style={{ flex: '0 0 20px', textAlign: 'right' }}>{index + 1}.</span>
@@ -9262,6 +9586,7 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, canManage = false, ca
             <DataTable
               columns={[
                 { label: 'Type', render: (r) => r.maintenance_type },
+                { label: 'Source', render: (r) => <StatusBadge value={r.source} /> },
                 { label: 'Problem / Reason', className: 'cell-text', render: (r) => <ExpandableText text={r.problem_reason} /> },
                 { label: 'Personnel', render: (r) => <UserAvatarName user={r.maintenance_personnel} /> },
                 { label: 'Progress', render: (r) => <StatusBadge value={r.progress_status} /> },
@@ -9301,8 +9626,64 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, canManage = false, ca
 // TICKET CARD
 // =========================================================================
 
+// A ticket's broad status (Open/Active/Closed/Cancelled) doesn't say whose
+// turn it is right now — "Active" alone looks the same whether a mechanic
+// is still mid-repair, or the Custodian/Admin already responded and it's
+// sitting untouched waiting for someone. This derives the actual next step
+// from the ticket + its sub-issues, so that's visible at a glance instead of
+// hiding behind a generic unread-notification counter.
+function ticketWorkflowStage(ticket) {
+  if (ticket.status === 'Open') {
+    return { label: 'Awaiting Custodian Inspection', tone: 'waiting' };
+  }
+  if (ticket.status !== 'Active') {
+    return null; // Closed/Cancelled — the status badge alone already says enough.
+  }
+  const subIssues = ticket.sub_issues ?? [];
+  if (subIssues.some((s) => s.status === 'For Confirmation')) {
+    return { label: 'Awaiting Your Confirmation', tone: 'action' };
+  }
+  if (subIssues.some((s) => s.status === 'Open')) {
+    return { label: 'Diagnosed — Assign a Mechanic', tone: 'action' };
+  }
+  const total = ticket.progress?.total ?? subIssues.length;
+  const done = ticket.progress?.done ?? subIssues.filter((s) => s.status === 'Done').length;
+  if (total > 0 && done === total) {
+    return { label: 'Ready to Close', tone: 'action' };
+  }
+  return { label: 'In Repair', tone: 'info' };
+}
+
+// Deliberately NOT another rounded status-badge capsule — Priority and
+// Status already share that exact look (and, in this app's dark/light
+// theme CSS, Medium/High priority and Active status even share the same
+// amber color), so a third pill in the same shape just reads as more of
+// the same noise. A flat-edged strip with a left accent bar reads as its
+// own distinct thing: a callout, not another label.
+const TICKET_STAGE_STYLE = {
+  action:  { bg: 'linear-gradient(90deg,#faf5ff,#ede9fe)', color: '#5b21b6', icon: 'alert' },
+  waiting: { bg: 'linear-gradient(90deg,#eff6ff,#dbeafe)', color: '#1d4ed8', icon: 'search' },
+  info:    { bg: 'linear-gradient(90deg,#f8fafc,#f1f5f9)', color: '#475569', icon: 'wrench' },
+};
+
+function TicketStageBadge({ ticket }) {
+  const stage = ticketWorkflowStage(ticket);
+  if (!stage) return null;
+  const style = TICKET_STAGE_STYLE[stage.tone];
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.74rem', fontWeight: 700,
+      padding: '6px 10px', borderRadius: '0 6px 6px 0', background: style.bg,
+      borderLeft: `3px solid ${style.color}`, color: style.color,
+    }}>
+      <Icon name={style.icon} size={12} /> {stage.label}
+    </div>
+  );
+}
+
 function TicketCard({ ticket, unreadCount = 0, onClick }) {
   const progress = ticket.progress;
+  const stage = ticketWorkflowStage(ticket);
 
   return (
     <div className="ticket-card" style={{ position: 'relative' }} onClick={onClick} role="button" tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && onClick()}>
@@ -9346,6 +9727,11 @@ function TicketCard({ ticket, unreadCount = 0, onClick }) {
           <span className="muted" style={{ fontSize: '0.72rem' }}>{progress.done}/{progress.total} sub-issues done</span>
         </div>
       )}
+      {stage && (
+        <div style={{ margin: '6px 0 2px' }}>
+          <TicketStageBadge ticket={ticket} />
+        </div>
+      )}
       <div className="ticket-card-bottom">
         <TicketStatusBadge value={ticket.status} />
         <span className="ticket-card-date">{formatDate(ticket.created_at)}</span>
@@ -9376,7 +9762,7 @@ function CustodianInspectionModule({
 
   return (
     <div className="module-grid">
-      <DismissibleHint description="Phase 2 — Vehicle Evaluation. Review tickets assigned to you, submit physical inspection findings, and check back here to see what you've already inspected." />
+      <DismissibleHint description="Phase 2 — Vehicle Evaluation. Review tickets assigned to you, submit physical inspection findings, and check back here for anything already diagnosed — either by your own inspection, or pre-diagnosed by an Admin (e.g. reassigned to you mid-repair)." />
       <ModuleStatCards
         totalLabel="Total Assigned"
         total={stats.total}
@@ -9387,7 +9773,11 @@ function CustodianInspectionModule({
       />
       <section className="panel">
         <div className="panel-header-bar">
-          <h3>{isPendingView ? 'Pending Inspections' : 'Already Inspected'} <span className="count-badge">{tickets.length}</span></h3>
+          {/* Not every ticket in this second bucket was actually inspected —
+              a Pre-Diagnosed ticket (or one reassigned to this Custodian
+              after the fact) skips inspection entirely, so calling it
+              "Already Inspected" claimed something that never happened. */}
+          <h3>{isPendingView ? 'Pending Inspections' : 'Diagnosed'} <span className="count-badge">{tickets.length}</span></h3>
         </div>
         <FilterBar
           categories={categories}
@@ -9399,7 +9789,7 @@ function CustodianInspectionModule({
         />
         <div style={{ height: '16px' }} />
         {tickets.length === 0
-          ? <p className="empty-state">{isPendingView ? 'No inspection assignments pending.' : 'No inspections submitted yet.'}</p>
+          ? <p className="empty-state">{isPendingView ? 'No inspection assignments pending.' : 'Nothing diagnosed yet.'}</p>
           : (
             <DataTable
               columns={[
@@ -9413,9 +9803,16 @@ function CustodianInspectionModule({
                 { label: 'Time', render: (r) => formatTime(r.assigned_at) },
                 {
                   label: 'Action',
+                  // "Submitted" implied THIS Custodian already did something —
+                  // false for a Pre-Diagnosed ticket, or one reassigned to
+                  // them after the fact. Reusing the same stage logic the
+                  // Admin's ticket cards use says honestly where the ball
+                  // actually is instead (e.g. "Diagnosed — Assign a
+                  // Mechanic" — informational, since assigning one isn't a
+                  // Custodian action, but at least it's true).
                   render: (r) => r.status === 'Open'
                     ? <button className="btn-edit-action icon-btn" type="button" onClick={() => onOpenInspect(r)} title="Inspect" aria-label="Inspect"><Icon name="search" size={14} /></button>
-                    : <span className="muted">Submitted</span>
+                    : <TicketStageBadge ticket={r} />
                 },
               ]}
               rows={tickets}
@@ -9981,6 +10378,7 @@ function ticketTableColumns() {
     { label: 'Title', render: (r) => r.ticket_title },
     { label: 'Vehicle', render: (r) => <VehicleCell vehicle={r.vehicle} /> }, { label: 'Plate', render: (r) => r.vehicle?.plate_number ?? '-' },
     { label: 'Status', render: (r) => <TicketStatusBadge value={r.status} /> },
+    { label: 'Next Step', render: (r) => <TicketStageBadge ticket={r} /> },
     { label: 'Priority', render: (r) => <TicketStatusBadge value={r.priority} /> },
     { label: 'Created', render: (r) => <DateBadge value={r.created_at} /> },
     { label: 'Time', render: (r) => formatTime(r.created_at) },

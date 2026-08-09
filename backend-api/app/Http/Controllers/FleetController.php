@@ -317,6 +317,23 @@ class FleetController extends Controller
             ];
         }
 
+        // A sub-issue lands here the moment it's created — either a
+        // Custodian's inspection findings or a Pre-Diagnosed ticket — and
+        // stays invisible to the Admin otherwise: the one-time "Inspection
+        // Submitted" / "Pre-Diagnosed Ticket Ready" bell notification is
+        // easy to miss or dismiss, and nothing else ever points back at it.
+        // Surfacing it here keeps "needs a mechanic assigned" visible for as
+        // long as it's actually true, not just for the moment it happened.
+        foreach (TicketSubIssue::where('status', 'Open')->whereNull('assigned_mechanic_id')->with(['ticket.vehicle'])->get() as $subIssue) {
+            $items[] = [
+                'type'         => 'subissue_needs_mechanic',
+                'id'           => $subIssue->ticket_id,
+                'label'        => "Assign a mechanic: {$subIssue->title}",
+                'vehicle_name' => $subIssue->ticket->vehicle->vehicle_name ?? null,
+                'severity'     => null,
+            ];
+        }
+
         $activeTickets = MaintenanceTicket::where('status', 'Active')->with(['subIssues', 'vehicle'])->get();
         foreach ($activeTickets as $ticket) {
             if ($ticket->isEligibleToClose()) {
@@ -376,11 +393,16 @@ class FleetController extends Controller
             }
             return match ($item['type']) {
                 'ticket_close'             => 1,
-                'ticket_confirm'           => 2,
-                'recurring_fault_review'   => 3,
-                'issue_pending'            => 4,
-                'readiness_check'          => 5,
-                'schedule_overdue'         => 6,
+                // A vehicle sitting with a diagnosed problem and no mechanic
+                // working on it yet is more urgent than paperwork on repairs
+                // already underway or done — nothing progresses on it until
+                // an Admin acts.
+                'subissue_needs_mechanic'  => 2,
+                'ticket_confirm'           => 3,
+                'recurring_fault_review'   => 4,
+                'issue_pending'            => 5,
+                'readiness_check'          => 6,
+                'schedule_overdue'         => 7,
                 default                    => 7,
             };
         };
@@ -847,6 +869,11 @@ class FleetController extends Controller
     public function archiveVehicle(Request $request, Vehicle $vehicle)
     {
         $this->requireRole($request, ['Admin']);
+
+        $openTickets = MaintenanceTicket::where('vehicle_id', $vehicle->vehicle_id)
+            ->whereNotIn('status', ['Closed', 'Cancelled'])
+            ->count();
+        abort_if($openTickets > 0, 422, 'Close or cancel this vehicle\'s open ticket(s) before deactivating it.');
 
         $vehicle->update([
             'status' => 'Inactive',
@@ -1370,6 +1397,7 @@ class FleetController extends Controller
             'maintenancePersonnel',
             'verifiedBy',
             'confirmedBy',
+            'originatingSchedule',
         ]);
 
         if ($request->boolean('mine')) {
@@ -1404,7 +1432,7 @@ class FleetController extends Controller
 
     public function showMaintenanceRecord(Request $request, VehicleMaintenanceRecord $record)
     {
-        return $record->load(['vehicle.category', 'sourceVehicle', 'issueReport', 'maintenancePersonnel', 'verifiedBy', 'confirmedBy']);
+        return $record->load(['vehicle.category', 'sourceVehicle', 'issueReport', 'maintenancePersonnel', 'verifiedBy', 'confirmedBy', 'originatingSchedule']);
     }
 
     public function storeMaintenanceRecord(Request $request)

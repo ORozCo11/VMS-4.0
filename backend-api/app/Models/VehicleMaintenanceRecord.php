@@ -42,9 +42,41 @@ class VehicleMaintenanceRecord extends Model
         'confirmed_at' => 'datetime',
     ];
 
+    // Not a real column — computed in getSourceAttribute() below, but always
+    // needed by the UI (Maintenance Records list/detail), so it's appended
+    // to every JSON response instead of making callers remember to ask for it.
+    protected $appends = ['source'];
+
     public function vehicle()
     {
         return $this->belongsTo(Vehicle::class, 'vehicle_id', 'vehicle_id');
+    }
+
+    // The schedule this record was produced FROM, if any (completeSchedule()
+    // sets schedule.resulting_maintenance_id back to this record — this is
+    // just the inverse side of that link).
+    public function originatingSchedule()
+    {
+        return $this->hasOne(VehicleMaintenanceSchedule::class, 'resulting_maintenance_id', 'maintenance_id');
+    }
+
+    // How this record came to exist, for the "Source" column — never stored,
+    // always derived, so it can't drift out of sync with the data it reads.
+    // Order matters: a schedule-completion record can also carry an
+    // issue_report_id/is_external from its schedule, so the schedule check
+    // must win first.
+    public function getSourceAttribute()
+    {
+        if ($this->originatingSchedule) {
+            return 'Scheduled Maintenance';
+        }
+        if ($this->issue_report_id && $this->is_external) {
+            return 'External Shop';
+        }
+        if ($this->issue_report_id) {
+            return 'From Issue Report';
+        }
+        return 'Field Repair';
     }
 
     // The vehicle a part was cannibalized FROM, when this repair used a part

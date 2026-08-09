@@ -1580,7 +1580,7 @@ table a:hover {
 .smart-form {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 12px;
 }
 .smart-form h3 {
   font-family: 'Orbitron', sans-serif;
@@ -1592,10 +1592,10 @@ table a:hover {
 .smart-form label {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
 }
 .field-hint {
-  font-size: 0.78rem;
+  font-size: 0.72rem;
   font-weight: 400;
   text-transform: none;
   letter-spacing: normal;
@@ -1604,31 +1604,31 @@ table a:hover {
 }
 .smart-form label span {
   font-family: 'Space Grotesk', sans-serif;
-  font-size: 0.8rem;
+  font-size: 0.68rem;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.05em;
   color: #64748b;
 }
 .smart-form input, .smart-form select, .smart-form textarea {
   background: #ffffff;
-  border: 1.5px solid #cbd5e1;
-  border-radius: 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
   color: #0f172a;
-  padding: 12px 16px;
-  font-size: 0.95rem;
+  padding: 6px 9px;
+  font-size: 0.8rem;
   font-family: 'Space Grotesk', sans-serif;
   outline: none;
   transition: all 0.15s ease;
 }
 .smart-form input:focus, .smart-form select:focus, .smart-form textarea:focus {
   border-color: #2563eb;
-  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
 }
 .smart-form textarea {
   resize: vertical;
-  min-height: 110px;
-  line-height: 1.6;
+  min-height: 56px;
+  line-height: 1.45;
 }
 .smart-form input[type="file"] {
   background: #f8fafc;
@@ -1830,6 +1830,29 @@ button.vehicle-cell-name.cell-link { font-weight: 600; }
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+/* Review step (opt-in via FormPage's `reviewStep` prop) — a full-width "check
+   everything before it saves" step instead of a live summary sidebar
+   fighting the form for space the whole time it's being filled in. */
+.form-review-title {
+  margin: 0 0 4px;
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: var(--text-strong, #0f172a);
+}
+.form-review-grid {
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px 28px;
+  padding: 16px 2px 20px;
+}
+.form-review-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  padding-top: 16px;
+  margin-top: 4px;
+  border-top: 1px solid var(--border-subtle, #e2e8f0);
 }
 
 /* Issue view page — the real content (Issue Information + Description) leads
@@ -2439,11 +2462,12 @@ button.wizard-step-pill:hover {
 .form-grid-2col .smart-form {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 14px 22px;
+  grid-auto-flow: dense;
+  gap: 10px 18px;
 }
 .modal-box-wide .smart-form label,
 .form-grid-2col .smart-form label {
-  gap: 6px;
+  gap: 4px;
 }
 /* Full-width rows: textarea, file upload, and the action buttons */
 .modal-box-wide .smart-form label:has(textarea),
@@ -2459,8 +2483,8 @@ button.wizard-step-pill:hover {
 /* Card wrapper so the grid form reads as its own bordered section within the panel */
 .form-grid-2col {
   border: 1px solid var(--border-subtle, #e2e8f0);
-  border-radius: 12px;
-  padding: 20px 22px;
+  border-radius: 10px;
+  padding: 16px 18px;
   background: var(--surface-2, #f8fafc);
 }
 .modal-box-wide .smart-form > h3:empty {
@@ -4292,20 +4316,48 @@ table button,
   gap: 20px;
 }
 
+.dashboard-2col-grid {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+@media (max-width: 960px) {
+  .dashboard-2col-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.dashboard-card-panel {
+  display: flex;
+  flex-direction: column;
+  height: auto;
+  min-height: 260px;
+  margin-bottom: 0;
+}
+
 .dashboard-graphs {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 20px;
+}
+
+@media (max-width: 960px) {
+  .dashboard-graphs {
+    grid-template-columns: 1fr;
+  }
 }
 
 .graph-panel {
   min-height: 300px;
   background: linear-gradient(180deg, rgba(22, 23, 27, 0.98), rgba(14, 15, 18, 0.98));
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 12px;
   box-shadow: var(--shadow-soft);
   color: var(--text);
-  padding: 18px;
+  padding: 20px;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -5507,6 +5559,31 @@ table a:hover,
   color: #ffd27a;
 }
 
+/* Maintenance Record "Source" badges — how a record came to exist
+   (see VehicleMaintenanceRecord::getSourceAttribute). Deliberately distinct
+   from the Progress/Verification colors above so the two badges in the same
+   row never read as the same status twice. */
+.status-badge.scheduled-maintenance {
+  background: rgba(148, 163, 184, 0.14);
+  border-color: rgba(148, 163, 184, 0.32);
+  color: #cbd5e1;
+}
+.status-badge.external-shop {
+  background: rgba(249, 115, 22, 0.16);
+  border-color: rgba(249, 115, 22, 0.34);
+  color: #fdba74;
+}
+.status-badge.from-issue-report {
+  background: rgba(59, 130, 246, 0.14);
+  border-color: rgba(59, 130, 246, 0.32);
+  color: #93c5fd;
+}
+.status-badge.field-repair {
+  background: rgba(99, 102, 241, 0.16);
+  border-color: rgba(99, 102, 241, 0.34);
+  color: #a5b4fc;
+}
+
 .status-badge.land {
   background: rgba(180, 132, 71, 0.14);
   border-color: rgba(180, 132, 71, 0.28);
@@ -5520,13 +5597,13 @@ table a:hover,
 }
 
 .smart-form {
-  gap: 18px;
+  gap: 12px;
 }
 
 .smart-form label span {
   color: var(--text-muted);
-  font-size: 0.78rem;
-  font-weight: 800;
+  font-size: 0.68rem;
+  font-weight: 700;
 }
 
 .smart-form input,
@@ -5565,6 +5642,37 @@ table a:hover,
 .smart-form input[type="file"] {
   background: #0b0c0f;
   border-color: var(--border);
+}
+
+.password-field {
+  position: relative;
+  display: flex;
+}
+.password-field input {
+  flex: 1;
+  min-width: 0;
+  padding-right: 40px;
+}
+.password-field-toggle {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.password-field-toggle:hover {
+  background: rgba(148, 163, 184, 0.18);
+  color: var(--text-strong);
 }
 
 .file-preview,
@@ -5733,9 +5841,7 @@ button.btn-view-action svg {
   color: #ffa3a3;
 }
 
-.notice.warning,
-.ticket-alert-banner.formaint,
-.ticket-alert-banner.forconfirm {
+.notice.warning {
   background: rgba(37, 99, 235, 0.1);
   border: 1px solid rgba(37, 99, 235, 0.28);
   color: #93c5fd;
@@ -7965,6 +8071,27 @@ html[data-theme="light"] .status-badge.info {
   background: #dbeafe;
   border-color: #93c5fd;
   color: #1d4ed8;
+}
+
+html[data-theme="light"] .status-badge.scheduled-maintenance {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+  color: #475569;
+}
+html[data-theme="light"] .status-badge.external-shop {
+  background: #ffedd5;
+  border-color: #fdba74;
+  color: #9a3412;
+}
+html[data-theme="light"] .status-badge.from-issue-report {
+  background: #dbeafe;
+  border-color: #93c5fd;
+  color: #1d4ed8;
+}
+html[data-theme="light"] .status-badge.field-repair {
+  background: #e0e7ff;
+  border-color: #a5b4fc;
+  color: #4338ca;
 }
 
 html[data-theme="light"] .status-badge.land {

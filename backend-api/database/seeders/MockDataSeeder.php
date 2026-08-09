@@ -7,6 +7,7 @@ use App\Models\Vehicle;
 use App\Models\VehicleCategory;
 use App\Models\VehicleIssueReport;
 use App\Models\MaintenanceTicket;
+use App\Models\TicketSubIssue;
 use App\Models\TicketArchiveLog;
 use App\Models\VehicleMaintenanceSchedule;
 use App\Models\VehicleMaintenanceRecord;
@@ -33,8 +34,13 @@ class MockDataSeeder extends Seeder
 
         $ambulanceCat = VehicleCategory::where('category_name', 'Ambulance')->first();
         $truckCat = VehicleCategory::where('category_name', 'Truck')->first();
+        $fireTruckCat = VehicleCategory::where('category_name', 'Fire Truck')->first();
+        $vanCat = VehicleCategory::where('category_name', 'Van')->first();
+        $patrolCat = VehicleCategory::where('category_name', 'Patrol Vehicle')->first();
+        $serviceCat = VehicleCategory::where('category_name', 'Service Vehicle')->first();
+        $rescueBoatCat = VehicleCategory::where('category_name', 'Rescue Boat')->first();
 
-        if (!$ambulanceCat || !$truckCat) {
+        if (!$ambulanceCat || !$truckCat || !$fireTruckCat || !$vanCat || !$patrolCat || !$serviceCat || !$rescueBoatCat) {
             $this->command->error("FleetReferenceSeeder must run first!");
             return;
         }
@@ -123,6 +129,115 @@ class MockDataSeeder extends Seeder
             ]
         );
 
+        // Vehicle 5: Barangay Fire Responder
+        $v5 = Vehicle::updateOrCreate(
+            ['plate_number' => 'BFP-5501'],
+            [
+                'vehicle_name'     => 'Barangay Fire Responder',
+                'category_id'      => $fireTruckCat->category_id,
+                'brand'            => 'Isuzu',
+                'model'            => 'FRR Fire Pumper',
+                'year_model'       => '2018',
+                'capacity'         => '2000L water tank',
+                'fuel_type'        => 'Diesel',
+                'vehicle_color'    => 'Red',
+                'current_location' => 'Paknaan Brgy Hall',
+                'status'           => 'Available',
+                'condition'        => 'Good',
+            ]
+        );
+
+        // Vehicle 6: Community Service Multicab
+        $v6 = Vehicle::updateOrCreate(
+            ['plate_number' => 'SVC-6102'],
+            [
+                'vehicle_name'     => 'Community Service Multicab',
+                'category_id'      => $serviceCat->category_id,
+                'brand'            => 'Suzuki',
+                'model'            => 'Multicab Scrum',
+                'year_model'       => '2020',
+                'capacity'         => '600kg',
+                'fuel_type'        => 'Gasoline',
+                'vehicle_color'    => 'White',
+                'current_location' => 'Twinbee Hub',
+                'status'           => 'Available',
+                'condition'        => 'Good',
+            ]
+        );
+
+        // Vehicle 7: Tanod Patrol Vehicle
+        $v7 = Vehicle::updateOrCreate(
+            ['plate_number' => 'TNP-7203'],
+            [
+                'vehicle_name'     => 'Tanod Patrol Vehicle',
+                'category_id'      => $patrolCat->category_id,
+                'brand'            => 'Toyota',
+                'model'            => 'Hilux Patrol',
+                'year_model'       => '2022',
+                'capacity'         => '5 seats',
+                'fuel_type'        => 'Diesel',
+                'vehicle_color'    => 'Blue / White',
+                'current_location' => 'Paknaan Gymnasium',
+                'status'           => 'Available',
+                'condition'        => 'Good',
+            ]
+        );
+
+        // Vehicle 8: Community Transport Van
+        $v8 = Vehicle::updateOrCreate(
+            ['plate_number' => 'VAN-8304'],
+            [
+                'vehicle_name'     => 'Community Transport Van',
+                'category_id'      => $vanCat->category_id,
+                'brand'            => 'Toyota',
+                'model'            => 'HiAce Commuter',
+                'year_model'       => '2019',
+                'capacity'         => '15 seats',
+                'fuel_type'        => 'Diesel',
+                'vehicle_color'    => 'Silver',
+                'current_location' => 'Twinbee Hub',
+                'status'           => 'Under Maintenance',
+                'condition'        => 'Needs Repair',
+            ]
+        );
+
+        // Vehicle 9: Flood Rescue Boat
+        $v9 = Vehicle::updateOrCreate(
+            ['plate_number' => 'RB-9405'],
+            [
+                'vehicle_name'     => 'Flood Rescue Boat',
+                'category_id'      => $rescueBoatCat->category_id,
+                'brand'            => 'Yamaha',
+                'model'            => 'Rubber Rescue Boat RB-14',
+                'year_model'       => '2021',
+                'capacity'         => '8 persons',
+                'fuel_type'        => 'Gasoline',
+                'hull_material'    => 'Reinforced Rubber',
+                'vehicle_color'    => 'Orange / Black',
+                'current_location' => 'Paknaan Brgy Hall',
+                'status'           => 'Available',
+                'condition'        => 'Good',
+            ]
+        );
+
+        // Vehicle 10: Garbage Collection Truck
+        $v10 = Vehicle::updateOrCreate(
+            ['plate_number' => 'GRB-1006'],
+            [
+                'vehicle_name'     => 'Garbage Collection Truck',
+                'category_id'      => $truckCat->category_id,
+                'brand'            => 'Fuso',
+                'model'            => 'Canter Dump Truck',
+                'year_model'       => '2017',
+                'capacity'         => '4000kg',
+                'fuel_type'        => 'Diesel',
+                'vehicle_color'    => 'Green',
+                'current_location' => 'Paknaan Gymnasium',
+                'status'           => 'Available',
+                'condition'        => 'Good',
+            ]
+        );
+
         // 3. Seed Issue Reports
         // Resolved Issue Report for Portuguese Ambulance
         $issue1 = VehicleIssueReport::updateOrCreate(
@@ -149,20 +264,32 @@ class MockDataSeeder extends Seeder
         );
 
         // 4. Seed Maintenance Tickets
-        // Ticket 1: Completed Brake Service for Portuguese Ambulance (Done)
+        // Ticket 1: Completed Brake Service for Portuguese Ambulance (Closed)
         $t1 = MaintenanceTicket::updateOrCreate(
             ['vehicle_id' => $v2->vehicle_id, 'ticket_title' => 'Engine Oil Change & Brake Replacement'],
             [
                 'created_by'            => $admin->id,
                 'ticket_description'    => 'Standard periodic service. Replace worn front brake pads and change engine oil filter.',
                 'priority'              => 'Medium',
-                'status'                => 'Done',
+                'status'                => 'Closed',
                 'assigned_custodian_id' => $custodian->id,
                 'assigned_at'           => now()->subDays(3),
                 'inspected_by'          => $custodian->id,
                 'inspected_at'          => now()->subDays(3)->addHours(2),
                 'inspection_result'     => 'Needs Maintenance',
                 'inspection_notes'      => 'Confirmed brakes are worn out. Front rotors are fine, pads need replacement.',
+                'closed_by'             => $admin->id,
+                'closed_at'             => now()->subMinutes(30),
+                'closing_notes'         => 'Repairs confirmed. Expenses approved. Vehicle ready for active duty.',
+                'archived_at'           => now()->subMinutes(30),
+            ]
+        );
+
+        $t1SubIssue = TicketSubIssue::updateOrCreate(
+            ['ticket_id' => $t1->ticket_id, 'title' => 'Worn front brake pads & overdue oil change'],
+            [
+                'created_by'            => $admin->id,
+                'status'                => 'Done',
                 'assigned_mechanic_id'  => $mechanic->id,
                 'maintenance_type'      => 'Brake Repair',
                 'work_order_notes'      => 'Replace front brake pads and log standard 10,000km PMS oil change.',
@@ -181,7 +308,6 @@ class MockDataSeeder extends Seeder
                 'confirmation_notes'    => 'Repairs confirmed. Expenses approved. Vehicle ready for active duty.',
                 'confirmed_by'          => $admin->id,
                 'confirmed_at'          => now()->subMinutes(30),
-                'archived_at'           => now()->subMinutes(30),
             ]
         );
 
@@ -193,28 +319,36 @@ class MockDataSeeder extends Seeder
                 'ticket_title'        => $t1->ticket_title,
                 'vehicle_name'        => $v2->vehicle_name,
                 'plate_number'        => $v2->plate_number,
-                'final_status'        => 'Done',
-                'maintenance_cost'    => $t1->maintenance_cost,
-                'full_ticket_snapshot'=> json_encode($t1->toArray()),
+                'final_status'        => 'Closed',
+                'maintenance_cost'    => $t1SubIssue->maintenance_cost,
+                'full_ticket_snapshot'=> json_encode($t1->load('subIssues')->toArray()),
                 'archived_by'         => $admin->id,
                 'archived_at'         => $t1->archived_at,
             ]
         );
 
-        // Ticket 2: Reopened Work Order for Wagon Caddy Ambulance (Under Repair)
+        // Ticket 2: Reopened Work Order for Wagon Caddy Ambulance (Active)
         $t2 = MaintenanceTicket::updateOrCreate(
             ['vehicle_id' => $v4->vehicle_id, 'ticket_title' => 'AC Compressor Replacement'],
             [
                 'created_by'            => $admin->id,
                 'ticket_description'    => 'Reopen: Air conditioning blows warm air. Compressor clutch is not engaging.',
                 'priority'              => 'High',
-                'status'                => 'Under Repair',
+                'status'                => 'Active',
                 'assigned_custodian_id' => $custodian->id,
                 'assigned_at'           => now()->subDays(4),
                 'inspected_by'          => $custodian->id,
                 'inspected_at'          => now()->subDays(4)->addHours(1),
                 'inspection_result'     => 'Needs Maintenance',
                 'inspection_notes'      => 'A/C is completely blowing ambient hot air. Clutch plate is frozen.',
+            ]
+        );
+
+        TicketSubIssue::updateOrCreate(
+            ['ticket_id' => $t2->ticket_id, 'title' => 'AC compressor clutch not engaging'],
+            [
+                'created_by'            => $admin->id,
+                'status'                => 'Under Repair',
                 'assigned_mechanic_id'  => $mechanic->id,
                 'maintenance_type'      => 'Engine Repair',
                 'work_order_notes'      => 'Replace A/C Compressor assembly and recharge system with R134a refrigerant.',
@@ -225,14 +359,12 @@ class MockDataSeeder extends Seeder
                 'repair_started_at'     => now()->subDays(2)->format('Y-m-d'),
                 'repair_completed_at'   => null,
                 'maintenance_cost'      => 8500.00,
-                'verification_verdict'  => null,
-                'verification_notes'    => null,
-                'verified_by'           => null,
-                'verified_at'           => null,
                 'confirmation_verdict'  => 'Reopened',
                 'confirmation_notes'    => 'The A/C is still blowing warm air. Please check the electrical connections and ensure the compressor clutch is engaging properly.',
                 'confirmed_by'          => $admin->id,
                 'confirmed_at'          => now()->subHours(1),
+                'reopened_by'           => $admin->id,
+                'reopened_at'           => now()->subHours(1),
             ]
         );
 

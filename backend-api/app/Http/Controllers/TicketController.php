@@ -1090,6 +1090,10 @@ class TicketController extends Controller
 
         abort_unless($ticket->status === 'Active', 422, "Sub-issues can only be deferred while the ticket is Active. Current: {$ticket->status}.");
         abort_if($subIssue->isResolved(), 422, "This sub-issue is already {$subIssue->status} and cannot be deferred.");
+        // For Confirmation means the Custodian already verified the repair
+        // works — there's nothing left to "decide not to fix". Confirm or
+        // Reopen is the only choice that still makes sense at that point.
+        abort_if($subIssue->status === 'For Confirmation', 422, 'This sub-issue has already been repaired and verified — confirm or reopen it instead of deferring.');
 
         $data = $request->validate([
             'deferred_reason' => ['required', 'string'],
