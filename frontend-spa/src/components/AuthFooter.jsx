@@ -20,13 +20,9 @@ export default function AuthFooter() {
           </div>
         </div>
         <div className="auth-footer-links">
-          <div className="auth-footer-col">
-            <Link to="/login">Home</Link>
-            <Link to="/about">About Us</Link>
-          </div>
-          <div className="auth-footer-col">
-            <Link to="/developers">Developers</Link>
-          </div>
+          <Link to="/login">Home</Link>
+          <Link to="/about">About Us</Link>
+          <Link to="/developers">Developers</Link>
         </div>
       </div>
       <div className="auth-footer-bottom">

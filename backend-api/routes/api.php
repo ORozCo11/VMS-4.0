@@ -3,10 +3,13 @@
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\BarangayController;
+use App\Http\Controllers\CityController;
 use App\Http\Controllers\FleetController;
 use App\Http\Controllers\HubController;
 use App\Http\Controllers\TicketController;
 use App\Http\Controllers\NotificationController;
+use App\Http\Controllers\ProvinceController;
 use App\Http\Controllers\UserController;
 use App\Http\Middleware\EnsureUserIsActive;
 
@@ -17,6 +20,23 @@ use App\Http\Middleware\EnsureUserIsActive;
 */
 // Rate-limited to blunt credential brute-forcing: 10 attempts/min per IP.
 Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:10,1');
+
+// Self-registration — rate-limited to blunt scripted account-creation spam.
+Route::post('/register', [AuthController::class, 'register'])->middleware('throttle:5,1');
+
+// Cascading Province -> City/Municipality -> Barangay lists for the
+// registration form's address fields.
+Route::get('/provinces', [ProvinceController::class, 'index']);
+// Narrower list for the admin Vehicle Location map's boundary selector —
+// only provinces that actually have registered barangay/boundary data.
+Route::get('/provinces/with-barangays', [ProvinceController::class, 'withBarangays']);
+Route::get('/cities', [CityController::class, 'index']);
+Route::get('/cities/{city}', [CityController::class, 'show']);
+Route::get('/barangays', [BarangayController::class, 'index']);
+// Must come before /barangays/{barangay} — otherwise "registered" would be
+// matched as a barangay ID by the wildcard route instead.
+Route::get('/barangays/registered', [BarangayController::class, 'registered']);
+Route::get('/barangays/{barangay}', [BarangayController::class, 'show']);
 
 /*
 |--------------------------------------------------------------------------

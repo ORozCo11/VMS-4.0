@@ -21,6 +21,7 @@ export default function AuthHeader() {
             <Link to="/about">About Us</Link>
             <Link to="/developers">Developers</Link>
           </nav>
+          <Link to="/register" className="auth-page-header-register-btn">Register</Link>
           <Link to="/login" className="auth-page-header-login-btn">Login</Link>
         </div>
       </div>

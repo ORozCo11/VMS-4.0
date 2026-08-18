@@ -4,11 +4,74 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use App\Models\ActivityLog;
+use App\Models\Barangay;
 use App\Models\User;
 use Illuminate\Support\Facades\Hash;
 
 class AuthController extends Controller
 {
+    /**
+     * Public self-registration. Residents/staff sign up naming their own
+     * barangay, but the account is created inactive — an Admin must approve
+     * (activate) it via the existing Users management screen before it can
+     * log in, the same gate `login()` already enforces for any deactivated
+     * account.
+     */
+    public function register(Request $request)
+    {
+        $data = $request->validate([
+            // Letters, spaces, and the punctuation that legitimately shows up
+            // in PH names (hyphenated surnames, "Ñ", apostrophes, "Jr.").
+            'name' => ['required', 'string', 'max:255', 'regex:/^[A-Za-zÀ-ÖØ-öø-ÿ.\'\- ]+$/u'],
+            'email' => ['required', 'email', 'unique:users,email'],
+            'password' => ['required', 'string', 'min:8', 'confirmed'],
+            // PH mobile format: 09 + 9 digits = 11 digits total.
+            'phone' => ['required', 'regex:/^09[0-9]{9}$/'],
+            'address' => ['required', 'string', 'max:255'],
+            'city_id' => ['required', 'exists:cities,id'],
+            // Only cities with a real barangay list (Mandaue City today) get
+            // a dropdown (barangay_id); every other city falls back to free
+            // text (barangay_name) — exactly one of the two is required.
+            'barangay_id' => [
+                'nullable',
+                'required_without:barangay_name',
+                'exists:barangays,id',
+                function ($attribute, $value, $fail) use ($request) {
+                    if ($value && (int) Barangay::find($value)?->city_id !== (int) $request->input('city_id')) {
+                        $fail('Selected barangay does not belong to the selected city.');
+                    }
+                },
+            ],
+            'barangay_name' => ['nullable', 'required_without:barangay_id', 'string', 'max:255'],
+        ], [
+            'name.regex' => 'Name may only contain letters.',
+            'phone.regex' => 'Phone number must be 11 digits starting with 09 (e.g. 09171234567).',
+        ]);
+
+        $user = User::create([
+            'name' => $data['name'],
+            'email' => $data['email'],
+            'password' => Hash::make($data['password']),
+            'phone' => $data['phone'],
+            'address' => $data['address'],
+            'city_id' => $data['city_id'],
+            'barangay_id' => $data['barangay_id'] ?? null,
+            'barangay_name' => $data['barangay_name'] ?? null,
+            'role' => 'Custodian',
+            'roles' => ['Custodian'],
+            'is_active' => false,
+        ]);
+
+        return response()->json([
+            'message' => 'Registration submitted. An administrator must approve your account before you can sign in.',
+            'user' => [
+                'id' => $user->id,
+                'name' => $user->name,
+                'email' => $user->email,
+            ],
+        ], 201);
+    }
+
     /**
      * Handle stateless frontend login requests.
      */
