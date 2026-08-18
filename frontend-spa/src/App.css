@@ -609,7 +609,7 @@
 .profile-info-item dd { color: #e2e8f0; font-size: 0.85rem; font-weight: 500; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 120px; }
  
 .profile-actions { display: flex; flex-direction: column; gap: 10px; }
-.profile-actions .smart-form h3 { font-size: 0.9rem; color: #e2e8f0; padding-bottom: 8px; border-bottom: 1px solid #334155; margin-bottom: 6px; }
+.profile-actions .smart-form h3 { font-size: 0.9rem; color: #e2e8f0 !important; padding-bottom: 8px; border-bottom: 1px solid #334155; margin-bottom: 6px; }
 .profile-actions .smart-form label span { color: #94a3b8 !important; font-size: 0.78rem !important; }
 .profile-actions .smart-form input {
   background: #0f172a !important;
@@ -996,6 +996,37 @@
   color: inherit;
 }
 .toast-notice-close:hover { opacity: 1; background: rgba(0, 0, 0, 0.06); }
+/* Jump straight to the ticket(s) blocking an action (e.g. deactivating a
+   vehicle with an open ticket) instead of leaving the user to go find it. */
+.toast-notice-ticket-links {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+.toast-notice-ticket-link {
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid currentColor;
+  border-radius: 8px;
+  padding: 8px 12px;
+  color: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: center;
+}
+.toast-notice-ticket-link:hover {
+  background: rgba(255, 255, 255, 0.22);
+  text-decoration: underline;
+}
+html[data-theme="light"] .toast-notice-ticket-link,
+[data-theme="light"] .toast-notice-ticket-link {
+  background: rgba(0, 0, 0, 0.04);
+}
+html[data-theme="light"] .toast-notice-ticket-link:hover,
+[data-theme="light"] .toast-notice-ticket-link:hover {
+  background: rgba(0, 0, 0, 0.08);
+}
 /* Default (dark) theme — the app's :root is dark by default, so this is
    what renders unless [data-theme="light"] below overrides it. A pale
    pastel box read as "odd" floating on the dark chrome, so this gets its
@@ -1039,6 +1070,8 @@ html[data-theme="light"] .toast-notice.error {
 }
 .toast-notice-validation {
   position: relative;
+  top: auto;
+  left: auto;
   transform: none;
   align-items: center;
   justify-content: center;
@@ -1301,8 +1334,56 @@ html[data-theme="light"] .toast-notice.error {
 .module-grid { display: grid; grid-template-columns: 1fr; gap: 24px; align-items: start; }
 
 /* DASHBOARD */
-.dashboard-grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 20px; }
+.dashboard-grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 14px; }
 .metric-grid { grid-column: 1/-1; display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+/* Dashboard's headline KPI row always has exactly 5 cards — fixed equal
+   columns instead of auto-fit, which can size the last card differently
+   depending on exactly how many implicit tracks fit at a given width. */
+.dashboard-headline-grid { grid-template-columns: repeat(5, 1fr) !important; }
+@media (max-width: 900px) {
+  .dashboard-headline-grid { grid-template-columns: repeat(2, 1fr) !important; }
+}
+@media (max-width: 560px) {
+  .dashboard-headline-grid { grid-template-columns: 1fr !important; }
+}
+/* Secondary KPI tier — issues/upcoming/overdue counts, already actionable
+   elsewhere on the page, so they get slim rows instead of full metric cards. */
+.dashboard-mini-stats {
+  grid-column: 1/-1;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+.dashboard-mini-stat {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: var(--surface, #fff);
+  border: 1px solid var(--border-subtle, #e2e8f0);
+}
+.dashboard-mini-stat-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.dashboard-mini-stat-label {
+  font-size: 0.82rem;
+  color: var(--text-muted, #64748b);
+  flex: 1;
+}
+.dashboard-mini-stat strong {
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: var(--text-strong, #0f172a);
+}
+@media (max-width: 720px) {
+  .dashboard-mini-stats {
+    grid-template-columns: 1fr;
+  }
+}
 .full-span { grid-column: 1/-1; }
 .metric-card {
   background: linear-gradient(180deg, #ffffff, #f8fbff); border: 1px solid #d9e6f8; border-radius: 16px; padding: 22px;
@@ -1586,7 +1667,7 @@ table a:hover {
   font-family: 'Orbitron', sans-serif;
   font-size: 1.25rem;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--text-strong, #0f172a);
   margin-bottom: 4px;
 }
 .smart-form label {
@@ -1608,7 +1689,7 @@ table a:hover {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: #64748b;
+  color: var(--text-strong, #0f172a);
 }
 .smart-form input, .smart-form select, .smart-form textarea {
   background: #ffffff;
@@ -2479,6 +2560,126 @@ button.wizard-step-pill:hover {
 .form-grid-2col .smart-form > h3,
 .form-grid-2col .smart-form .form-actions {
   grid-column: 1 / -1;
+}
+/* Opt-in field grouping (SmartForm's groupFields) — a titled sub-card per
+   group, e.g. Maintenance Record's "Repair Details" / "Vehicle & Issue",
+   so the header names what those fields are about at a glance, matching
+   the realcore reference's "Select Fee Type" / "Other" cards. */
+.form-group {
+  grid-column: 1 / -1;
+  border: 1px solid var(--border-subtle, #e2e8f0);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+.form-group-title {
+  color: var(--primary, #2563eb);
+  font-size: 0.85rem;
+  font-weight: 700;
+  margin: 0 0 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-subtle, #e2e8f0);
+}
+.form-group-body {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 280px));
+  gap: 10px 18px;
+}
+.form-group-body label:has(textarea),
+.form-group-body label:has(input[type="file"]) {
+  grid-column: 1 / -1;
+}
+/* Maintenance Record form only — two-column card layout instead of one long
+   downward list. A CSS grid would force Repair Details / Vehicle & Issue to
+   match the height of whatever sits beside them (Schedule & Personnel /
+   Cost & Completion), leaving dead space under the shorter card. A
+   newspaper-style multicol container sizes each column to its own content
+   instead: column 1 gets Repair Details, Vehicle & Issue, Work Log; a
+   forced break after Work Log pushes Schedule & Personnel and Cost &
+   Completion into column 2 — independent heights, no leftover gaps. Tied to
+   maintenanceFields()'s fixed group order (always these 5, in this
+   sequence, Work Log 3rd) — update both together if that order changes. */
+.maintenance-form-grid .smart-form {
+  display: block;
+  columns: 2;
+  column-gap: 18px;
+}
+.maintenance-form-grid .smart-form > h3,
+.maintenance-form-grid .smart-form > .form-actions {
+  column-span: all;
+}
+.maintenance-form-grid .smart-form > .form-group {
+  break-inside: avoid;
+  margin-bottom: 16px;
+}
+.maintenance-form-grid .smart-form > .form-group:nth-of-type(3) {
+  break-after: column;
+}
+@media (max-width: 900px) {
+  .maintenance-form-grid .smart-form {
+    columns: 1;
+  }
+  .maintenance-form-grid .smart-form > .form-group:nth-of-type(3) {
+    break-after: auto;
+  }
+}
+/* Applies to every SmartForm-driven form (FormPage pages, modal Add/Edit
+   popups, and the hand-built Create Ticket form, which reuses the
+   .smart-form input/label styling) — not just Maintenance Records. Compact,
+   right-sized fields instead of every input/select stretching to fill its
+   whole grid column. */
+.smart-form input:not([type="file"]),
+.smart-form select {
+  max-width: 280px;
+}
+/* Password fields wrap the <input> in a .password-field row with the
+   show/hide button absolutely positioned against THAT row, not the input.
+   Capping the input directly leaves it narrower than the row, so the
+   button drifts away from it — cap the row instead and let the (already
+   flex:1) input fill it. */
+.smart-form .password-field,
+.smart-form .password-field-wrapper {
+  max-width: 280px;
+}
+.smart-form .password-field input,
+.smart-form .password-field-wrapper input {
+  max-width: none;
+}
+/* Outlined "legend on the border" look — the label sits on top of the
+   input's border line (like a <fieldset><legend>) instead of stacked above
+   it, matching the realcore reference. Excludes file/checkbox fields, which
+   don't have a single-line box for a label to sit on. */
+.smart-form label:not(:has(.checkbox-group)):not(:has(input[type="file"])) {
+  position: relative;
+  margin-top: 10px;
+}
+.smart-form label:not(:has(.checkbox-group)):not(:has(input[type="file"])) > span {
+  position: absolute;
+  top: -8px;
+  left: 10px;
+  z-index: 1;
+  padding: 0 6px;
+  background: var(--surface-2, #f8fafc);
+}
+.smart-form input:not([type="file"]),
+.smart-form select,
+.smart-form textarea {
+  border: 1px solid var(--border, #cbd5e1);
+  border-radius: 8px;
+  padding: 10px 12px 8px;
+  color: var(--text-strong, #0f172a);
+}
+/* Page-level title, sitting inside the card above the field legends — dark
+   like a section heading, distinct from the blue per-field legends above
+   each box, matching the realcore reference's dark "Estimated Commissions"
+   over its blue "Select Fee Type" / "Estimated Transaction Calculations".
+   Only Maintenance Records currently sets a non-empty SmartForm title, so
+   this is a no-op elsewhere. */
+.smart-form h3 {
+  color: var(--text-strong, #0f172a) !important;
+  font-size: 1.05rem;
+  padding-bottom: 10px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--border-subtle, #e2e8f0);
 }
 /* Card wrapper so the grid form reads as its own bordered section within the panel */
 .form-grid-2col {
@@ -3665,6 +3866,135 @@ button.wizard-step-pill:hover {
   opacity: 0.9;
   margin: 0;
 }
+/* Its own card row directly under the banner + Fleet Status row — the two
+   numbers that most deserve a glance the moment the dashboard loads. Only
+   blinks when there's actually something to act on — a card reading
+   "0 Critical" or "5/5 Ready" sits still like every other card on the page. */
+.dashboard-crucial-alerts {
+  display: flex;
+  gap: 14px;
+  /* Grid items stretch to fill their track by default — without this, the
+     row itself claims the full 7-column width even though the two cards
+     inside it don't, leaving a big empty strip of background after them. */
+  justify-self: start;
+  width: fit-content;
+  max-width: 100%;
+}
+.dashboard-alert-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 0 0 auto;
+  width: fit-content;
+  padding: 10px 16px;
+  border-radius: 12px;
+  background: var(--surface, #fff);
+  border: 1px solid var(--border-subtle, #e2e8f0);
+  box-shadow: var(--shadow-soft, 0 8px 20px rgba(15, 23, 42, 0.06));
+}
+.dashboard-alert-card-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  background: var(--surface-2, #f1f5f9);
+  color: var(--text-muted, #64748b);
+}
+.dashboard-alert-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.dashboard-alert-card-body span {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted, #64748b);
+}
+.dashboard-alert-card-body strong {
+  font-size: 1.4rem;
+  font-weight: 800;
+  color: var(--text-strong, #0f172a);
+  line-height: 1;
+}
+.dashboard-alert-card.is-blinking {
+  border-color: #fca5a5;
+  background: #fef2f2;
+  animation: dashboardAlertBlink 1.6s ease-in-out infinite;
+}
+.dashboard-alert-card.is-blinking .dashboard-alert-card-icon {
+  background: #fee2e2;
+  color: #dc2626;
+}
+.dashboard-alert-card.is-blinking .dashboard-alert-card-body span {
+  color: #b91c1c;
+}
+.dashboard-alert-card.is-blinking .dashboard-alert-card-body strong {
+  color: #dc2626;
+}
+@keyframes dashboardAlertBlink {
+  0%, 100% { background: #fef2f2; border-color: #fca5a5; }
+  50% { background: #fee2e2; border-color: #ef4444; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dashboard-alert-card.is-blinking {
+    animation: none;
+  }
+}
+@media (max-width: 560px) {
+  .dashboard-crucial-alerts {
+    flex-direction: column;
+  }
+}
+/* Compact variant — paired with Fleet Status instead of stretching full
+   width alone; smaller padding/type so the pairing reads as two cards of
+   similar visual weight rather than one dominating the row. */
+.dashboard-banner-compact {
+  padding: 16px 20px;
+}
+.dashboard-banner-compact .dashboard-banner-welcome {
+  flex: 1;
+  min-width: 0;
+}
+.dashboard-banner-compact .dashboard-banner-welcome h2 {
+  font-size: 1.05rem;
+  margin-bottom: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dashboard-banner-compact .dashboard-greeting-role {
+  font-size: 0.68rem;
+}
+.dashboard-banner-compact .dashboard-banner-welcome p {
+  font-size: 0.78rem;
+}
+.dashboard-banner-compact .dashboard-banner-widgets {
+  gap: 10px;
+}
+.dashboard-banner-compact .dashboard-banner-time {
+  padding: 8px 12px;
+  min-height: 0;
+  min-width: 0;
+}
+.dashboard-banner-compact .dashboard-banner-weather {
+  padding: 8px 14px;
+  gap: 10px;
+}
+.dashboard-banner-compact .weather-temp {
+  font-size: 1.3rem;
+}
+@media (max-width: 900px) {
+  .dashboard-banner-compact {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+}
 .dashboard-banner-weather {
   display: flex;
   align-items: center;
@@ -4225,9 +4555,11 @@ table button,
   stroke: var(--text-muted);
 }
 
-.profile-info-item dd,
-.profile-actions .smart-form h3 {
+.profile-info-item dd {
   color: var(--text);
+}
+.profile-actions .smart-form h3 {
+  color: var(--text) !important;
 }
 
 .profile-actions .smart-form input {
@@ -4320,7 +4652,7 @@ table button,
   grid-column: 1 / -1;
   display: grid;
   grid-template-columns: repeat(2, 1fr);
-  gap: 20px;
+  gap: 14px;
   align-items: start;
 }
 
@@ -4330,18 +4662,131 @@ table button,
   }
 }
 
+/* Dashboard's 12-column grid — important/wider sections get 7 of the 12
+   columns, their paired secondary section gets 5, instead of every section
+   being either full-width or an even 50/50 split regardless of how much
+   each side actually needs. Collapses to full width under 960px. */
+.dashboard-grid .col-span-7,
+.dashboard-grid .col-span-5,
+.dashboard-grid .col-span-6 {
+  align-self: start;
+}
+.dashboard-grid .col-span-7 { grid-column: span 7; }
+.dashboard-grid .col-span-5 { grid-column: span 5; }
+.dashboard-grid .col-span-6 { grid-column: span 6; }
+/* The welcome banner is the one col-span item that still stretches to
+   match its row partner (Fleet Status, now trimmed to ~166px) — its solid
+   gradient background absorbs the small extra height cleanly, unlike a
+   list-based panel where NOT stretching would leave a gap of plain page
+   background below it instead of the banner's own color. */
+.dashboard-grid .dashboard-banner.col-span-7 {
+  align-self: stretch;
+}
+@media (max-width: 960px) {
+  .dashboard-grid .col-span-7,
+  .dashboard-grid .col-span-5,
+  .dashboard-grid .col-span-6 {
+    grid-column: 1 / -1;
+  }
+}
+
+.dashboard-panel-chart-body {
+  flex: 1;
+}
+
+/* Quick-glance cards for Action Queue / Emergency Readiness / Risk &
+   Readiness Watch — a compact tile with just the headline number instead
+   of the full list living permanently on the page. Tapping opens the full
+   list in a popup (.dashboard-list-modal below). */
+.dashboard-quick-cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+}
+@media (max-width: 960px) {
+  .dashboard-quick-cards {
+    grid-template-columns: 1fr;
+  }
+}
+.dashboard-quick-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  text-align: left;
+  background: var(--card-bg, #fff);
+  border: 1px solid var(--border-subtle, #e2e8f0);
+  border-radius: 12px;
+  box-shadow: var(--shadow-soft);
+  padding: 14px 16px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+  width: 100%;
+}
+.dashboard-quick-card:hover {
+  border-color: var(--accent, #2563eb);
+  transform: translateY(-1px);
+}
+.dashboard-quick-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  color: var(--text-muted, #64748b);
+}
+.dashboard-quick-card-title {
+  font-size: 0.82rem;
+  font-weight: 600;
+  flex: 1;
+}
+.dashboard-quick-card-chevron {
+  opacity: 0.6;
+}
+.dashboard-quick-card-stat {
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: var(--text);
+}
+.dashboard-quick-card-stat.is-alert {
+  color: #dc2626;
+}
+.dashboard-quick-card-stat.is-ok {
+  color: #16a34a;
+}
+.dashboard-quick-card-preview {
+  font-size: 0.78rem;
+  color: var(--text-muted, #64748b);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.dashboard-list-modal-tag {
+  font-size: 0.78rem;
+  color: var(--text-muted, #64748b);
+  padding: 0 20px;
+  margin-top: -4px;
+}
+.dashboard-list-modal-body {
+  padding: 16px 20px 20px;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
 .dashboard-card-panel {
   display: flex;
   flex-direction: column;
   height: auto;
-  min-height: 260px;
+  /* No forced min-height — a one-line "all clear" message shouldn't sit
+     inside a box sized for a dozen rows. Cards hug their own content. */
   margin-bottom: 0;
 }
 
 .dashboard-graphs {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
-  gap: 20px;
+  gap: 14px;
 }
 
 @media (max-width: 960px) {
@@ -4351,16 +4796,67 @@ table button,
 }
 
 .graph-panel {
-  min-height: 300px;
+  /* No forced min-height, same reasoning as .dashboard-card-panel above. */
   background: linear-gradient(180deg, rgba(22, 23, 27, 0.98), rgba(14, 15, 18, 0.98));
   border: 1px solid var(--border);
   border-radius: 12px;
   box-shadow: var(--shadow-soft);
   color: var(--text);
-  padding: 20px;
+  padding: 14px 16px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 10px;
+}
+
+/* The breakdown charts grouped under one "Fleet Analytics" card — each
+   quadrant has no card of its own (no border/background/shadow), just a
+   divider line shared with its neighbors, so the set reads as one related
+   panel, one single row, instead of separate floating boxes. */
+.dashboard-analytics-panel .dashboard-analytics-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  /* start, not stretch — a column with one short list (e.g. "What's
+     Breaking Most" with a single entry) shouldn't get stretched to match
+     a neighbor with 7 (e.g. "Vehicles by Type"), leaving dead space at
+     the bottom. Same reasoning as the removed panel min-heights above. */
+  align-items: start;
+  gap: 0;
+}
+.dashboard-analytics-panel .dashboard-analytics-grid-4 {
+  grid-template-columns: repeat(4, 1fr);
+}
+@media (max-width: 1100px) {
+  .dashboard-analytics-panel .dashboard-analytics-grid-4 {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .dashboard-analytics-grid-4 .graph-panel-bare:nth-child(2n) {
+    border-right: none;
+  }
+  .dashboard-analytics-grid-4 .graph-panel-bare:nth-child(n+3) {
+    border-top: 1px solid var(--border-subtle, #e2e8f0);
+  }
+}
+.graph-panel-bare {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border-right: 1px solid var(--border-subtle, #e2e8f0);
+}
+.dashboard-analytics-grid .graph-panel-bare:last-child {
+  border-right: none;
+}
+@media (max-width: 720px) {
+  .dashboard-analytics-panel .dashboard-analytics-grid {
+    grid-template-columns: 1fr;
+  }
+  .graph-panel-bare {
+    border-right: none;
+    border-bottom: 1px solid var(--border-subtle, #e2e8f0);
+  }
+  .dashboard-analytics-grid .graph-panel-bare:last-child {
+    border-bottom: none;
+  }
 }
 
 .graph-panel-header {
@@ -4683,7 +5179,7 @@ table button,
   flex-direction: column;
   gap: 8px;
   padding: 4px 18px 18px;
-  max-height: 380px;
+  max-height: 480px;
   overflow-y: auto;
 }
 .action-queue-row {
@@ -4762,6 +5258,255 @@ table button,
   color: #15803d;
   font-weight: 600;
   font-size: 0.88rem;
+}
+
+/* Dashboard = summary — "View all" expands a truncated list (Action Queue)
+   in place instead of the dashboard trying to show every pending row. */
+.dashboard-view-all-btn {
+  display: block;
+  width: calc(100% - 36px);
+  margin: 4px 18px 18px;
+  padding: 8px;
+  background: none;
+  border: 1px dashed var(--border, #cbd5e1);
+  border-radius: 8px;
+  color: var(--primary, #2563eb);
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+  text-align: center;
+}
+.dashboard-view-all-btn:hover {
+  background: var(--surface-2, #f8fafc);
+}
+
+/* --- Emergency Readiness (per-category row list) --- */
+.emergency-readiness-rows {
+  padding: 4px 18px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.emergency-readiness-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 4px;
+  border-bottom: 1px solid var(--border-subtle, #e2e8f0);
+}
+.emergency-readiness-row:last-child {
+  border-bottom: none;
+}
+.emergency-readiness-row-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: var(--text-strong, #0f172a);
+}
+.emergency-readiness-row-detail {
+  font-size: 0.76rem;
+  color: var(--text-muted, #64748b);
+  white-space: nowrap;
+}
+.emergency-readiness-row-tag {
+  flex-shrink: 0;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: #fef2f2;
+  color: #dc2626;
+  white-space: nowrap;
+}
+.emergency-readiness-row-tag.is-ready {
+  background: #ecfdf5;
+  color: #16a34a;
+}
+.emergency-readiness-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0 18px 14px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(37, 99, 235, 0.08);
+  border: 1px solid rgba(37, 99, 235, 0.2);
+  color: #1d4ed8;
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+.emergency-readiness-alert {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 18px 14px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #991b1b;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+/* --- Fleet Status (compact card, nested in a bare Fleet Analytics panel —
+   that panel already supplies its own padding) --- */
+.fleet-status-compact {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 2px 18px 12px;
+}
+.donut-chart-small .donut-chart {
+  width: 64px;
+}
+.fleet-status-compact .chart-legend {
+  gap: 5px;
+}
+/* Trims the standard panel padding/header spacing (used consistently by
+   every other card) specifically here, so this card's total height lands
+   close to the compact banner beside it instead of the usual ~180px. */
+.dashboard-fleet-status-panel {
+  padding-bottom: 10px !important;
+}
+.dashboard-fleet-status-panel .panel-header-bar {
+  margin-bottom: 6px;
+}
+@media (max-width: 560px) {
+  .fleet-status-compact {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+/* --- Risk & Readiness Watch (stacked lists, full panel width each — a
+   side-by-side 2-column split left too little room per column once vehicle
+   names ran long, wrapping text into a tag that was still vertically
+   centered against it) --- */
+.risk-watch-columns {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 4px 18px 14px;
+}
+.risk-watch-col h4 {
+  margin: 0 0 8px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text-muted, #64748b);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.risk-watch-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  margin-bottom: 6px;
+  border-radius: 8px;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  color: #92400e;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+.risk-watch-item.is-critical {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #991b1b;
+}
+/* Clickable rows (vehicle name can wrap to 2 lines) stack their own
+   top-row (name + tag) over a subtitle line, instead of a single row
+   fighting to keep a wrapped name and a tag vertically aligned. */
+.risk-watch-item-clickable {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  background: var(--surface-2, #f8fafc);
+  border: 1px solid var(--border, #e2e8f0);
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+.risk-watch-item-clickable:hover {
+  background: rgba(37, 99, 235, 0.06);
+}
+.risk-watch-item-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.risk-watch-item-title {
+  font-weight: 700;
+  color: var(--text-strong, #0f172a);
+}
+.risk-watch-item-sub {
+  font-weight: 400;
+  color: var(--text-muted, #64748b);
+  font-size: 0.74rem;
+}
+.risk-watch-tag {
+  flex-shrink: 0;
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: #fef3c7;
+  color: #92400e;
+  white-space: nowrap;
+}
+.risk-watch-tag.is-critical {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+.risk-watch-footer-ok {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 18px 16px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: rgba(34, 197, 94, 0.1);
+  border: 1px solid rgba(34, 197, 94, 0.25);
+  color: #15803d;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+.risk-watch-footer-ok .area-chart-tag {
+  margin-left: auto;
+  color: #15803d;
+  background: rgba(34, 197, 94, 0.14);
+  border-color: rgba(34, 197, 94, 0.3);
+}
+.risk-watch-footer-list {
+  margin: 0 18px 16px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle, #e2e8f0);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.risk-watch-footer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.8rem;
+  color: var(--text-muted, #64748b);
+}
+.risk-watch-footer-row span:first-child {
+  color: var(--text-strong, #0f172a);
+  font-weight: 600;
+}
+.risk-watch-footer-row .is-overdue {
+  color: #dc2626;
+  font-weight: 700;
 }
 
 .forecast-row {
@@ -4937,9 +5682,12 @@ table button,
 .ticket-card-title,
 .ticket-detail-title,
 .ticket-section h4,
-.ticket-inline-form h4,
-.smart-form h3 {
+.ticket-inline-form h4 {
   color: var(--text-strong);
+}
+
+.smart-form h3 {
+  color: var(--text-strong, #0f172a);
 }
 
 .auth-subtitle,
@@ -5601,7 +6349,7 @@ table a:hover,
 }
 
 .smart-form label span {
-  color: var(--text-muted);
+  color: var(--text-strong, #0f172a);
   font-size: 0.68rem;
   font-weight: 700;
 }
@@ -7597,8 +8345,7 @@ html[data-theme="light"] .report-heading h3,
 html[data-theme="light"] .ticket-card-title,
 html[data-theme="light"] .ticket-detail-title,
 html[data-theme="light"] .ticket-section h4,
-html[data-theme="light"] .ticket-inline-form h4,
-html[data-theme="light"] .smart-form h3 {
+html[data-theme="light"] .ticket-inline-form h4 {
   color: #071a35;
 }
 

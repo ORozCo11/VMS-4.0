@@ -872,8 +872,13 @@ class FleetController extends Controller
 
         $openTickets = MaintenanceTicket::where('vehicle_id', $vehicle->vehicle_id)
             ->whereNotIn('status', ['Closed', 'Cancelled'])
-            ->count();
-        abort_if($openTickets > 0, 422, 'Close or cancel this vehicle\'s open ticket(s) before deactivating it.');
+            ->get(['ticket_id', 'ticket_title']);
+        if ($openTickets->isNotEmpty()) {
+            abort(response()->json([
+                'message' => 'Close or cancel this vehicle\'s open ticket(s) before deactivating it.',
+                'open_tickets' => $openTickets->map(fn ($t) => ['ticket_id' => $t->ticket_id, 'ticket_title' => $t->ticket_title])->values(),
+            ], 422));
+        }
 
         $vehicle->update([
             'status' => 'Inactive',
@@ -934,8 +939,13 @@ class FleetController extends Controller
 
         $openTickets = MaintenanceTicket::where('vehicle_id', $vehicle->vehicle_id)
             ->whereNotIn('status', ['Closed', 'Cancelled'])
-            ->count();
-        abort_if($openTickets > 0, 422, 'Close or cancel this vehicle\'s open ticket(s) before decommissioning it.');
+            ->get(['ticket_id', 'ticket_title']);
+        if ($openTickets->isNotEmpty()) {
+            abort(response()->json([
+                'message' => 'Close or cancel this vehicle\'s open ticket(s) before decommissioning it.',
+                'open_tickets' => $openTickets->map(fn ($t) => ['ticket_id' => $t->ticket_id, 'ticket_title' => $t->ticket_title])->values(),
+            ], 422));
+        }
 
         $data = $request->validate([
             'decommission_reason' => ['required', 'string'],
@@ -993,10 +1003,51 @@ class FleetController extends Controller
         $this->history($vehicle, 'Readiness Check', ucfirst($verb) . " a readiness check.", 'vehicle_readiness_checks', $check->readiness_check_id, $request);
         $this->log($request, 'Readiness Check', 'Vehicle Management', $vehicle->vehicle_id, "Readiness check {$verb} for {$vehicle->vehicle_name}");
 
+        // Offer the "mark Available now" shortcut only when it's actually
+        // safe: every item passed, the vehicle isn't already Available, and
+        // — critically — it has no open ticket. A vehicle with an open
+        // ticket must go back to Available through that ticket closing, not
+        // through a generic checklist that never looked at the actual repair.
+        $hasOpenTicket = MaintenanceTicket::where('vehicle_id', $vehicle->vehicle_id)
+            ->whereNotIn('status', ['Closed', 'Cancelled'])
+            ->exists();
+        $canMarkAvailable = $allPassed && $vehicle->status !== 'Available' && !$hasOpenTicket;
+
         return response()->json([
             'check' => $check,
             'state' => $this->responseReadinessState($vehicle->fresh(), $check),
+            'can_mark_available' => $canMarkAvailable,
         ], 201);
+    }
+
+    /**
+     * The "all checks passed — mark it Available?" shortcut offered right
+     * after a passing readiness check. Re-checks the same conditions
+     * storeReadinessCheck used to decide whether to offer it — the vehicle
+     * must still have no open ticket — since state could have changed
+     * between that response and this follow-up call (e.g. a ticket opened
+     * in another tab).
+     */
+    public function markVehicleAvailable(Request $request, Vehicle $vehicle)
+    {
+        $this->requireRole($request, ['Admin', 'Custodian']);
+
+        abort_if(
+            in_array($vehicle->status, ['Inactive', 'Decommissioned'], true),
+            422,
+            'This vehicle is out of the fleet and cannot be marked Available.'
+        );
+
+        $hasOpenTicket = MaintenanceTicket::where('vehicle_id', $vehicle->vehicle_id)
+            ->whereNotIn('status', ['Closed', 'Cancelled'])
+            ->exists();
+        abort_if($hasOpenTicket, 422, 'This vehicle still has an open ticket — close it to bring the vehicle back to Available.');
+
+        $vehicle->update(['status' => 'Available']);
+        $this->history($vehicle, 'Vehicle Marked Available', "{$vehicle->vehicle_name} was marked Available after a passing readiness check.", 'vehicles', $vehicle->vehicle_id, $request);
+        $this->log($request, 'Edit', 'Vehicle Management', $vehicle->vehicle_id, "Marked {$vehicle->vehicle_name} Available");
+
+        return $vehicle->fresh(['category']);
     }
 
     /**
