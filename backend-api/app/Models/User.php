@@ -25,8 +25,12 @@ class User extends Authenticatable
         'roles',
         'phone',
         'address',
+        'barangay_id',
+        'city_id',
+        'barangay_name',
         'photo_url',
         'is_active',
+        'approved_at',
     ];
 
     /**
@@ -40,6 +44,7 @@ class User extends Authenticatable
     protected $casts = [
         'is_active' => 'boolean',
         'roles'     => 'array',
+        'approved_at' => 'datetime',
     ];
 
     // Matches the migration's DB-level default. Without this, a User
@@ -49,6 +54,16 @@ class User extends Authenticatable
     protected $attributes = [
         'is_active' => true,
     ];
+
+    public function barangay()
+    {
+        return $this->belongsTo(Barangay::class);
+    }
+
+    public function city()
+    {
+        return $this->belongsTo(City::class);
+    }
 
     /**
      * Multi-role support. `role` remains the user's PRIMARY role (used for

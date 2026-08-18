@@ -1398,6 +1398,99 @@ function Workspace() {
     }
   };
 
+  // Vehicle Location map boundary selector — lets an Admin swap which
+  // barangay outline the map draws. Scoped to Province + Barangay only
+  // (no City/Municipality step) since Mandaue City is the only city with
+  // real per-barangay boundary data today — defaults to Cebu so the
+  // Barangay dropdown is immediately usable. This is purely cosmetic:
+  // hubs/vehicles aren't scoped by barangay, so switching only changes the
+  // drawn outline + camera framing, not which hubs/vehicles show.
+  const [mapProvinces, setMapProvinces] = useState([]);
+  const [mapProvinceId, setMapProvinceId] = useState('');
+  const [mapBarangays, setMapBarangays] = useState([]);
+  const [mapBarangayId, setMapBarangayId] = useState('');
+  const [mapBoundaryOverride, setMapBoundaryOverride] = useState(null);
+
+  // Fetches one barangay's boundary and sets it as the map override.
+  const selectBarangayBoundary = useCallback(async (barangayId) => {
+    if (!barangayId) { setMapBoundaryOverride(null); return; }
+    try {
+      const res = await api.get(`/barangays/${barangayId}`);
+      setMapBoundaryOverride(res.data.boundary ? { geometry: res.data.boundary, label: res.data.name } : null);
+    } catch {
+      setMapBoundaryOverride(null);
+    }
+  }, []);
+
+  // Resolves the one city under a province that has a registered barangay
+  // list (Mandaue City today) and loads only the barangays that actually
+  // have a registered user, plus Paknaan (always included — the system's
+  // built-in home barangay). Provinces with no such city simply end up
+  // with an empty Barangay dropdown. `defaultBarangayName` pre-selects a
+  // barangay once the list loads — used to land on Paknaan on first load.
+  const loadBarangaysForProvince = useCallback(async (provinceId, defaultBarangayName) => {
+    try {
+      const citiesRes = await api.get('/cities', { params: { province_id: provinceId } });
+      const cityWithBarangays = citiesRes.data.find((c) => c.name === 'Mandaue City');
+      if (!cityWithBarangays) {
+        setMapBarangays([]);
+        return;
+      }
+      const barangaysRes = await api.get('/barangays/registered', { params: { city_id: cityWithBarangays.id } });
+      setMapBarangays(barangaysRes.data);
+
+      const defaultBarangay = defaultBarangayName
+        ? barangaysRes.data.find((b) => b.name === defaultBarangayName)
+        : null;
+      if (defaultBarangay) {
+        setMapBarangayId(String(defaultBarangay.id));
+        selectBarangayBoundary(defaultBarangay.id);
+      }
+    } catch {
+      setMapBarangays([]);
+    }
+  }, [selectBarangayBoundary]);
+
+  useEffect(() => {
+    // Narrower than the registration form's /provinces — only provinces
+    // that actually have registered barangay/boundary data, so the
+    // dropdown doesn't list 80+ provinces with nothing behind them.
+    api.get('/provinces/with-barangays').then((response) => {
+      setMapProvinces(response.data);
+      const cebu = response.data.find((p) => p.name === 'Cebu');
+      if (cebu) {
+        setMapProvinceId(String(cebu.id));
+        loadBarangaysForProvince(cebu.id, 'Paknaan');
+      }
+    }).catch(() => {});
+  }, [loadBarangaysForProvince]);
+
+  const handleMapProvinceChange = (e) => {
+    const provinceId = e.target.value;
+    setMapProvinceId(provinceId);
+    setMapBarangayId('');
+    setMapBoundaryOverride(null);
+    setMapBarangays([]);
+    if (provinceId) {
+      loadBarangaysForProvince(provinceId);
+    }
+  };
+
+  const handleMapBarangayChange = (e) => {
+    const barangayId = e.target.value;
+    setMapBarangayId(barangayId);
+    selectBarangayBoundary(barangayId);
+  };
+
+  // "Reset" returns to the system's home barangay (Paknaan), not a blank
+  // selection — that's the map's true default state, not an empty one.
+  const resetMapBoundary = () => {
+    const paknaan = mapBarangays.find((b) => b.name === 'Paknaan');
+    setMapBarangayId(paknaan ? String(paknaan.id) : '');
+    selectBarangayBoundary(paknaan?.id);
+  };
+  const isDefaultMapBoundary = mapBarangays.find((b) => String(b.id) === mapBarangayId)?.name === 'Paknaan';
+
   return (
     <FormNoticeContext.Provider value={notice}>
     <RowActionsContext.Provider value={rowActions}>
@@ -1415,6 +1508,36 @@ function Workspace() {
             </button>
             <Icon name="gear" size={28} className="topbar-gear-icon" filled />
             <span className="vms-wordmark vms-wordmark-sm">vms</span>
+          </div>
+          <div className="map-boundary-selector" title="Choose which registered barangay outline the Vehicle Location map draws.">
+            <select
+              aria-label="Map boundary province"
+              onChange={handleMapProvinceChange}
+              value={mapProvinceId}
+            >
+              {mapProvinces.map((province) => (
+                <option key={province.id} value={province.id}>{province.name}</option>
+              ))}
+            </select>
+            <select
+              aria-label="Map boundary barangay"
+              disabled={mapBarangays.length === 0}
+              onChange={handleMapBarangayChange}
+              value={mapBarangayId}
+            >
+              {mapBarangays.length > 0 ? (
+                mapBarangays.map((barangay) => (
+                  <option key={barangay.id} value={barangay.id}>{barangay.name}</option>
+                ))
+              ) : (
+                <option value="">No registered barangay</option>
+              )}
+            </select>
+            {mapBarangayId && !isDefaultMapBoundary && (
+              <button type="button" onClick={resetMapBoundary} title="Reset to default Paknaan boundary">
+                Reset
+              </button>
+            )}
           </div>
           {import.meta.env.DEV && impersonateCandidates.length > 0 && (
             <div className="dev-impersonate" title="Dev only — switch account without logging out. Not present in production.">
@@ -1971,6 +2094,7 @@ function Workspace() {
                     onClearSelectedVehicle={() => setSelectedMapVehicleId(null)}
                     onHubsChange={setAllHubs}
                     canManageHubs={hasRole(user, 'Admin')}
+                    boundaryOverride={mapBoundaryOverride}
                   />
                 </div>
               </div>
@@ -3002,7 +3126,9 @@ function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedu
   const [openDashboardModal, setOpenDashboardModal] = useState(null);
 
   useEffect(() => {
-    const interval = setInterval(() => setNow(new Date()), 1000);
+    // Displayed time is minute-precision (no seconds), so a 1s tick would
+    // just be wasted re-renders — once a minute is enough to stay current.
+    const interval = setInterval(() => setNow(new Date()), 60000);
 
     // Fetch Mandaue City, Cebu, Philippines (10.3446, 123.9392) weather
     fetch('https://api.open-meteo.com/v1/forecast?latitude=10.3446&longitude=123.9392&current=temperature_2m,relative_humidity_2m,weather_code')
@@ -3117,7 +3243,7 @@ function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedu
     { label: 'Ready', value: availableVehicles, color: '#36c66d' },
   ];
   const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-  const timeStr = now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+  const timeStr = now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
 
   return (
     <div className="dashboard-grid">
@@ -3423,19 +3549,10 @@ function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedu
         </DashboardListModal>
       )}
 
-      {/* SECTION 5: Fleet Activity + What's Breaking Most, paired 7/5. */}
-      <section className="panel col-span-7 area-chart-panel">
-        <div className="panel-header-bar">
-          <h3>Fleet Activity by Day</h3>
-          <span className="area-chart-tag">Last 14 days</span>
-        </div>
-        <div className="dashboard-panel-chart-body">
-          <ActivityChart rows={data.activity_by_day ?? []} />
-        </div>
-      </section>
-
+      {/* SECTION 5: What's Breaking Most (or Operations Queue) + Vehicles
+          by Location, paired 6/6. */}
       {showBreakingMost ? (
-        <section className="panel col-span-5">
+        <section className="panel col-span-6">
           <div className="panel-header-bar">
             <h3><Icon name="wrench" size={16} /> What's Breaking Most</h3>
             <span className="area-chart-tag">Last 12 months</span>
@@ -3446,7 +3563,7 @@ function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedu
           </div>
         </section>
       ) : (
-        <section className="panel col-span-5">
+        <section className="panel col-span-6">
           <div className="panel-header-bar">
             <h3>Operations Queue</h3>
             <span className="area-chart-tag">{maintenanceExpenses}</span>
@@ -3461,19 +3578,6 @@ function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedu
         </section>
       )}
 
-      {/* SECTION 6: Vehicles by Type + Vehicles by Location — separate
-          standalone cards again instead of merged into one Fleet Analytics
-          grid. */}
-      <section className="panel col-span-6">
-        <div className="panel-header-bar">
-          <h3>Vehicles by Type</h3>
-          <span className="area-chart-tag">{data.vehicles_by_type?.length ?? 0} types</span>
-        </div>
-        <div className="dashboard-panel-chart-body">
-          <HorizontalBarChart rows={data.vehicles_by_type} />
-        </div>
-      </section>
-
       <section className="panel col-span-6">
         <div className="panel-header-bar">
           <h3>Vehicles by Location</h3>
@@ -3481,6 +3585,58 @@ function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedu
         </div>
         <div className="dashboard-panel-chart-body">
           <HorizontalBarChart rows={locationsByHub} />
+        </div>
+      </section>
+
+      {/* SECTION 6: Readiness by Vehicle Type — full width. Which emergency
+          vehicle categories can respond right now, not just a raw count of
+          database activity. Reuses the same per-category readiness data
+          already computed for the Emergency Readiness quick card. */}
+      <section className="panel col-span-12">
+        <div className="panel-header-bar">
+          <h3>Readiness by Vehicle Type</h3>
+          {fleetSummary && (
+            <span className="area-chart-tag">
+              {fleetSummary.verified_ready} of {fleetSummary.operational_total} verified ready
+            </span>
+          )}
+        </div>
+        {readiness.length === 0 ? (
+          <p className="empty-state">No vehicle types to show yet.</p>
+        ) : (
+          <div className="emergency-readiness-rows">
+            {readiness.map((r) => {
+              const verifiedReady = typeof r.verified_ready === 'number' ? r.verified_ready : r.ready;
+              const unverified = r.ready - verifiedReady;
+              return (
+                <div key={r.category} className="emergency-readiness-row">
+                  <span className="emergency-readiness-row-name">{r.category}</span>
+                  <span className="emergency-readiness-row-detail">
+                    {r.ready} available{unverified > 0 ? ` · ${unverified} unverified` : ''}
+                  </span>
+                  <span className={`emergency-readiness-row-tag${verifiedReady > 0 ? ' is-ready' : ''}`}>
+                    {verifiedReady}/{r.total} READY
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {noCoverage.length > 0 && (
+          <p className="emergency-readiness-alert">
+            <Icon name="alert" size={13} /> No coverage: {noCoverage.map((r) => r.category).join(', ')}
+          </p>
+        )}
+      </section>
+
+      {/* SECTION 7: Vehicles by Type — full width. */}
+      <section className="panel col-span-12">
+        <div className="panel-header-bar">
+          <h3>Vehicles by Type</h3>
+          <span className="area-chart-tag">{data.vehicles_by_type?.length ?? 0} types</span>
+        </div>
+        <div className="dashboard-panel-chart-body">
+          <HorizontalBarChart rows={data.vehicles_by_type} />
         </div>
       </section>
     </div>
@@ -3752,208 +3908,6 @@ function ColumnChart({ rows = [] }) {
           </div>
         );
       })}
-    </div>
-  );
-}
-
-// Monotone cubic spline (Fritsch-Carlson) through each point. Unlike a naive
-// quadratic-midpoint curve, this never overshoots past a point's neighbors —
-// so a sharp rise out of a run of flat zeros can't dip below the axis or
-// bulge above the peak it's approaching.
-function smoothLinePath(points) {
-  const n = points.length;
-  if (n < 2) {
-    return n === 1 ? `M ${points[0].x.toFixed(1)} ${points[0].y.toFixed(1)}` : '';
-  }
-
-  const dx = [];
-  const slope = [];
-  for (let i = 0; i < n - 1; i++) {
-    dx.push(points[i + 1].x - points[i].x);
-    slope.push((points[i + 1].y - points[i].y) / (dx[i] || 1));
-  }
-
-  const m = [slope[0]];
-  for (let i = 1; i < n - 1; i++) {
-    if (slope[i - 1] * slope[i] <= 0) {
-      m.push(0);
-    } else {
-      m.push((slope[i - 1] + slope[i]) / 2);
-    }
-  }
-  m.push(slope[n - 2]);
-
-  for (let i = 0; i < n - 1; i++) {
-    if (slope[i] === 0) {
-      m[i] = 0;
-      m[i + 1] = 0;
-      continue;
-    }
-    const a = m[i] / slope[i];
-    const b = m[i + 1] / slope[i];
-    const h = Math.hypot(a, b);
-    if (h > 3) {
-      const t = 3 / h;
-      m[i] = t * a * slope[i];
-      m[i + 1] = t * b * slope[i];
-    }
-  }
-
-  let d = `M ${points[0].x.toFixed(1)} ${points[0].y.toFixed(1)}`;
-  for (let i = 0; i < n - 1; i++) {
-    const cur = points[i];
-    const next = points[i + 1];
-    const c1x = cur.x + dx[i] / 3;
-    const c1y = cur.y + (m[i] * dx[i]) / 3;
-    const c2x = next.x - dx[i] / 3;
-    const c2y = next.y - (m[i + 1] * dx[i]) / 3;
-    d += ` C ${c1x.toFixed(1)} ${c1y.toFixed(1)}, ${c2x.toFixed(1)} ${c2y.toFixed(1)}, ${next.x.toFixed(1)} ${next.y.toFixed(1)}`;
-  }
-  return d;
-}
-
-function ActivityChart({ rows = [], height = 220 }) {
-  // Measure the actual rendered width so the SVG viewBox always matches the
-  // real pixel size 1:1 — otherwise a fixed viewBox width stretched to fill a
-  // wider container scales x/y unevenly and distorts the axis text and bars.
-  const containerRef = useRef(null);
-  const [measuredWidth, setMeasuredWidth] = useState(560);
-
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return undefined;
-    const observer = new ResizeObserver((entries) => {
-      const w = entries[0]?.contentRect?.width;
-      if (w) setMeasuredWidth(w);
-    });
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
-
-  if (!rows.length) {
-    return <p className="empty-state">No activity data yet.</p>;
-  }
-
-  const width = Math.max(320, measuredWidth);
-  const padX = 36;
-  const padTop = 16;
-  const padBottom = 26;
-  const innerW = width - padX * 2;
-  const innerH = height - padTop - padBottom;
-
-  const fleetValues = rows.map((r) => Number(r.fleet_value ?? r.value) || 0);
-  const maintenanceValues = rows.map((r) => Number(r.maintenance_value) || 0);
-  const totalValues = rows.map((r, i) => Number(r.value) || fleetValues[i] + maintenanceValues[i]);
-  const rawMax = Math.max(1, ...totalValues, ...fleetValues, ...maintenanceValues);
-  // Choose a "nice" integer step so the Y axis has clean, unique labels
-  // (counts are whole numbers, so the step is always >= 1).
-  const niceStep = (() => {
-    const rough = rawMax / 4; // aim for ~4 gridline intervals
-    const pow = Math.pow(10, Math.floor(Math.log10(rough)));
-    const norm = rough / pow;
-    let s;
-    if (norm <= 1) s = 1;
-    else if (norm <= 2) s = 2;
-    else if (norm <= 5) s = 5;
-    else s = 10;
-    return Math.max(1, s * pow);
-  })();
-  // Give the chart a sensible minimum headroom so a day or two of low
-  // activity doesn't pin every bar to the very top/bottom edges.
-  const niceMax = Math.max(4, Math.ceil(rawMax / niceStep) * niceStep);
-  // Top-to-bottom integer ticks (e.g. 3, 2, 1, 0) — no rounding duplicates.
-  const yTicks = [];
-  for (let v = niceMax; v >= 0; v -= niceStep) yTicks.push(v);
-
-  const bandW = innerW / rows.length;
-  const barW = Math.max(4, Math.min(16, bandW * 0.28));
-  const barGap = 3;
-  const toY = (value) => padTop + innerH - (value / niceMax) * innerH;
-  const baseline = padTop + innerH;
-
-  const points = rows.map((row, i) => {
-    const cx = padX + bandW * i + bandW / 2;
-    return {
-      cx,
-      label: row.label,
-      fleetValue: fleetValues[i],
-      maintenanceValue: maintenanceValues[i],
-      totalValue: totalValues[i],
-      fleetTop: toY(fleetValues[i]),
-      maintenanceTop: toY(maintenanceValues[i]),
-      lineY: toY(totalValues[i]),
-    };
-  });
-
-  // Smooth trend line tracing total activity per day, echoing the reference
-  // combo chart's bar+line overlay.
-  const linePath = smoothLinePath(points.map((p) => ({ x: p.cx, y: p.lineY })));
-
-  // Show at most ~8 x-axis labels to avoid crowding.
-  const labelStep = Math.ceil(rows.length / 8);
-
-  return (
-    <div className="area-chart activity-chart" ref={containerRef}>
-      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Activity by day">
-        {yTicks.map((val) => {
-          const y = padTop + innerH * (1 - val / niceMax);
-          return (
-            <g key={val}>
-              <line
-                className="area-grid-line"
-                x1={padX} y1={y} x2={width - padX} y2={y}
-                strokeDasharray="3 4"
-              />
-              <text className="area-axis-label" x={padX - 8} y={y + 3} textAnchor="end">{val}</text>
-            </g>
-          );
-        })}
-
-        {points.map((p, i) => (
-          <rect
-            key={`fleet-bar-${i}`}
-            className="activity-bar activity-bar-fleet"
-            x={p.cx - barGap / 2 - barW}
-            y={p.fleetTop}
-            width={barW}
-            height={Math.max(0, baseline - p.fleetTop)}
-            rx={3}
-          >
-            <title>{`${p.label} · Fleet updates: ${p.fleetValue}`}</title>
-          </rect>
-        ))}
-        {points.map((p, i) => (
-          <rect
-            key={`maint-bar-${i}`}
-            className="activity-bar activity-bar-maintenance"
-            x={p.cx + barGap / 2}
-            y={p.maintenanceTop}
-            width={barW}
-            height={Math.max(0, baseline - p.maintenanceTop)}
-            rx={3}
-          >
-            <title>{`${p.label} · Maintenance: ${p.maintenanceValue}`}</title>
-          </rect>
-        ))}
-
-        <path d={linePath} className="activity-trend-line" fill="none" />
-        {points.map((p, i) => (
-          <circle key={`dot-${i}`} className="activity-trend-dot" cx={p.cx} cy={p.lineY} r="3.2">
-            <title>{`${p.label} · Total: ${p.totalValue}`}</title>
-          </circle>
-        ))}
-
-        {points.map((p, i) => (
-          i % labelStep === 0 && (
-            <text key={`label-${i}`} className="area-axis-label" x={p.cx} y={height - 8} textAnchor="middle">{p.label}</text>
-          )
-        ))}
-      </svg>
-      <div className="activity-chart-legend">
-        <span><i className="activity-legend-swatch activity-legend-fleet"></i>Fleet Updates</span>
-        <span><i className="activity-legend-swatch activity-legend-maintenance"></i>Maintenance</span>
-        <span><i className="activity-legend-swatch activity-legend-line"></i>Total Trend</span>
-      </div>
     </div>
   );
 }

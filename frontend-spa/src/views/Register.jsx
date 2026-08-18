@@ -1,0 +1,446 @@
+import { useContext, useEffect, useState } from 'react';
+import { Link, Navigate } from 'react-router-dom';
+import api from '../api/axios';
+import Icon from '../components/Icon';
+import Aurora from '../components/Aurora';
+import AuthHeader from '../components/AuthHeader';
+import AuthFooter from '../components/AuthFooter';
+import { AuthContext } from '../context/AuthContextObject';
+
+const roleRoutes = {
+  Admin: '/admin',
+  Custodian: '/custodian',
+  'Maintenance Personnel': '/maintenance',
+};
+
+const emptyForm = {
+  first_name: '',
+  middle_name: '',
+  last_name: '',
+  email: '',
+  phone: '',
+  address: '',
+  province_id: '',
+  city_id: '',
+  barangay_id: '',
+  barangay_name: '',
+  password: '',
+  password_confirmation: '',
+};
+
+// Letters, spaces, and the punctuation that legitimately shows up in PH
+// names (hyphenated surnames, "Ñ", "D'Angelo"-style apostrophes, "Jr.").
+const NAME_CHARS = /[^A-Za-zÀ-ÖØ-öø-ÿ.'\- ]/g;
+const NAME_PATTERN = /^[A-Za-zÀ-ÖØ-öø-ÿ.'\- ]+$/;
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// PH mobile format: 09 + 9 digits = 11 digits total.
+const PHONE_PATTERN = /^09\d{9}$/;
+
+function Register() {
+  const { token, user } = useContext(AuthContext);
+  const [form, setForm] = useState(emptyForm);
+  const [provinces, setProvinces] = useState([]);
+  const [cities, setCities] = useState([]);
+  const [barangays, setBarangays] = useState([]);
+  const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+
+  useEffect(() => {
+    api.get('/provinces')
+      .then((response) => setProvinces(response.data))
+      .catch(() => setProvinces([]));
+  }, []);
+
+  // Cascading City/Municipality list, scoped to the chosen province.
+  useEffect(() => {
+    if (!form.province_id) return;
+    api.get('/cities', { params: { province_id: form.province_id } })
+      .then((response) => setCities(response.data))
+      .catch(() => setCities([]));
+  }, [form.province_id]);
+
+  // Only Mandaue City has a real barangay list today — everywhere else this
+  // comes back empty and the Barangay field falls back to free text.
+  useEffect(() => {
+    if (!form.city_id) return;
+    api.get('/barangays', { params: { city_id: form.city_id } })
+      .then((response) => setBarangays(response.data))
+      .catch(() => setBarangays([]));
+  }, [form.city_id]);
+
+  if (token && user) {
+    return <Navigate to={roleRoutes[user.role] ?? '/unauthorized'} replace />;
+  }
+
+  const handleChange = (event) => {
+    const { name, value } = event.target;
+    setForm((current) => ({ ...current, [name]: value }));
+  };
+
+  const handleProvinceChange = (event) => {
+    const { value } = event.target;
+    setForm((current) => ({
+      ...current,
+      province_id: value,
+      city_id: '',
+      barangay_id: '',
+      barangay_name: '',
+    }));
+    setCities([]);
+    setBarangays([]);
+  };
+
+  const handleCityChange = (event) => {
+    const { value } = event.target;
+    setForm((current) => ({
+      ...current,
+      city_id: value,
+      barangay_id: '',
+      barangay_name: '',
+    }));
+    setBarangays([]);
+  };
+
+  // Strips anything that isn't a letter/space/name-punctuation as the user
+  // types, instead of only complaining after they hit submit.
+  const handleNameChange = (event) => {
+    const { name, value } = event.target;
+    setForm((current) => ({ ...current, [name]: value.replace(NAME_CHARS, '') }));
+  };
+
+  // Digits only, capped at 11 — the length of a PH mobile number.
+  const handlePhoneChange = (event) => {
+    const digits = event.target.value.replace(/\D/g, '').slice(0, 11);
+    setForm((current) => ({ ...current, phone: digits }));
+  };
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    setError('');
+
+    if (!NAME_PATTERN.test(form.first_name.trim())) {
+      setError('First name may only contain letters.');
+      return;
+    }
+    if (form.middle_name.trim() && !NAME_PATTERN.test(form.middle_name.trim())) {
+      setError('Middle name may only contain letters.');
+      return;
+    }
+    if (!NAME_PATTERN.test(form.last_name.trim())) {
+      setError('Last name may only contain letters.');
+      return;
+    }
+    if (!EMAIL_PATTERN.test(form.email.trim())) {
+      setError('Please enter a valid email address.');
+      return;
+    }
+    if (!PHONE_PATTERN.test(form.phone)) {
+      setError('Phone number must be 11 digits starting with 09 (e.g. 09171234567).');
+      return;
+    }
+    if (!form.province_id) {
+      setError('Please select your province.');
+      return;
+    }
+    if (!form.city_id) {
+      setError('Please select your city/municipality.');
+      return;
+    }
+    if (!form.barangay_id && !form.barangay_name.trim()) {
+      setError('Please enter or select your barangay.');
+      return;
+    }
+    if (!form.address.trim()) {
+      setError('Street address is required.');
+      return;
+    }
+    if (form.password.length < 8) {
+      setError('Password must be at least 8 characters.');
+      return;
+    }
+    if (form.password !== form.password_confirmation) {
+      setError('Password and confirmation do not match.');
+      return;
+    }
+
+    setSubmitting(true);
+
+    try {
+      const name = [form.first_name, form.middle_name, form.last_name]
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .join(' ');
+      await api.post('/register', { ...form, name });
+      setSubmitted(true);
+    } catch (requestError) {
+      const messages = requestError.response?.data?.errors;
+      const firstMessage = messages ? Object.values(messages)[0]?.[0] : null;
+      setError(
+        firstMessage ??
+          requestError.response?.data?.message ??
+          'Unable to register. Please check your connection and try again.',
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="auth-page-shell">
+      <AuthHeader />
+
+      <main className="auth-split-page">
+      <section className="auth-split-panel" aria-labelledby="register-title">
+        <div className="auth-logo-header">
+          <h1 id="register-title" className="auth-login-heading">Register</h1>
+        </div>
+
+        {submitted ? (
+          <div>
+            <p className="notice success">
+              Registration submitted. An administrator must approve your account before you can sign in.
+            </p>
+            <Link className="primary-button auth-submit-btn" to="/login" style={{ display: 'flex', textDecoration: 'none' }}>
+              Back to Login
+            </Link>
+          </div>
+        ) : (
+          <form className="auth-form auth-form-grid" autoComplete="off" onSubmit={handleSubmit} noValidate>
+            <label className="auth-field">
+              <span>First Name</span>
+              <div className="auth-input-wrapper auth-input-plain">
+                <input
+                  autoComplete="off"
+                  maxLength={60}
+                  name="first_name"
+                  onChange={handleNameChange}
+                  placeholder="First name"
+                  required
+                  type="text"
+                  value={form.first_name}
+                />
+              </div>
+            </label>
+
+            <label className="auth-field">
+              <span>Middle Name</span>
+              <div className="auth-input-wrapper auth-input-plain">
+                <input
+                  autoComplete="off"
+                  maxLength={60}
+                  name="middle_name"
+                  onChange={handleNameChange}
+                  placeholder="Middle name (optional)"
+                  type="text"
+                  value={form.middle_name}
+                />
+              </div>
+            </label>
+
+            <label className="auth-field auth-field-full">
+              <span>Last Name</span>
+              <div className="auth-input-wrapper auth-input-plain">
+                <input
+                  autoComplete="off"
+                  maxLength={60}
+                  name="last_name"
+                  onChange={handleNameChange}
+                  placeholder="Last name"
+                  required
+                  type="text"
+                  value={form.last_name}
+                />
+              </div>
+            </label>
+
+            <label className="auth-field auth-field-full">
+              <span className="sr-only">Email Address</span>
+              <div className="auth-input-wrapper auth-input-plain">
+                <input
+                  autoComplete="off"
+                  name="email"
+                  onChange={handleChange}
+                  placeholder="Email address"
+                  required
+                  type="email"
+                  value={form.email}
+                />
+              </div>
+            </label>
+
+            <label className="auth-field">
+              <span className="sr-only">Phone Number</span>
+              <div className="auth-input-wrapper auth-input-plain">
+                <input
+                  autoComplete="off"
+                  inputMode="numeric"
+                  maxLength={11}
+                  name="phone"
+                  onChange={handlePhoneChange}
+                  placeholder="09XXXXXXXXX"
+                  required
+                  type="tel"
+                  value={form.phone}
+                />
+              </div>
+            </label>
+
+            <label className="auth-field">
+              <span>Province</span>
+              <div className="auth-input-wrapper auth-input-plain">
+                <select
+                  name="province_id"
+                  onChange={handleProvinceChange}
+                  required
+                  value={form.province_id}
+                >
+                  <option value="" disabled>Select your province</option>
+                  {provinces.map((province) => (
+                    <option key={province.id} value={province.id}>{province.name}</option>
+                  ))}
+                </select>
+              </div>
+            </label>
+
+            <label className="auth-field">
+              <span>City / Municipality</span>
+              <div className="auth-input-wrapper auth-input-plain">
+                <select
+                  disabled={!form.province_id}
+                  name="city_id"
+                  onChange={handleCityChange}
+                  required
+                  value={form.city_id}
+                >
+                  <option value="" disabled>
+                    {form.province_id ? 'Select your city/municipality' : 'Select a province first'}
+                  </option>
+                  {cities.map((city) => (
+                    <option key={city.id} value={city.id}>{city.name}</option>
+                  ))}
+                </select>
+              </div>
+            </label>
+
+            <label className="auth-field auth-field-full">
+              <span>Barangay</span>
+              <div className="auth-input-wrapper auth-input-plain">
+                {barangays.length > 0 ? (
+                  <select
+                    name="barangay_id"
+                    onChange={handleChange}
+                    required
+                    value={form.barangay_id}
+                  >
+                    <option value="" disabled>Select your barangay</option>
+                    {barangays.map((barangay) => (
+                      <option key={barangay.id} value={barangay.id}>{barangay.name}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    autoComplete="off"
+                    disabled={!form.city_id}
+                    name="barangay_name"
+                    onChange={handleChange}
+                    placeholder={form.city_id ? 'Barangay name' : 'Select a city/municipality first'}
+                    required
+                    type="text"
+                    value={form.barangay_name}
+                  />
+                )}
+              </div>
+            </label>
+
+            <label className="auth-field auth-field-full">
+              <span>Street Address</span>
+              <div className="auth-input-wrapper auth-input-plain">
+                <input
+                  autoComplete="off"
+                  name="address"
+                  onChange={handleChange}
+                  placeholder="House no. / street / purok"
+                  required
+                  type="text"
+                  value={form.address}
+                />
+              </div>
+            </label>
+
+            <label className="auth-field">
+              <span className="sr-only">Password</span>
+              <div className="auth-input-wrapper auth-input-plain">
+                <input
+                  autoComplete="new-password"
+                  name="password"
+                  onChange={handleChange}
+                  placeholder="Password"
+                  required
+                  type={showPassword ? 'text' : 'password'}
+                  value={form.password}
+                />
+                <button
+                  type="button"
+                  className="password-toggle-btn"
+                  onClick={() => setShowPassword((v) => !v)}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  title={showPassword ? 'Hide password' : 'Show password'}
+                >
+                  <Icon name={showPassword ? 'eyeOff' : 'eye'} size={18} />
+                </button>
+              </div>
+            </label>
+
+            <label className="auth-field">
+              <span className="sr-only">Confirm Password</span>
+              <div className="auth-input-wrapper auth-input-plain">
+                <input
+                  autoComplete="new-password"
+                  name="password_confirmation"
+                  onChange={handleChange}
+                  placeholder="Confirm password"
+                  required
+                  type={showPassword ? 'text' : 'password'}
+                  value={form.password_confirmation}
+                />
+              </div>
+            </label>
+
+            {error ? <p className="notice error auth-field-full">{error}</p> : null}
+
+            <button className="primary-button auth-submit-btn auth-field-full" disabled={submitting} type="submit">
+              {submitting ? (
+                <span className="btn-loading">
+                  <span className="btn-spinner" aria-hidden="true" />
+                  Submitting…
+                </span>
+              ) : 'Create account'}
+            </button>
+          </form>
+        )}
+
+        <p className="auth-legal">
+          Already have an account? <Link to="/login">Sign in</Link>
+        </p>
+      </section>
+
+      <div className="auth-split-hero">
+        <Aurora colorStops={['#0b1220', '#1e3a5f', '#0f172a']} amplitude={0.6} blend={0.55} />
+        <div className="auth-split-hero-content">
+          <h2>Join Your Barangay's Fleet Team</h2>
+          <p>
+            Create an account to help track vehicle readiness, report
+            issues, and coordinate maintenance for your barangay's fleet.
+          </p>
+        </div>
+      </div>
+      </main>
+
+      <AuthFooter />
+    </div>
+  );
+}
+
+export default Register;

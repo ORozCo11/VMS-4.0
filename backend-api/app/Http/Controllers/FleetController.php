@@ -220,7 +220,6 @@ class FleetController extends Controller
                 ->latest('history_id')
                 ->limit(8)
                 ->get(),
-            'activity_by_day' => $this->activityByDay(14),
             // Availability Forecast — which vehicles are out and when they are
             // expected back, so availability can be read as a forecast, not just
             // a "right now" snapshot.
@@ -668,47 +667,6 @@ class FleetController extends Controller
             'cost_ratio'           => $costRatio,
             'decommission_signal'  => $decommissionSignal,
         ]);
-    }
-
-    /**
-     * Fleet activity (history events) per day over the last $days days.
-     * Missing days are filled with 0 so the chart line stays continuous.
-     */
-    private function activityByDay(int $days = 14): array
-    {
-        $start = now()->subDays($days - 1)->startOfDay();
-
-        $rows = VehicleHistory::query()
-            ->where('created_at', '>=', $start)
-            ->selectRaw('DATE(created_at) as day, related_table, COUNT(*) as total')
-            ->groupBy('day', 'related_table')
-            ->get();
-
-        // Split events into "fleet" (vehicle/location/condition/issue activity) vs
-        // "maintenance" (maintenance records + schedules) so the dashboard chart can
-        // show them as two distinct bar series, same shape as the reference chart.
-        $byDay = [];
-        foreach ($rows as $row) {
-            $isMaintenance = str_starts_with((string) $row->related_table, 'vehicle_maintenance');
-            $bucket = $isMaintenance ? 'maintenance' : 'fleet';
-            $byDay[$row->day][$bucket] = ($byDay[$row->day][$bucket] ?? 0) + (int) $row->total;
-        }
-
-        $series = [];
-        for ($i = 0; $i < $days; $i++) {
-            $date = $start->copy()->addDays($i);
-            $key = $date->toDateString();
-            $fleet = $byDay[$key]['fleet'] ?? 0;
-            $maintenance = $byDay[$key]['maintenance'] ?? 0;
-            $series[] = [
-                'label' => $date->format('M j'),
-                'fleet_value' => $fleet,
-                'maintenance_value' => $maintenance,
-                'value' => $fleet + $maintenance,
-            ];
-        }
-
-        return $series;
     }
 
     public function categories()

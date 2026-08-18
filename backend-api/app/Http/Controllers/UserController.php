@@ -53,8 +53,12 @@ class UserController extends Controller
         }
 
         $query->when($request->filled('role'), fn ($q) => $q->havingRole($request->role));
+        // Pending self-registrations, not "any deactivated account" — those
+        // keep their approved_at stamp from the first time they were
+        // approved, even if deactivated again later.
+        $query->when($request->boolean('pending'), fn ($q) => $q->whereNull('approved_at'));
 
-        return $query->latest('id')->get();
+        return $query->with(['barangay', 'city'])->latest('id')->get();
     }
 
     public function store(Request $request)
@@ -138,7 +142,12 @@ class UserController extends Controller
     {
         $this->requireAdmin($request);
 
-        $user->update(['is_active' => true]);
+        $user->update([
+            'is_active' => true,
+            // Only stamp on the FIRST approval — re-activating an account
+            // that was already approved before shouldn't touch it.
+            'approved_at' => $user->approved_at ?? now(),
+        ]);
 
         return response()->json(['message' => 'User activated.']);
     }

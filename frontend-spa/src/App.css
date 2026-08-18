@@ -275,7 +275,8 @@
   pointer-events: none;
   flex-shrink: 0;
 }
-.auth-input-wrapper input {
+.auth-input-wrapper input,
+.auth-input-wrapper select {
   width: 100%;
   padding: 13px 16px 13px 42px;
   border: 1.5px solid var(--border, #d9e2ef);
@@ -292,7 +293,8 @@
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 .auth-input-wrapper input::placeholder { color: var(--text-faint, #94a3b8); }
-.auth-input-wrapper input:focus {
+.auth-input-wrapper input:focus,
+.auth-input-wrapper select:focus {
   border-color: #2563eb;
   box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.14);
 }
@@ -316,12 +318,101 @@
 
 /* No-icon input variant (reference has plain fields, no icon prefix) —
    normal left padding instead of the icon-reserved 42px, pale blue fill. */
-.auth-input-plain input {
+.auth-input-plain input,
+.auth-input-plain select {
   padding-left: 16px;
   background: #eef4fc;
   border-color: #dce8f8;
 }
 .auth-input-plain:has(.password-toggle-btn) input { padding-left: 16px; }
+
+/* Register page — wider card + two-column field grid so name/email/phone
+   etc. don't stack into one very tall single-column form. */
+.auth-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+}
+.auth-form-grid .auth-field-full { grid-column: 1 / -1; }
+@media (max-width: 560px) {
+  .auth-form-grid { grid-template-columns: 1fr; }
+}
+
+/* Register page split layout — a left-docked white form panel (roughly
+   half the viewport) beside a right-hand Aurora hero, instead of a small
+   centered card. Reads like a typical signup screen rather than the
+   compact Login card. */
+.auth-split-page {
+  display: flex;
+  align-items: stretch;
+  min-height: calc(100vh - 140px);
+  background: #05070d;
+  overflow: hidden;
+}
+.auth-split-panel {
+  width: min(50%, 640px);
+  min-width: 380px;
+  flex-shrink: 0;
+  background: #ffffff;
+  padding: 56px 48px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  overflow-y: auto;
+}
+.auth-split-hero {
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  overflow: hidden;
+}
+.auth-split-hero-content {
+  position: relative;
+  z-index: 1;
+  max-width: 420px;
+  text-align: center;
+  color: #ffffff;
+}
+.auth-split-hero-content h2 {
+  font-size: 1.9rem;
+  font-weight: 800;
+  margin: 0 0 14px;
+}
+.auth-split-hero-content p {
+  font-size: 0.95rem;
+  line-height: 1.65;
+  color: rgba(255, 255, 255, 0.82);
+  margin: 0;
+}
+@media (max-width: 900px) {
+  .auth-split-page { flex-direction: column; }
+  .auth-split-panel { width: 100%; min-width: 0; padding: 40px 24px; }
+  .auth-split-hero { display: none; }
+}
+
+/* Filled counterpart to .auth-page-header-login-btn, placed beside it so
+   the two public-facing CTAs (sign in vs. create an account) read as a
+   primary/secondary pair rather than two identical outline buttons. */
+.auth-page-header-register-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 38px;
+  padding: 0 20px;
+  border-radius: 8px;
+  border: 1.5px solid #ffffff;
+  background: #ffffff;
+  color: #1d4ed8;
+  font-size: 0.88rem;
+  font-weight: 700;
+  text-decoration: none;
+  flex-shrink: 0;
+  transition: background 0.15s ease, opacity 0.15s ease;
+}
+.auth-page-header-register-btn:hover { opacity: 0.9; }
 
 .auth-remember {
   display: flex;
@@ -683,6 +774,35 @@
 .dev-impersonate button:hover:not(:disabled) { background: #1d4ed8; }
 .dev-impersonate button:active:not(:disabled) { transform: translateY(1px); }
 .dev-impersonate button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* Vehicle Location map's barangay/city boundary selector — same visual
+   language as .dev-impersonate (on-brand blue, compact fields) since it
+   sits right beside it, but always renders (not DEV-gated). */
+.map-boundary-selector {
+  display: flex; align-items: center; gap: 8px;
+}
+.map-boundary-selector select {
+  border: 1px solid rgba(37, 99, 235, 0.28); border-radius: 6px;
+  padding: 4px 10px; font-size: 0.78rem; max-width: 170px;
+  background: #ffffff; color: #0f172a; cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.map-boundary-selector select:hover { border-color: #2563eb; }
+.map-boundary-selector select:focus {
+  outline: none; border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.16);
+}
+.map-boundary-selector select:disabled { opacity: 0.5; cursor: not-allowed; }
+.map-boundary-selector button {
+  display: inline-flex; align-items: center; gap: 5px;
+  border: 1px solid rgba(37, 99, 235, 0.28); border-radius: 6px; padding: 4px 12px;
+  font-size: 0.76rem; font-weight: 700; cursor: pointer;
+  background: #ffffff; color: #2563eb;
+  transition: background 0.15s ease, transform 0.08s ease;
+}
+.map-boundary-selector button:hover { background: #eff6ff; }
+.map-boundary-selector button:active { transform: translateY(1px); }
+
 .breadcrumb-path { font-size: 0.8rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: #94a3b8; }
 .topbar h2 { font-size: 1.4rem; font-weight: 800; color: #0f172a; margin-top: 2px; }
 .topbar-right { display: flex; align-items: center; gap: 12px; }
@@ -899,19 +1019,15 @@
 .auth-footer-social a:hover { background: rgba(255, 255, 255, 0.26); }
 .auth-footer-links {
   display: flex;
-  gap: 56px;
-}
-.auth-footer-col {
-  display: flex;
   flex-direction: column;
   gap: 12px;
 }
-.auth-footer-col a {
+.auth-footer-links a {
   font-size: 0.9rem;
   font-weight: 600;
   color: rgba(255, 255, 255, 0.85);
 }
-.auth-footer-col a:hover { color: #ffffff; text-decoration: underline; }
+.auth-footer-links a:hover { color: #ffffff; text-decoration: underline; }
 .auth-footer-bottom {
   display: flex;
   align-items: center;
@@ -951,6 +1067,16 @@
 }
 .notice.success { background: linear-gradient(90deg, #ecfdf5, #d1fae5); border: 1px solid #86efac; color: #065f46; }
 .notice.error { background: linear-gradient(90deg, #fef2f2, #fee2e2); border: 1px solid #fca5a5; color: #991b1b; }
+
+/* A later, dark-workspace-tuned .notice.error/.success rule elsewhere in
+   this file (light text on a near-transparent background, meant for a dark
+   dashboard) has equal specificity and wins by source order — which washed
+   out to near-illegible pale text on these pages' white card. These auth
+   pages are always light/white regardless of the in-app theme toggle, so
+   pin the readable dark-text colors back with a higher-specificity,
+   theme-independent override. */
+.auth-page-shell .notice.success { background: linear-gradient(90deg, #ecfdf5, #d1fae5); border: 1px solid #86efac; color: #065f46; }
+.auth-page-shell .notice.error { background: linear-gradient(90deg, #fef2f2, #fee2e2); border: 1px solid #fca5a5; color: #991b1b; }
 
 /* Floating toast for every add/edit/delete/validation result — replaces the
    old full-width inline banner so it overlays the page instead of pushing
@@ -4668,12 +4794,14 @@ table button,
    each side actually needs. Collapses to full width under 960px. */
 .dashboard-grid .col-span-7,
 .dashboard-grid .col-span-5,
-.dashboard-grid .col-span-6 {
+.dashboard-grid .col-span-6,
+.dashboard-grid .col-span-12 {
   align-self: start;
 }
 .dashboard-grid .col-span-7 { grid-column: span 7; }
 .dashboard-grid .col-span-5 { grid-column: span 5; }
 .dashboard-grid .col-span-6 { grid-column: span 6; }
+.dashboard-grid .col-span-12 { grid-column: span 12; }
 /* The welcome banner is the one col-span item that still stretches to
    match its row partner (Fleet Status, now trimmed to ~166px) — its solid
    gradient background absorbs the small extra height cleanly, unlike a
@@ -4685,7 +4813,8 @@ table button,
 @media (max-width: 960px) {
   .dashboard-grid .col-span-7,
   .dashboard-grid .col-span-5,
-  .dashboard-grid .col-span-6 {
+  .dashboard-grid .col-span-6,
+  .dashboard-grid .col-span-12 {
     grid-column: 1 / -1;
   }
 }
@@ -5134,19 +5263,6 @@ table button,
   white-space: nowrap;
 }
 
-/* --- Area / line chart (Fleet Activity by Day) --- */
-.area-chart-panel {
-  background: linear-gradient(180deg, #11151d 0%, #0b0e14 100%);
-}
-
-.area-chart-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding-bottom: 14px;
-  border-bottom: 1px solid var(--border-subtle);
-}
-
 .panel-header-bar .area-chart-tag {
   color: #ffffff;
   background: rgba(255, 255, 255, 0.14);
@@ -5553,102 +5669,6 @@ table button,
   padding: 4px 0;
 }
 .forecast-overdue-date { color: #b45309; font-weight: 600; white-space: nowrap; }
-
-.area-chart {
-  width: 100%;
-  margin-top: 12px;
-}
-
-.area-chart svg {
-  width: 100%;
-  height: 220px;
-  display: block;
-  overflow: visible;
-}
-
-.area-grid-line {
-  stroke: rgba(148, 163, 184, 0.16);
-  stroke-width: 1;
-}
-
-.area-axis-label {
-  fill: #94a3b8;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.2px;
-}
-
-.activity-bar {
-  fill-opacity: 0.9;
-  transition: fill-opacity 0.15s ease;
-}
-
-.activity-bar:hover {
-  fill-opacity: 1;
-}
-
-.activity-bar-fleet {
-  fill: #22c55e;
-}
-
-.activity-bar-maintenance {
-  fill: #ef4444;
-}
-
-.activity-trend-line {
-  stroke: #2563eb;
-  stroke-width: 2.5;
-  stroke-linejoin: round;
-  stroke-linecap: round;
-  filter: drop-shadow(0 2px 4px rgba(37, 99, 235, 0.4));
-}
-
-.activity-trend-dot {
-  fill: #2563eb;
-  stroke: #11151d;
-  stroke-width: 1.5;
-}
-
-.activity-chart-legend {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 22px;
-  margin-top: 10px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border-subtle);
-}
-
-.activity-chart-legend span {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 0.76rem;
-  font-weight: 700;
-  color: var(--text-muted);
-}
-
-.activity-legend-swatch {
-  display: inline-block;
-  width: 12px;
-  height: 12px;
-  border-radius: 3px;
-}
-
-.activity-legend-fleet {
-  background: #22c55e;
-}
-
-.activity-legend-maintenance {
-  background: #ef4444;
-}
-
-.activity-legend-line {
-  width: 14px;
-  height: 3px;
-  border-radius: 999px;
-  background: #2563eb;
-}
 
 .panel,
 .metric-card,
@@ -8026,9 +8046,6 @@ button.btn-view-action svg {
 
 /* Charts / panels with hardcoded dark fills */
 [data-theme="light"] .donut-center { background: #ffffff; }
-[data-theme="light"] .area-chart-panel { background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%); }
-[data-theme="light"] .activity-trend-dot { stroke: #ffffff; }
-[data-theme="light"] .area-axis-label { fill: #475569; }
 [data-theme="light"] .ticket-inline-form,
 [data-theme="light"] .map-header { background: #ffffff; }
 [data-theme="light"] .ticket-detail-phase-bar { background: #f1f5f9; }

@@ -5,7 +5,6 @@ import { MapContainer, Marker, Polygon, Popup, TileLayer, Tooltip, useMap, ZoomC
 import { toPng } from 'html-to-image';
 import api from '../api/axios';
 import {
-  PAKNAAN_BOUNDS,
   PAKNAAN_CENTER,
   PAKNAAN_POLYGON,
 } from '../data/paknaanLocationDensity';
@@ -106,6 +105,23 @@ function createSelectedVehicleIcon() {
 
 function isValidCoordinate(value) {
   return Number.isFinite(value);
+}
+
+// Converts a GeoJSON Polygon/MultiPolygon geometry into an array of Leaflet
+// LatLng rings — one ring per Polygon, one per part of a MultiPolygon (e.g.
+// islands). Holes are dropped since this is only ever used to draw a
+// decorative boundary outline, not an exact administrative shape.
+function geoJsonToRings(geometry) {
+  if (!geometry) return [];
+  const toLatLngRing = (ring) => ring.map(([lng, lat]) => [lat, lng]);
+
+  if (geometry.type === 'Polygon') {
+    return [toLatLngRing(geometry.coordinates[0])];
+  }
+  if (geometry.type === 'MultiPolygon') {
+    return geometry.coordinates.map((polygon) => toLatLngRing(polygon[0]));
+  }
+  return [];
 }
 
 function normalizeLocation(value = '') {
@@ -226,13 +242,12 @@ async function captureMapToPng(mapEl) {
   link.click();
 }
 
-function FitBoundsToPolygon() {
+function FitBoundsToPolygon({ bounds }) {
   const map = useMap();
 
   useEffect(() => {
-    const bounds = L.latLngBounds(PAKNAAN_POLYGON);
     map.fitBounds(bounds, { padding: [24, 24], maxZoom: 16 });
-  }, [map]);
+  }, [map, bounds]);
 
   return null;
 }
@@ -254,14 +269,13 @@ function FocusVehicleOnMap({ target }) {
   return null;
 }
 
-function ResetMapView({ requestKey }) {
+function ResetMapView({ requestKey, bounds }) {
   const map = useMap();
 
   useEffect(() => {
     if (!requestKey) return;
-    const bounds = L.latLngBounds(PAKNAAN_POLYGON);
     map.flyToBounds(bounds, { animate: true, duration: 0.8, padding: [24, 24], maxZoom: 16 });
-  }, [map, requestKey]);
+  }, [map, requestKey, bounds]);
 
   return null;
 }
@@ -285,6 +299,10 @@ function LocationDensityMap({
   onClearSelectedVehicle = null,
   onHubsChange = null,
   canManageHubs = false,
+  // { geometry: GeoJSON Polygon|MultiPolygon, label: string } | null — set
+  // by the admin topbar's barangay/city selector. Falls back to the
+  // hardcoded Paknaan outline below when nothing is selected.
+  boundaryOverride = null,
 }) {
   const [hubRecords, setHubRecords] = useState([]);
   const [addMode, setAddMode] = useState(false);
@@ -430,6 +448,20 @@ function LocationDensityMap({
       onClearSelectedVehicle();
     }
   }, [onClearSelectedVehicle]);
+
+  const boundaryLabel = boundaryOverride?.label ?? 'Paknaan';
+  const boundaryRings = useMemo(() => {
+    const overrideRings = geoJsonToRings(boundaryOverride?.geometry);
+    return overrideRings.length ? overrideRings : [PAKNAAN_POLYGON];
+  }, [boundaryOverride]);
+  const boundaryBounds = useMemo(
+    () => L.latLngBounds(boundaryRings.flat()),
+    [boundaryRings],
+  );
+  // Generous padding so panning/zooming still feels free within whichever
+  // area is selected, not just the original hand-tuned Paknaan box.
+  const boundaryMaxBounds = useMemo(() => boundaryBounds.pad(0.5), [boundaryBounds]);
+  const boundaryCenter = useMemo(() => boundaryBounds.getCenter(), [boundaryBounds]);
 
   const hubs = useMemo(
     () => hubRecords.filter((hub) => !hub.isHidden && isValidCoordinate(hub.lat) && isValidCoordinate(hub.lng)),
@@ -590,7 +622,7 @@ function LocationDensityMap({
         </span>
         <span className="location-density-legend-item">
           <span className="legend-symbol legend-symbol-boundary" aria-hidden="true" />
-          Paknaan boundary
+          {boundaryLabel} boundary
         </span>
       </div>
       {mapNotice && (
@@ -605,10 +637,15 @@ function LocationDensityMap({
         </div>
       )}
       <MapContainer
+        // Remount on boundary change — the simplest reliable way to make
+        // Leaflet's maxBounds/initial center actually take effect for the
+        // newly selected area, since react-leaflet doesn't re-apply those
+        // constructor-time props on an already-mounted map.
+        key={boundaryLabel}
         attributionControl
-        center={[PAKNAAN_CENTER.lat, PAKNAAN_CENTER.lng]}
+        center={[boundaryCenter.lat, boundaryCenter.lng]}
         className="location-density-map"
-        maxBounds={PAKNAAN_BOUNDS}
+        maxBounds={boundaryMaxBounds}
         maxBoundsViscosity={1}
         scrollWheelZoom
         zoom={16}
@@ -635,23 +672,31 @@ function LocationDensityMap({
           <button type="button" className={basemap === 'satellite' ? 'is-active' : ''} onClick={() => setBasemap('satellite')}>Satellite</button>
         </div>
         {/* Dark casing (halo) drawn UNDER the boundary so the yellow line pops
-            on both the light street map and the dark satellite imagery. */}
-        <Polygon
-          pathOptions={{ color: '#1e293b', weight: 6, opacity: 0.45, fill: false }}
-          positions={PAKNAAN_POLYGON}
-        />
+            on both the light street map and the dark satellite imagery. One
+            <Polygon> per ring so a MultiPolygon (e.g. a city with islands)
+            renders as separate disjoint shapes rather than shell+holes. */}
+        {boundaryRings.map((ring, index) => (
+          <Polygon
+            key={`halo-${index}`}
+            pathOptions={{ color: '#1e293b', weight: 6, opacity: 0.45, fill: false }}
+            positions={ring}
+          />
+        ))}
         {/* Solid yellow boundary on top — high visibility against greens,
             water, and light streets alike. */}
-        <Polygon
-          pathOptions={{
-            color: '#facc15',
-            fillColor: '#facc15',
-            fillOpacity: 0.05,
-            opacity: 1,
-            weight: 3,
-          }}
-          positions={PAKNAAN_POLYGON}
-        />
+        {boundaryRings.map((ring, index) => (
+          <Polygon
+            key={`line-${index}`}
+            pathOptions={{
+              color: '#facc15',
+              fillColor: '#facc15',
+              fillOpacity: 0.05,
+              opacity: 1,
+              weight: 3,
+            }}
+            positions={ring}
+          />
+        ))}
         {hubs.map((hub) => (
           <Marker
             icon={hubIcons[hub.id]}
@@ -755,9 +800,9 @@ function LocationDensityMap({
           </Marker>
         )}
         <ZoomControl position="bottomright" />
-        <FitBoundsToPolygon />
+        <FitBoundsToPolygon bounds={boundaryBounds} />
         <FocusVehicleOnMap target={selectedVehicleGroup} />
-        <ResetMapView requestKey={resetViewRequest} />
+        <ResetMapView requestKey={resetViewRequest} bounds={boundaryBounds} />
         <ResizeMapOnToggle trigger={isMaximized} />
       </MapContainer>
 

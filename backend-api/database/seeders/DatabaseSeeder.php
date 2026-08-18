@@ -13,6 +13,11 @@ class DatabaseSeeder extends Seeder
     {
         // Call your custom UserSeeder class
         $this->call([
+            ProvinceSeeder::class,
+            CitySeeder::class,
+            CityBoundarySeeder::class,
+            BarangaySeeder::class,
+            BarangayBoundarySeeder::class,
             UserSeeder::class,
             FleetReferenceSeeder::class,
             MockDataSeeder::class,

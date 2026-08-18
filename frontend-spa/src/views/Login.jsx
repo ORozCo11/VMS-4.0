@@ -95,7 +95,7 @@ function Login() {
             <span className="sr-only">Password</span>
             <div className="auth-input-wrapper auth-input-plain">
               <input
-                autoComplete="off"
+                autoComplete="new-password"
                 name="password"
                 onChange={handleChange}
                 placeholder="Password"

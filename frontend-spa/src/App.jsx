@@ -1,6 +1,7 @@
 import { BrowserRouter as Router, Routes, Route, Navigate, Link } from 'react-router-dom';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import Login from './views/Login';
+import Register from './views/Register';
 import Privacy from './views/Privacy';
 import Terms from './views/Terms';
 import About from './views/About';
@@ -26,6 +27,7 @@ function App() {
     <Router>
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/register" element={<Register />} />
         <Route path="/privacy" element={<Privacy />} />
         <Route path="/terms" element={<Terms />} />
         <Route path="/about" element={<About />} />
