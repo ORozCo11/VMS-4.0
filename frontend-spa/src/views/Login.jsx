@@ -40,6 +40,12 @@ function Login() {
   const handleSubmit = async (event) => {
     event.preventDefault();
     setError('');
+
+    if (!credentials.email || !credentials.password) {
+      setError('Email and password are required.');
+      return;
+    }
+
     setSubmitting(true);
 
     try {
@@ -69,7 +75,7 @@ function Login() {
           <h1 id="login-title" className="auth-login-heading">Login</h1>
         </div>
 
-        <form className="auth-form" autoComplete="off" onSubmit={handleSubmit}>
+        <form className="auth-form" autoComplete="off" onSubmit={handleSubmit} noValidate>
           <label className="auth-field">
             <span className="sr-only">Email Address</span>
             <div className="auth-input-wrapper auth-input-plain">

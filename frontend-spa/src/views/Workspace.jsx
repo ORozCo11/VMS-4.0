@@ -1084,7 +1084,10 @@ function Workspace() {
         filterStatus === 'Verified' ? row.status !== 'For Inspection' : row.status === 'For Inspection'
       ));
     } else if (activeModule === 'vehicles' && (filterStatus === 'ReadyToRespond' || filterStatus === 'NotReady')) {
-      result = result.filter((row) => (
+      // Retired vehicles are excluded from both buckets up in vehicleStats —
+      // match that here too, or "Not Ready" would list units the card's own
+      // count didn't include.
+      result = result.filter((row) => row.readiness_state !== 'retired').filter((row) => (
         filterStatus === 'ReadyToRespond' ? row.readiness_state === 'ready' : row.readiness_state !== 'ready'
       ));
     } else if (filterStatus && activeModule === 'users') {
@@ -1296,13 +1299,18 @@ function Workspace() {
   const vehicleStats = useMemo(() => {
     const rows = records.vehicles ?? [];
     const countByStatus = (status) => rows.filter((row) => row.status === status).length;
+    // Retired (Inactive/Decommissioned) vehicles were never expected to
+    // respond, so they're excluded from both sides of this split — otherwise
+    // a fleet that's mostly retired reads as "not ready to respond" when
+    // it's really just not in service.
+    const inServiceRows = rows.filter((row) => row.readiness_state !== 'retired');
     return {
       total: rows.length,
       Available: countByStatus('Available'),
       'Under Maintenance': countByStatus('Under Maintenance'),
       Inactive: countByStatus('Inactive'),
-      ReadyToRespond: rows.filter((row) => row.readiness_state === 'ready').length,
-      NotReady: rows.filter((row) => row.readiness_state !== 'ready').length,
+      ReadyToRespond: inServiceRows.filter((row) => row.readiness_state === 'ready').length,
+      NotReady: inServiceRows.filter((row) => row.readiness_state !== 'ready').length,
     };
   }, [records.vehicles]);
 
@@ -1592,15 +1600,20 @@ function Workspace() {
         </aside>
 
         <section className="content-area">
-          <div className="page-heading-row">
-            <span className="page-heading-icon">{moduleIcons[activeModule]}</span>
-            <div className="page-heading-text">
-              {subPageTitle && (
-                <p className="breadcrumb-path">{moduleLabel(modules, breadcrumbModule)} »</p>
-              )}
-              <h2>{subPageTitle ?? moduleLabel(modules, activeModule)}</h2>
+          {/* Dashboard has its own greeting banner right below (name, role,
+              date) — this generic icon+title bar would just repeat "Dashboard"
+              redundantly above it, so it's skipped for that one page only. */}
+          {activeModule !== 'dashboard' && (
+            <div className="page-heading-row">
+              <span className="page-heading-icon">{moduleIcons[activeModule]}</span>
+              <div className="page-heading-text">
+                {subPageTitle && (
+                  <p className="breadcrumb-path">{moduleLabel(modules, breadcrumbModule)} »</p>
+                )}
+                <h2>{subPageTitle ?? moduleLabel(modules, activeModule)}</h2>
+              </div>
             </div>
-          </div>
+          )}
 
         {notice && notice.lines ? (
           <div className="toast-notice-overlay" onClick={() => setNotice(null)}>
@@ -1618,6 +1631,23 @@ function Workspace() {
           <div className={`toast-notice ${notice.type}`} role="alert">
             <Icon name={notice.type === 'success' ? 'checkCircle' : 'alert'} size={16} />
             <span>{notice.text}</span>
+            {notice.openTickets?.length ? (
+              <div className="toast-notice-ticket-links">
+                {notice.openTickets.map((t) => (
+                  <button
+                    key={t.ticket_id}
+                    type="button"
+                    className="toast-notice-ticket-link"
+                    onClick={() => {
+                      setNotice(null);
+                      navigate(`${roleRoutes[user.role]}/tickets/${t.ticket_id}`);
+                    }}
+                  >
+                    Ticket #{t.ticket_id}{t.ticket_title ? ` — ${t.ticket_title}` : ''}
+                  </button>
+                ))}
+              </div>
+            ) : null}
             <button type="button" className="toast-notice-close" onClick={() => setNotice(null)} aria-label="Dismiss">
               <Icon name="close" size={13} />
             </button>
@@ -1741,6 +1771,8 @@ function Workspace() {
               contextVehicles={lookups.vehicles}
               hubs={allHubs}
               reviewStep
+              wrapperClassName="maintenance-form-grid"
+              formTitle="Maintenance Record Details"
             />
           ) : viewUserId ? (
             <UserViewPage
@@ -2497,6 +2529,7 @@ function Workspace() {
       return (
         <TicketModule
           tickets={visibleRows}
+          allTickets={rawRows}
           ticketLookups={ticketLookups}
           notifications={notifications}
           onViewTicket={openTicketProfile}
@@ -2872,6 +2905,8 @@ const ACTION_QUEUE_META = {
   schedule_overdue:        { icon: 'wrench',      color: '#b91c1c', route: null },
 };
 
+const READINESS_STATE_LABEL = { stale: 'Check stale', not_ready: 'Not ready', unchecked: 'Never checked' };
+
 function ActionQueueRow({ item, basePath, onNavigate, onGoToSchedules }) {
   const meta = ACTION_QUEUE_META[item.type] ?? ACTION_QUEUE_META.issue_pending;
   const goTo = () => (meta.route ? onNavigate(meta.route(basePath, item.id)) : onGoToSchedules());
@@ -2917,11 +2952,54 @@ function MyScheduledWorkRow({ item, onClick }) {
   );
 }
 
+// A compact "tap to see everything" tile — Action Queue, Emergency
+// Readiness, and Risk & Readiness Watch used to each be a full list
+// permanently on the dashboard; now they're one glance-able number that
+// opens the full list in a popup instead of claiming that much vertical
+// space all the time.
+function DashboardQuickCard({ icon, title, stat, tone, preview, onClick }) {
+  return (
+    <button type="button" className="dashboard-quick-card" onClick={onClick}>
+      <div className="dashboard-quick-card-head">
+        <span className="dashboard-quick-card-icon"><Icon name={icon} size={16} /></span>
+        <span className="dashboard-quick-card-title">{title}</span>
+        <Icon name="chevronRight" size={14} className="dashboard-quick-card-chevron" />
+      </div>
+      <strong className={`dashboard-quick-card-stat${tone ? ` is-${tone}` : ''}`}>{stat}</strong>
+      {preview && <span className="dashboard-quick-card-preview">{preview}</span>}
+    </button>
+  );
+}
+
+// Lightweight read-only popup — no form/notice machinery like FormModal,
+// just the same modal-overlay/modal-box chrome so it looks consistent with
+// every other modal in the app.
+function DashboardListModal({ title, tag, onClose, children }) {
+  return createPortal(
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-box modal-box-wide" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <h3>{title}</h3>
+          <button className="modal-close-btn" onClick={onClose} type="button" aria-label="Close"><Icon name="close" size={18} /></button>
+        </div>
+        {tag && <div className="dashboard-list-modal-tag">{tag}</div>}
+        <div className="modal-body dashboard-list-modal-body">{children}</div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
 function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedules }) {
   const [weather, setWeather] = useState(null);
   const [greeting, setGreeting] = useState(() => buildLocalGreeting(user?.name));
   const [greetingRole, setGreetingRole] = useState(() => dashboardRoleLabel(user?.role));
   const [now, setNow] = useState(() => new Date());
+  // Dashboard = summary, not the complete list — Action Queue, Emergency
+  // Readiness, and Risk & Readiness Watch each collapse to one glance-able
+  // card; tapping one opens its full list in a popup instead of the list
+  // living permanently on the page. null = no modal open.
+  const [openDashboardModal, setOpenDashboardModal] = useState(null);
 
   useEffect(() => {
     const interval = setInterval(() => setNow(new Date()), 1000);
@@ -2992,6 +3070,7 @@ function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedu
   const inactiveVehicles = metricValue('Inactive Vehicles');
   const reportedIssues = metricValue('Reported Issues');
   const upcomingMaintenance = metricValue('Upcoming Maintenance');
+  const overdueMaintenanceCount = metricValue('Overdue Maintenance');
   const maintenanceExpenses = data.metrics.find((metric) => metric.label === 'Total Maintenance Expenses')?.value ?? '0';
   const availabilityRate = totalVehicles ? Math.round((availableVehicles / totalVehicles) * 100) : 0;
 
@@ -3013,11 +3092,6 @@ function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedu
   const readinessWatch = data.readiness_watch ?? [];
   const fragility = data.fragility ?? [];
   const failurePatterns = data.failure_patterns ?? [];
-  const READINESS_STATE_LABEL = { stale: 'Check stale', not_ready: 'Not ready', unchecked: 'Never checked' };
-  // These panels pair up side-by-side to stop the dashboard being one long
-  // column of full-width sections — but if the paired panel has nothing to
-  // show, its sibling should reclaim the full row instead of leaving a gap.
-  const showRiskWatch = fragility.length > 0 || readinessWatch.length > 0;
   const showBreakingMost = hasRole(user, 'Admin') && failurePatterns.length > 0;
 
   // Action Queue — everything currently waiting on an Admin decision,
@@ -3025,6 +3099,7 @@ function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedu
   // answers "what do I do right now" instead of just "what's currently
   // true". Admin-only (the backend already returns [] for other roles).
   const actionQueue = data.action_queue ?? [];
+  const criticalActionCount = actionQueue.filter((item) => item.severity === 'Critical').length;
 
   // My Scheduled Work — a mechanic's own assigned schedules, surfaced right
   // on their dashboard instead of only living in the shared schedule table.
@@ -3046,8 +3121,9 @@ function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedu
 
   return (
     <div className="dashboard-grid">
-      {/* SECTION 1: Welcome Header */}
-      <div className="dashboard-banner">
+      {/* SECTION 1: Welcome Header — compressed, and paired with Fleet
+          Status instead of stretching full-width alone at the top. */}
+      <div className="dashboard-banner dashboard-banner-compact col-span-7">
         <div className="dashboard-banner-welcome">
           <span className="dashboard-greeting-role">{greetingRole}</span>
           <TextType
@@ -3081,15 +3157,57 @@ function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedu
         </div>
       </div>
 
-      {/* SECTION 2: Top Executive KPI Metrics Summary */}
-      <section className="metric-grid full-span">
-        {data.metrics.map((metric) => {
-          const isReportedIssueAlert = metric.label === 'Reported Issues' && reportedIssues > 0;
+      <section className="panel col-span-5 dashboard-fleet-status-panel">
+        <div className="panel-header-bar">
+          <h3>Fleet Status</h3>
+          <span className="area-chart-tag">{availabilityRate}% available</span>
+        </div>
+        <div className="fleet-status-compact">
+          <div className="donut-chart-small">
+            <DonutChart centerLabel={totalVehicles} centerSubLabel="Vehicles" segments={fleetStatus} />
+          </div>
+          <ChartLegend rows={fleetStatus} />
+        </div>
+      </section>
+
+      {/* Its own card row directly under the banner + Fleet Status row —
+          not squeezed inside the banner — so these two "act now" numbers
+          stand on equal footing with every other card on the page instead
+          of being a footnote. */}
+      {hasRole(user, 'Admin') && (
+        <div className="dashboard-crucial-alerts col-span-7">
+          <article className={`dashboard-alert-card${criticalActionCount > 0 ? ' is-blinking' : ''}`}>
+            <span className="dashboard-alert-card-icon"><Icon name="alert" size={18} /></span>
+            <div className="dashboard-alert-card-body">
+              <span>Critical Action{criticalActionCount === 1 ? '' : 's'}</span>
+              <strong>{criticalActionCount}</strong>
+            </div>
+          </article>
+          {fleetSummary && (
+            <article className={`dashboard-alert-card${fleetSummary.verified_ready < fleetSummary.operational_total ? ' is-blinking' : ''}`}>
+              <span className="dashboard-alert-card-icon"><Icon name="checkCircle" size={18} /></span>
+              <div className="dashboard-alert-card-body">
+                <span>Emergency Ready</span>
+                <strong>{fleetSummary.verified_ready}/{fleetSummary.operational_total}</strong>
+              </div>
+            </article>
+          )}
+        </div>
+      )}
+
+      {/* SECTION 2: Top Executive KPI Metrics Summary. Two tiers instead of
+          one row of 8 equally-weighted cards: the 5 headline fleet counts
+          get full-size cards, while the 3 "watch" counts (issues/upcoming/
+          overdue) — already actionable in Action Queue / Fleet Readiness &
+          Risks below — get a slim secondary row instead of competing for
+          the same visual weight. */}
+      <section className="metric-grid dashboard-headline-grid full-span">
+        {data.metrics.filter((metric) => !DASHBOARD_HEADLINE_HIDDEN_LABELS.has(metric.label)).map((metric) => {
           const style = DASHBOARD_METRIC_STYLES[metric.label] ?? DASHBOARD_METRIC_STYLE_DEFAULT;
 
           return (
             <article
-              className={`metric-card metric-card-iconic dashboard-metric-card${isReportedIssueAlert ? ' metric-card-alert' : ''}`}
+              className="metric-card metric-card-iconic dashboard-metric-card"
               key={metric.label}
             >
               <span className="metric-card-icon" style={{ background: style.bg, color: style.color }}>
@@ -3104,33 +3222,64 @@ function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedu
         })}
       </section>
 
-      {/* SECTION 3: Action Center / Priority Work Queue */}
+      <section className="dashboard-mini-stats full-span">
+        <div className="dashboard-mini-stat">
+          <span className="dashboard-mini-stat-dot" style={{ background: reportedIssues > 0 ? '#dc2626' : '#94a3b8' }} />
+          <span className="dashboard-mini-stat-label">Reported issues</span>
+          <strong>{reportedIssues}</strong>
+        </div>
+        <div className="dashboard-mini-stat">
+          <span className="dashboard-mini-stat-dot" style={{ background: '#2563eb' }} />
+          <span className="dashboard-mini-stat-label">Upcoming maintenance</span>
+          <strong>{upcomingMaintenance}</strong>
+        </div>
+        <div className="dashboard-mini-stat">
+          <span className="dashboard-mini-stat-dot" style={{ background: overdueMaintenanceCount > 0 ? '#d97706' : '#94a3b8' }} />
+          <span className="dashboard-mini-stat-label">Overdue maintenance</span>
+          <strong>{overdueMaintenanceCount}</strong>
+        </div>
+      </section>
+
+      {/* SECTION 3: Quick-glance cards — Action Queue, Emergency Readiness,
+          and Risk & Readiness Watch each collapse to one number instead of
+          a permanent full-height list; tapping opens the full list in a
+          popup, and clicking an item inside still navigates straight to
+          its page. */}
       {hasRole(user, 'Admin') && (
-        <section className="panel full-span action-queue-panel">
-          <div className="panel-header-bar">
-            <h3><Icon name="alert" size={16} /> Action Queue</h3>
-            {actionQueue.length > 0 && <span className="area-chart-tag">{actionQueue.length} need{actionQueue.length === 1 ? 's' : ''} you</span>}
-          </div>
-          {actionQueue.length === 0 ? (
-            <p className="action-queue-clear"><Icon name="checkCircle" size={16} /> All clear — nothing needs your attention right now.</p>
-          ) : (
-            <div className="action-queue-list">
-              {actionQueue.map((item) => (
-                <ActionQueueRow
-                  key={`${item.type}-${item.id}`}
-                  item={item}
-                  basePath={basePath}
-                  onNavigate={onNavigate}
-                  onGoToSchedules={onGoToSchedules}
-                />
-              ))}
-            </div>
+        <div className="dashboard-quick-cards full-span">
+          <DashboardQuickCard
+            icon="alert"
+            title="Action Queue"
+            stat={actionQueue.length === 0 ? 'All clear' : `${actionQueue.length} need${actionQueue.length === 1 ? 's' : ''} you`}
+            tone={actionQueue.length > 0 ? 'alert' : 'ok'}
+            preview={actionQueue[0]?.label}
+            onClick={() => setOpenDashboardModal('actionQueue')}
+          />
+          {readiness.length > 0 && (
+            <DashboardQuickCard
+              icon="checkCircle"
+              title="Emergency Readiness"
+              stat={fleetSummary ? `${fleetSummary.verified_ready}/${fleetSummary.operational_total} ready` : '—'}
+              tone={fleetSummary?.coverage_alert ? 'alert' : 'ok'}
+              preview={noCoverage.length > 0 ? `No coverage: ${noCoverage.map((r) => r.category).join(', ')}` : undefined}
+              onClick={() => setOpenDashboardModal('emergencyReadiness')}
+            />
           )}
-        </section>
+          {(fragility.length > 0 || readinessWatch.length > 0 || forecastOut.length > 0 || preventiveWatch.length > 0 || overdueSchedules.length > 0) && (
+            <DashboardQuickCard
+              icon="alert"
+              title="Risk & Readiness Watch"
+              stat={fragility.length > 0 ? `${fragility.length} single point${fragility.length === 1 ? '' : 's'} of failure` : `${readinessWatch.length} unverified`}
+              tone={fragility.length > 0 ? 'alert' : 'ok'}
+              preview={forecastOut.length > 0 ? `${forecastOut.length} vehicle${forecastOut.length === 1 ? '' : 's'} in the shop` : undefined}
+              onClick={() => setOpenDashboardModal('riskWatch')}
+            />
+          )}
+        </div>
       )}
 
       {hasRole(user, 'Maintenance Personnel') && (
-        <section className="panel full-span action-queue-panel">
+        <section className="panel col-span-7 action-queue-panel">
           <div className="panel-header-bar">
             <h3><Icon name="wrench" size={16} /> My Scheduled Work</h3>
             {myScheduledWork.length > 0 && <span className="area-chart-tag">{myScheduledWork.length} assigned to you</span>}
@@ -3138,7 +3287,7 @@ function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedu
           {myScheduledWork.length === 0 ? (
             <p className="action-queue-clear"><Icon name="checkCircle" size={16} /> Nothing scheduled for you right now.</p>
           ) : (
-            <div className="action-queue-list">
+            <div className="action-queue-list action-queue-list-compact">
               {myScheduledWork.map((item) => (
                 <MyScheduledWorkRow
                   key={item.schedule_id}
@@ -3151,204 +3300,188 @@ function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedu
         </section>
       )}
 
-      {/* SECTION 4: Emergency Readiness Banner */}
-      {readiness.length > 0 && (
-        <section className="panel full-span">
-          <div className="panel-header-bar">
-            <h3><Icon name="checkCircle" size={16} /> Emergency Readiness</h3>
-            <span className="area-chart-tag">Coverage by vehicle type</span>
-          </div>
-          {fleetSummary && (
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, margin: '0 0 14px', padding: '12px 16px', borderRadius: 10, background: fleetSummary.coverage_alert ? '#fff5f5' : '#f0fdf4', border: `1px solid ${fleetSummary.coverage_alert ? '#fecaca' : '#bbf7d0'}` }}>
-              <span style={{ fontSize: '1.8rem', fontWeight: 800, color: fleetSummary.coverage_alert ? '#dc2626' : '#16a34a' }}>
-                {fleetSummary.verified_ready}
-              </span>
-              <span style={{ fontSize: '0.95rem', color: 'var(--text-strong, #334155)', fontWeight: 600 }}>
-                of {fleetSummary.operational_total} emergency vehicles verified ready to respond right now
-              </span>
+      {openDashboardModal === 'actionQueue' && (
+        <DashboardListModal
+          title="Action Queue"
+          tag={actionQueue.length > 0 ? `${actionQueue.length} need${actionQueue.length === 1 ? 's' : ''} you` : undefined}
+          onClose={() => setOpenDashboardModal(null)}
+        >
+          {actionQueue.length === 0 ? (
+            <p className="action-queue-clear"><Icon name="checkCircle" size={16} /> All clear — nothing needs your attention right now.</p>
+          ) : (
+            <div className="action-queue-list">
+              {actionQueue.map((item) => (
+                <ActionQueueRow
+                  key={`${item.type}-${item.id}`}
+                  item={item}
+                  basePath={basePath}
+                  onNavigate={(path) => { setOpenDashboardModal(null); onNavigate(path); }}
+                  onGoToSchedules={() => { setOpenDashboardModal(null); onGoToSchedules(); }}
+                />
+              ))}
             </div>
           )}
-          {noCoverage.length > 0 && (
-            <div style={{ margin: '0 0 14px', padding: '12px 16px', borderRadius: 10, background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b', display: 'flex', alignItems: 'center', gap: 10, fontWeight: 600 }}>
-              <Icon name="alert" size={18} />
-              NO COVERAGE: {noCoverage.map((r) => r.category).join(', ')} — no ready unit available right now.
-            </div>
-          )}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 12 }}>
+        </DashboardListModal>
+      )}
+
+      {openDashboardModal === 'emergencyReadiness' && (
+        <DashboardListModal
+          title="Emergency Readiness"
+          tag={fleetSummary ? `${fleetSummary.verified_ready} of ${fleetSummary.operational_total} verified ready` : undefined}
+          onClose={() => setOpenDashboardModal(null)}
+        >
+          <div className="emergency-readiness-rows">
             {readiness.map((r) => {
-              const ok = !r.no_coverage;
               const verifiedReady = typeof r.verified_ready === 'number' ? r.verified_ready : r.ready;
               const unverified = r.ready - verifiedReady;
-              const heroColor = verifiedReady === 0 ? '#dc2626' : (verifiedReady < r.ready ? '#b45309' : '#16a34a');
-              const breakdown = [
-                `${r.ready} available`,
-                unverified > 0 ? `${unverified} unverified` : null,
-                r.down > 0 ? `${r.down} down` : null,
-              ].filter(Boolean).join(' · ');
               return (
-                <div key={r.category} style={{ padding: 14, borderRadius: 12, border: `1px solid ${r.no_coverage ? '#fecaca' : 'var(--border, #e2e8f0)'}`, background: r.no_coverage ? '#fff5f5' : 'var(--bg-card, #fff)' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                    <strong style={{ fontSize: '0.9rem' }}>{r.category}</strong>
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: '0.72rem', fontWeight: 700, padding: '3px 9px', borderRadius: 999, background: ok ? '#ecfdf5' : '#fef2f2', color: ok ? '#065f46' : '#991b1b', border: `1px solid ${ok ? '#a7f3d0' : '#fecaca'}` }}>
-                      <Icon name={ok ? 'checkCircle' : 'alert'} size={11} /> {ok ? 'Covered' : 'No coverage'}
-                    </span>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }} title="Passed a recent pre-deployment readiness check.">
-                    <span style={{ fontSize: '1.6rem', fontWeight: 800, color: heroColor }}>{verifiedReady}</span>
-                    <span style={{ fontSize: '0.9rem', color: 'var(--text-muted, #64748b)' }}>of {r.total} verified ready</span>
-                  </div>
-                  <span style={{ display: 'block', marginTop: 2, fontSize: '0.76rem', color: 'var(--text-muted, #64748b)' }}>{breakdown}</span>
+                <div key={r.category} className="emergency-readiness-row">
+                  <span className="emergency-readiness-row-name">{r.category}</span>
+                  <span className="emergency-readiness-row-detail">
+                    {r.ready} available{unverified > 0 ? ` · ${unverified} unverified` : ''}
+                  </span>
+                  <span className={`emergency-readiness-row-tag${verifiedReady > 0 ? ' is-ready' : ''}`}>
+                    {verifiedReady}/{r.total} READY
+                  </span>
                 </div>
               );
             })}
           </div>
-        </section>
-      )}
-
-      {/* SECTION 5: Operational Risk & Forecast Side-by-Side Row */}
-      {(showRiskWatch || forecastOut.length > 0 || preventiveWatch.length > 0 || overdueSchedules.length > 0) && (
-        <div className="dashboard-2col-grid">
-          {showRiskWatch && (
-            <section className="panel dashboard-card-panel">
-              <div className="panel-header-bar">
-                <h3><Icon name="alert" size={16} /> Risk &amp; Readiness Watch</h3>
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 16 }}>
-                {fragility.length > 0 && (
-                  <div>
-                    <h4 style={{ margin: '0 0 8px', fontSize: '0.85rem', color: 'var(--text-strong, #334155)' }}>Single points of failure</h4>
-                    {fragility.map((f) => (
-                      <div key={f.category} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', marginBottom: 6, borderRadius: 8, background: f.critical ? '#fef2f2' : '#fffbeb', border: `1px solid ${f.critical ? '#fecaca' : '#fde68a'}`, color: f.critical ? '#991b1b' : '#92400e', fontSize: '0.83rem' }}>
-                        <Icon name="alert" size={14} />
-                        <span><strong>Only 1 {f.category}</strong> — {f.critical ? 'and it is currently DOWN. No coverage.' : 'no backup if it goes down.'}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {readinessWatch.length > 0 && (
-                  <div>
-                    <h4 style={{ margin: '0 0 8px', fontSize: '0.85rem', color: 'var(--text-strong, #334155)' }}>Available but not verified ready</h4>
-                    {readinessWatch.map((r) => (
-                      <div key={r.vehicle_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '8px 12px', marginBottom: 6, borderRadius: 8, background: 'var(--bg-subtle, #f8fafc)', border: '1px solid var(--border, #e2e8f0)', fontSize: '0.83rem' }}>
-                        <span>{r.vehicle_name} <span className="muted">· {r.category ?? '—'}</span></span>
-                        <span style={{ fontSize: '0.72rem', fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: r.state === 'not_ready' ? '#fee2e2' : '#fef3c7', color: r.state === 'not_ready' ? '#b91c1c' : '#92400e' }}>
-                          {READINESS_STATE_LABEL[r.state] ?? r.state}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </section>
+          {fragility.length > 0 && fragility.length === readiness.length && (
+            <p className="emergency-readiness-note">
+              <Icon name="alert" size={13} /> Every emergency type has exactly one vehicle — no backup if any of the {readiness.length} goes down. Verify all {readiness.length} to clear this panel.
+            </p>
           )}
-
-          <section className="panel dashboard-card-panel">
-            <div className="panel-header-bar">
-              <h3>Availability Forecast</h3>
-              <span className="area-chart-tag">{forecast.available_now} ready now</span>
-            </div>
-            {forecastOut.length === 0 ? (
-              <p className="empty-state">All vehicles are currently available — nothing is out for maintenance.</p>
-            ) : (
-              <div className="forecast-list">
-                {forecastOut.map((v) => (
-                  <div className="forecast-row" key={v.vehicle_id}>
-                    <div className="forecast-veh">
-                      <Icon name="wrench" size={14} />
-                      <div>
-                        <strong>{v.vehicle_name}</strong>
-                        <span>{v.plate_number}</span>
-                      </div>
-                    </div>
-                    <div className="forecast-eta">
-                      {v.estimated_return_date ? (
-                        <>Ready by <strong>{formatForecastDate(v.estimated_return_date)}</strong></>
-                      ) : (
-                        <span className="forecast-eta-none">No estimate yet</span>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-            {preventiveWatch.length > 0 ? (
-              <div className="forecast-overdue">
-                <h4><Icon name="alert" size={14} /> Preventive Maintenance Watch</h4>
-                {preventiveWatch.map((s) => (
-                  <div className="forecast-overdue-row" key={s.schedule_id}>
-                    <span>
-                      <span style={{ display: 'inline-block', fontSize: '0.68rem', fontWeight: 700, padding: '1px 7px', borderRadius: 999, marginRight: 6, background: s.state === 'overdue' ? '#fee2e2' : '#fef3c7', color: s.state === 'overdue' ? '#b91c1c' : '#92400e' }}>
-                        {s.state === 'overdue' ? 'OVERDUE' : 'DUE SOON'}
-                      </span>
-                      {s.vehicle_name} · {s.maintenance_type}
-                    </span>
-                    <span className="forecast-overdue-date">{s.state === 'overdue' ? 'was due' : 'due'} {formatForecastDate(s.scheduled_date)}</span>
-                  </div>
-                ))}
-              </div>
-            ) : overdueSchedules.length > 0 && (
-              <div className="forecast-overdue">
-                <h4><Icon name="alert" size={14} /> Overdue scheduled maintenance</h4>
-                {overdueSchedules.map((s) => (
-                  <div className="forecast-overdue-row" key={s.schedule_id}>
-                    <span>{s.vehicle?.vehicle_name ?? '—'} · {s.maintenance_type}</span>
-                    <span className="forecast-overdue-date">was due {formatForecastDate(s.scheduled_date)}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </section>
-        </div>
+          {noCoverage.length > 0 && (
+            <p className="emergency-readiness-alert"><Icon name="alert" size={13} /> No coverage: {noCoverage.map((r) => r.category).join(', ')}</p>
+          )}
+        </DashboardListModal>
       )}
 
-      {/* SECTION 6: Activity & Pattern Analytics Row */}
-      <div className="dashboard-2col-grid">
-        <section className="panel dashboard-card-panel area-chart-panel">
-          <div className="panel-header-bar">
-            <h3>Fleet Activity by Day</h3>
-            <span className="area-chart-tag">Last 14 days</span>
+      {openDashboardModal === 'riskWatch' && (
+        <DashboardListModal
+          title="Risk & Readiness Watch"
+          tag={fragility.length > 0 ? `${fragility.length} single point${fragility.length === 1 ? '' : 's'} of failure` : undefined}
+          onClose={() => setOpenDashboardModal(null)}
+        >
+          <div className="risk-watch-columns">
+            {fragility.length > 0 && (
+              <div className="risk-watch-col">
+                <h4>No backup if it goes down</h4>
+                {fragility.map((f) => (
+                  <div key={f.category} className={`risk-watch-item${f.critical ? ' is-critical' : ''}`}>
+                    Only 1 {f.category}
+                  </div>
+                ))}
+              </div>
+            )}
+            {readinessWatch.length > 0 && (
+              <div className="risk-watch-col">
+                <h4>Available, not verified</h4>
+                {readinessWatch.map((r) => (
+                  <button
+                    key={r.vehicle_id}
+                    type="button"
+                    className="risk-watch-item risk-watch-item-clickable"
+                    onClick={() => { setOpenDashboardModal(null); onNavigate(`${basePath}/vehicles/${r.vehicle_id}`); }}
+                  >
+                    <span className="risk-watch-item-top">
+                      <span className="risk-watch-item-title">{r.vehicle_name}</span>
+                      <span className={`risk-watch-tag${r.state === 'not_ready' ? ' is-critical' : ''}`}>
+                        {(READINESS_STATE_LABEL[r.state] ?? r.state).toUpperCase()}
+                      </span>
+                    </span>
+                    <span className="risk-watch-item-sub">{r.category ?? '—'}</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
-          <ActivityChart rows={data.activity_by_day ?? []} />
-        </section>
-
-        {showBreakingMost && (
-          <section className="panel dashboard-card-panel">
-            <div className="panel-header-bar">
-              <h3><Icon name="wrench" size={16} /> What's Breaking Most</h3>
-              <span className="area-chart-tag">Fleet-wide · last 12 months</span>
+          {forecastOut.length === 0 && preventiveWatch.length === 0 && overdueSchedules.length === 0 ? (
+            <p className="risk-watch-footer-ok">
+              <Icon name="checkCircle" size={13} /> All vehicles available — nothing out for maintenance.
+              <span className="area-chart-tag">{forecast.available_now} ready</span>
+            </p>
+          ) : (
+            <div className="risk-watch-footer-list">
+              {forecastOut.map((v) => (
+                <div key={v.vehicle_id} className="risk-watch-footer-row">
+                  <span>{v.vehicle_name}</span>
+                  <span>{v.estimated_return_date ? `Ready by ${formatForecastDate(v.estimated_return_date)}` : 'No estimate yet'}</span>
+                </div>
+              ))}
+              {(preventiveWatch.length > 0 ? preventiveWatch : overdueSchedules).map((s) => (
+                <div key={s.schedule_id} className="risk-watch-footer-row">
+                  <span>{s.vehicle_name ?? s.vehicle?.vehicle_name ?? '—'} · {s.maintenance_type}</span>
+                  <span className={(s.state ? s.state === 'overdue' : true) ? 'is-overdue' : ''}>
+                    {(s.state ? s.state === 'overdue' : true) ? 'OVERDUE' : 'DUE SOON'}
+                  </span>
+                </div>
+              ))}
             </div>
-            <HorizontalBarChart rows={failurePatterns.map((p) => ({ label: p.type, value: p.count }))} />
-            <p className="muted" style={{ marginTop: 8, fontSize: '0.82rem' }}>A single common failure across many vehicles often points to a systemic cause (rough roads, a bad parts batch) worth fixing at the root.</p>
-          </section>
-        )}
-      </div>
+          )}
+        </DashboardListModal>
+      )}
 
-      {/* SECTION 7: Deep Visual Breakdown Charts Grid (2x2) */}
-      <section className="dashboard-graphs full-span" aria-label="Dashboard graphs">
-        <GraphPanel title="Fleet Status" stat={`${availabilityRate}% available`}>
-          <DonutChart
-            centerLabel={totalVehicles}
-            centerSubLabel="Vehicles"
-            segments={fleetStatus}
-          />
-          <ChartLegend rows={fleetStatus} />
-        </GraphPanel>
+      {/* SECTION 5: Fleet Activity + What's Breaking Most, paired 7/5. */}
+      <section className="panel col-span-7 area-chart-panel">
+        <div className="panel-header-bar">
+          <h3>Fleet Activity by Day</h3>
+          <span className="area-chart-tag">Last 14 days</span>
+        </div>
+        <div className="dashboard-panel-chart-body">
+          <ActivityChart rows={data.activity_by_day ?? []} />
+        </div>
+      </section>
 
-        <GraphPanel title="Vehicles by Type" stat={`${data.vehicles_by_type?.length ?? 0} types`}>
-          <HorizontalBarChart rows={data.vehicles_by_type} />
-        </GraphPanel>
-
-        <GraphPanel title="Vehicles by Location" stat={`${locationsByHub.length} sites`}>
-          <HorizontalBarChart rows={locationsByHub} />
-        </GraphPanel>
-
-        <GraphPanel title="Operations Queue" stat={String(maintenanceExpenses)}>
-          <ColumnChart rows={operationsQueue} />
-          <div className="graph-footnote">
-            <span>Total maintenance expenses</span>
-            <strong>{maintenanceExpenses}</strong>
+      {showBreakingMost ? (
+        <section className="panel col-span-5">
+          <div className="panel-header-bar">
+            <h3><Icon name="wrench" size={16} /> What's Breaking Most</h3>
+            <span className="area-chart-tag">Last 12 months</span>
           </div>
-        </GraphPanel>
+          <div className="dashboard-panel-chart-body">
+            <HorizontalBarChart rows={failurePatterns.map((p) => ({ label: p.type, value: p.count }))} />
+            <p className="muted" style={{ marginTop: 8, fontSize: '0.78rem' }}>{failurePatterns[0]?.type ?? 'This'} affects {failurePatterns[0]?.count ?? 0} vehicles — a common cause worth fixing at the root.</p>
+          </div>
+        </section>
+      ) : (
+        <section className="panel col-span-5">
+          <div className="panel-header-bar">
+            <h3>Operations Queue</h3>
+            <span className="area-chart-tag">{maintenanceExpenses}</span>
+          </div>
+          <div className="dashboard-panel-chart-body">
+            <ColumnChart rows={operationsQueue} />
+            <div className="graph-footnote">
+              <span>Total maintenance expenses</span>
+              <strong>{maintenanceExpenses}</strong>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* SECTION 6: Vehicles by Type + Vehicles by Location — separate
+          standalone cards again instead of merged into one Fleet Analytics
+          grid. */}
+      <section className="panel col-span-6">
+        <div className="panel-header-bar">
+          <h3>Vehicles by Type</h3>
+          <span className="area-chart-tag">{data.vehicles_by_type?.length ?? 0} types</span>
+        </div>
+        <div className="dashboard-panel-chart-body">
+          <HorizontalBarChart rows={data.vehicles_by_type} />
+        </div>
+      </section>
+
+      <section className="panel col-span-6">
+        <div className="panel-header-bar">
+          <h3>Vehicles by Location</h3>
+          <span className="area-chart-tag">{locationsByHub.length} sites</span>
+        </div>
+        <div className="dashboard-panel-chart-body">
+          <HorizontalBarChart rows={locationsByHub} />
+        </div>
       </section>
     </div>
   );
@@ -3446,9 +3579,12 @@ function dashboardMetricValue(metrics, label) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function GraphPanel({ title, stat, children }) {
+// `bare` drops this panel's own card chrome (border/background/shadow) —
+// used when four of these sit inside one outer "Fleet Analytics" card
+// instead of each being its own separate floating box.
+function GraphPanel({ title, stat, children, bare = false }) {
   return (
-    <article className="graph-panel">
+    <article className={bare ? 'graph-panel-bare' : 'graph-panel'}>
       <div className="graph-panel-header">
         <h3>{title}</h3>
         <span>{stat}</span>
@@ -4458,12 +4594,89 @@ function SelectOrOtherField({ field, value, onChange }) {
   );
 }
 
+// Every required/pattern/confirm-match check SmartForm used to hand off to
+// the browser's own constraint validation (native tooltip, positioned and
+// styled by the browser, not this app). Re-implemented here so every form
+// reports through the same in-app, styled validation card the server-side
+// (422) errors already use — one consistent message UI instead of two.
+function collectValidationErrors(fields, values) {
+  const lines = [];
+  fields.forEach((field) => {
+    const value = values[field.name];
+
+    if (field.type === 'checkboxes') {
+      if (field.required && !(Array.isArray(value) && value.length > 0)) {
+        lines.push(`${field.label}: select at least one.`);
+      }
+      return;
+    }
+
+    if (field.type === 'list') {
+      const rows = Array.isArray(value) ? value : [];
+      if (field.required && !rows.some((row) => row.trim())) {
+        lines.push(`${field.label} is required.`);
+      }
+      return;
+    }
+
+    if (field.confirmOf) {
+      if (field.required && !value) {
+        lines.push(`${field.label} is required.`);
+      } else if (value && value !== values[field.confirmOf]) {
+        lines.push(`${field.label} does not match.`);
+      }
+      return;
+    }
+
+    if (field.required && !value) {
+      lines.push(`${field.label} is required.`);
+      return;
+    }
+
+    if (field.type === 'number' && value !== '' && value != null) {
+      const num = Number(value);
+      if (field.min != null && num < Number(field.min)) {
+        lines.push(`${field.label} must be at least ${field.min}.`);
+      }
+      if (field.max != null && num > Number(field.max)) {
+        lines.push(`${field.label} must be at most ${field.max}.`);
+      }
+    }
+
+    if (field.pattern && value && !new RegExp(`^(?:${field.pattern})$`).test(value)) {
+      lines.push(field.title || `${field.label} is invalid.`);
+    }
+  });
+  return lines;
+}
+
+// Opt-in field grouping: fields carrying a `group` label render inside their
+// own titled sub-card (Maintenance Records today) instead of one flat list —
+// so the section header says what those fields are about at a glance,
+// mirroring the realcore reference's "Select Fee Type" / "Other" cards.
+// Fields with no `group` fall into a single nameless bucket, which the
+// caller renders unwrapped — so forms that never set `group` are unaffected.
+function groupFields(fields) {
+  const groups = [];
+  fields.forEach((field) => {
+    const key = field.group ?? null;
+    let bucket = groups.find((g) => g.name === key);
+    if (!bucket) {
+      bucket = { name: key, fields: [] };
+      groups.push(bucket);
+    }
+    bucket.fields.push(field);
+  });
+  return groups;
+}
+
 function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, onSubmit, submitLabel, title, onValuesChange }) {
   const [values, setValues] = useState(() => valuesFromFields(fields, initialValues));
   const [submitting, setSubmitting] = useState(false);
   // Per-field show/hide toggle for password inputs — keyed by field name so
   // e.g. Old/New/Confirm Password on the same form toggle independently.
   const [visiblePasswords, setVisiblePasswords] = useState({});
+  const [validationLines, setValidationLines] = useState(null);
 
   useEffect(() => {
     setValues(valuesFromFields(fields, initialValues));
@@ -4484,21 +4697,9 @@ function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, onSubmit, subm
   const handleSubmit = async (event) => {
     event.preventDefault();
 
-    // A 'confirmOf' field (e.g. Confirm Password) must match the field it
-    // confirms — checked here (not per-keystroke) and reported through the
-    // browser's own validation bubble, same mechanism `required` already
-    // uses on every other field in this form.
-    let mismatched = false;
-    fields.forEach((field) => {
-      if (!field.confirmOf) return;
-      const input = event.target.elements[field.name];
-      if (!input) return;
-      const matches = !values[field.name] || values[field.name] === values[field.confirmOf];
-      input.setCustomValidity(matches ? '' : 'Passwords do not match.');
-      if (!matches) mismatched = true;
-    });
-    if (mismatched) {
-      event.target.reportValidity();
+    const lines = collectValidationErrors(fields, values);
+    if (lines.length) {
+      setValidationLines(lines);
       return;
     }
 
@@ -4526,7 +4727,20 @@ function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, onSubmit, subm
   };
 
   return (
-    <form className="smart-form" onSubmit={handleSubmit}>
+    <form className="smart-form" onSubmit={handleSubmit} noValidate autoComplete="off">
+      {validationLines && (
+        <div className="toast-notice-overlay" onClick={() => setValidationLines(null)}>
+          <div className="toast-notice toast-notice-validation error" role="alert" onClick={(e) => e.stopPropagation()}>
+            <Icon name="alert" size={17} className="toast-notice-icon" />
+            <div className="toast-notice-lines">
+              {validationLines.map((line, i) => <span key={i}>{line}</span>)}
+            </div>
+            <button type="button" className="toast-notice-close" onClick={() => setValidationLines(null)} aria-label="Dismiss">
+              <Icon name="close" size={13} />
+            </button>
+          </div>
+        </div>
+      )}
       {submitting && createPortal(
         <div className="loading-overlay">
           <div className="loading-overlay-card">
@@ -4537,7 +4751,8 @@ function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, onSubmit, subm
         document.body
       )}
       <h3>{title}</h3>
-      {fields.map((field) => {
+      {(() => {
+        const renderField = (field) => {
         const quantity = field.type === 'quantity' ? splitQuantityValue(values[field.name], field.units) : null;
         return (
         <label key={field.name} style={field.fullWidth ? { gridColumn: '1 / -1' } : undefined}>
@@ -4698,13 +4913,9 @@ function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, onSubmit, subm
           {field.type === 'password' ? (
             <div className="password-field">
               <input
+                autoComplete="new-password"
                 name={field.name}
-                onChange={(e) => {
-                  handleChange(e);
-                  // Re-validate a previously-flagged confirm field live, so
-                  // fixing the mismatch clears the error without resubmitting.
-                  if (field.confirmOf) e.target.setCustomValidity('');
-                }}
+                onChange={handleChange}
                 placeholder={field.placeholder}
                 required={field.required}
                 title={field.title}
@@ -4725,6 +4936,7 @@ function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, onSubmit, subm
           {!['textarea', 'select', 'quantity', 'checkboxes', 'select-or-other', 'list', 'password'].includes(field.type) ? (
             <input
               accept={field.accept}
+              autoComplete="off"
               name={field.name}
               onChange={handleChange}
               pattern={field.pattern}
@@ -4745,7 +4957,19 @@ function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, onSubmit, subm
           {field.hint ? <small className="field-hint">{field.hint}</small> : null}
         </label>
         );
-      })}
+        };
+
+        return fields.some((f) => f.group) ? (
+          groupFields(fields).map((group) => (
+            <section className="form-group" key={group.name ?? 'ungrouped'}>
+              {group.name ? <h4 className="form-group-title">{group.name}</h4> : null}
+              <div className="form-group-body">{group.fields.map(renderField)}</div>
+            </section>
+          ))
+        ) : (
+          fields.map(renderField)
+        );
+      })()}
       <div className="form-actions">
         {onCancel ? <button className="ghost-button btn-exit-action" onClick={onCancel} type="button">Cancel</button> : null}
         <button className="primary-button" type="submit">{submitLabel}</button>
@@ -4896,7 +5120,7 @@ const categoryFields = [
 function userFields(isEditing, liveValues = EMPTY_OBJ) {
   return [
     { label: 'Full Name', name: 'name', required: true, type: 'text' },
-    { label: 'Email', name: 'email', required: true, type: 'text' },
+    { label: 'Email', name: 'email', required: true, type: 'text', placeholder: 'name@barangay.gov' },
     { label: 'Phone', name: 'phone', type: 'tel', pattern: '[0-9]{10}', placeholder: '09XXXXXXXXX', title: 'Phone must be exactly 10 digits' },
     { label: 'Address', name: 'address', type: 'text' },
     { label: 'Roles (a person can hold more than one — the first is their primary)', name: 'roles', options: ['Admin', 'Custodian', 'Maintenance Personnel'], required: true, type: 'checkboxes' },
@@ -5113,7 +5337,7 @@ function OpenItemsWarning({ kind, rows, basePath }) {
 // When `contextVehicles` is provided, the page renders Realcore-style: the form
 // fields sit in a card on the right, and the left side live-previews the
 // selected vehicle (photo, info, location map) as the user picks one.
-function FormPage({ description, onBack, fields, initialValues, onSubmit, submitLabel, contextVehicles, hubs, warnEndpoint, warnRender, reviewStep = false }) {
+function FormPage({ description, onBack, fields, initialValues, onSubmit, submitLabel, contextVehicles, hubs, warnEndpoint, warnRender, reviewStep = false, wrapperClassName, formTitle = '' }) {
   const [liveValues, setLiveValues] = useState(initialValues ?? EMPTY_OBJ);
   const [warnRows, setWarnRows] = useState([]);
   // Opt-in two-step flow (Maintenance Records today): fill the fields, hit
@@ -5215,7 +5439,7 @@ function FormPage({ description, onBack, fields, initialValues, onSubmit, submit
         onSubmit={reviewStep ? (payload) => { setLiveValues(payload); setStep(2); } : onSubmit}
         onValuesChange={setLiveValues}
         submitLabel={reviewStep ? 'Next' : submitLabel}
-        title=""
+        title={formTitle}
       />
     </>
   );
@@ -5262,10 +5486,10 @@ function FormPage({ description, onBack, fields, initialValues, onSubmit, submit
               </dl>
             </section>
           </div>
-          <div className="form-grid-2col form-context-form">{form}</div>
+          <div className={`form-grid-2col form-context-form${wrapperClassName ? ` ${wrapperClassName}` : ''}`}>{form}</div>
         </div>
       ) : (
-        <div className="form-grid-2col">{form}</div>
+        <div className={`form-grid-2col${wrapperClassName ? ` ${wrapperClassName}` : ''}`}>{form}</div>
       )}
     </ModulePanel>
   );
@@ -5378,33 +5602,35 @@ function applyRepairType(payload) {
 
 function maintenanceFields(lookups, role, liveValues = EMPTY_OBJ) {
   const fields = [
-    { label: 'Vehicle', name: 'vehicle_id', options: vehicleOptions(lookups), required: true, type: 'select' },
-    { label: 'Related Issue Report', name: 'issue_report_id', options: issueOptions(), type: 'select' },
-    { label: 'Maintenance Type', name: 'maintenance_type', options: lookups.maintenance_types, required: true, type: 'select' },
-    { label: 'Problem / Reason', name: 'problem_reason', required: true, type: 'textarea' },
-    { label: 'Date Started', name: 'date_started', type: 'date' },
-    { label: 'Date Completed', name: 'date_completed', type: 'date' },
-    { label: 'Action Taken', name: 'action_taken', type: 'textarea' },
-    { label: 'Parts / Materials Used', name: 'parts_used', type: 'textarea' },
-    // Single "what kind of repair was this" selector, in place of the old
-    // "Source Vehicle" + "External Repair?" dropdowns sitting side by side —
-    // picking one here decides which (if any) follow-up fields appear below.
-    // Placed before Maintenance Cost since it's the more consequential
-    // choice (it decides which other fields even show up), and full-width so
-    // its follow-up field(s) clearly read as belonging to it, on their own
-    // row directly underneath, instead of sharing a row side by side.
+    // Leads the form instead of trailing after Parts/Materials Used — it's
+    // the single choice that decides which other fields even show up (Source
+    // Vehicle for a cannibalized part, vendor/warranty for an external shop),
+    // so it belongs first, not buried past fields that don't depend on it.
+    // In place of the old "Source Vehicle" + "External Repair?" dropdowns
+    // sitting side by side, which read as related when they weren't.
+    // Full-width so its follow-up field(s) clearly read as belonging to it,
+    // on their own row directly underneath, instead of sharing a row side by side.
     {
       label: 'Repair Type',
       name: 'repair_type',
       type: 'select',
       fullWidth: true,
+      group: 'Repair Details',
       options: [
         { value: 'in_house', label: 'In-House Repair' },
         { value: 'cannibalized', label: 'In-House — Used a Cannibalized Part' },
         { value: 'external', label: 'Sent to External Shop' },
       ],
     },
-    { label: 'Maintenance Cost (PHP)', name: 'maintenance_cost', type: 'number', min: 0, placeholder: 'e.g. 1500' },
+    { label: 'Vehicle', name: 'vehicle_id', options: vehicleOptions(lookups), required: true, type: 'select', group: 'Vehicle & Issue' },
+    { label: 'Related Issue Report', name: 'issue_report_id', options: issueOptions(), type: 'select', group: 'Vehicle & Issue' },
+    { label: 'Maintenance Type', name: 'maintenance_type', options: lookups.maintenance_types, required: true, type: 'select', group: 'Vehicle & Issue' },
+    { label: 'Problem / Reason', name: 'problem_reason', required: true, type: 'textarea', group: 'Work Log' },
+    { label: 'Date Started', name: 'date_started', type: 'date', group: 'Schedule & Personnel' },
+    { label: 'Date Completed', name: 'date_completed', type: 'date', group: 'Schedule & Personnel' },
+    { label: 'Action Taken', name: 'action_taken', type: 'textarea', group: 'Work Log' },
+    { label: 'Parts / Materials Used', name: 'parts_used', type: 'textarea', group: 'Work Log' },
+    { label: 'Maintenance Cost (PHP)', name: 'maintenance_cost', type: 'number', min: 0, placeholder: 'e.g. 1500', group: 'Cost & Completion' },
     // Proof-of-completion fast close: what actually justifies skipping
     // Custodian verification is that something REAL is attached — a receipt
     // for an external shop repair, or a photo of the finished work for an
@@ -5417,21 +5643,23 @@ function maintenanceFields(lookups, role, liveValues = EMPTY_OBJ) {
       name: 'receipt',
       type: 'file',
       accept: 'image/*,.pdf',
+      group: 'Cost & Completion',
       hint: liveValues?.repair_type === 'external'
         ? "Attach the shop's receipt, then set Progress Status to Completed — this closes the record immediately with no separate verification step."
         : 'Attach a photo of the completed repair, then set Progress Status to Completed — this closes the record immediately with no separate verification step.',
     },
-    { label: 'Progress Status', name: 'progress_status', options: lookups.maintenance_statuses, type: 'select' },
-    { label: 'Remarks', name: 'remarks', type: 'textarea' },
+    { label: 'Progress Status', name: 'progress_status', options: lookups.maintenance_statuses, type: 'select', group: 'Cost & Completion' },
+    { label: 'Remarks', name: 'remarks', type: 'textarea', group: 'Cost & Completion' },
   ];
 
   if (role === 'Admin') {
-    fields.splice(6, 0, {
+    fields.splice(fields.findIndex((f) => f.name === 'action_taken'), 0, {
       label: 'Maintenance Personnel',
       name: 'maintenance_personnel_id',
       options: options(lookups.maintenance_personnel, 'id', 'name'),
       required: true,
       type: 'select',
+      group: 'Schedule & Personnel',
     });
   }
 
@@ -5440,17 +5668,23 @@ function maintenanceFields(lookups, role, liveValues = EMPTY_OBJ) {
   // toggles that could (confusingly) both be filled in at once.
   const repairTypeIndex = fields.findIndex((f) => f.name === 'repair_type');
   if (liveValues?.repair_type === 'cannibalized') {
+    // Required — "cannibalized" only means something once we know which
+    // vehicle the part actually came from.
     fields.splice(repairTypeIndex + 1, 0, {
       label: 'Source Vehicle',
       name: 'source_vehicle_id',
       options: vehicleOptions(lookups).filter((v) => String(v.value) !== String(liveValues?.vehicle_id)),
       type: 'select',
+      required: true,
+      group: 'Repair Details',
       hint: 'Which vehicle the part was taken from.',
     });
   } else if (liveValues?.repair_type === 'external') {
+    // Vendor required — can't log an external repair without knowing which
+    // shop it went to. Warranty stays optional; not every repair carries one.
     fields.splice(repairTypeIndex + 1, 0,
-      { label: 'External Shop / Vendor', name: 'external_vendor', type: 'text', placeholder: 'e.g. Bautista Auto Shop' },
-      { label: 'Warranty Until', name: 'warranty_until', type: 'date' },
+      { label: 'External Shop / Vendor', name: 'external_vendor', type: 'text', placeholder: 'e.g. Bautista Auto Shop', required: true, group: 'Repair Details' },
+      { label: 'Warranty Until', name: 'warranty_until', type: 'date', group: 'Repair Details' },
     );
   }
 
@@ -5460,9 +5694,9 @@ function maintenanceFields(lookups, role, liveValues = EMPTY_OBJ) {
   if (liveValues?.issue_report_id === NEW_ISSUE_OPTION.value) {
     const issueReportIndex = fields.findIndex((f) => f.name === 'issue_report_id');
     fields.splice(issueReportIndex + 1, 0,
-      { label: 'New Issue Type', name: 'new_issue_type', options: lookups.issue_types, required: true, type: 'select' },
-      { label: 'New Issue Description', name: 'new_issue_description', required: true, type: 'textarea' },
-      { label: 'New Issue Severity', name: 'new_issue_severity', options: lookups.severity_levels, required: true, type: 'select' },
+      { label: 'New Issue Type', name: 'new_issue_type', options: lookups.issue_types, required: true, type: 'select', group: 'Vehicle & Issue' },
+      { label: 'New Issue Description', name: 'new_issue_description', required: true, type: 'textarea', group: 'Vehicle & Issue' },
+      { label: 'New Issue Severity', name: 'new_issue_severity', options: lookups.severity_levels, required: true, type: 'select', group: 'Vehicle & Issue' },
     );
   }
 
@@ -5652,6 +5886,17 @@ const DASHBOARD_METRIC_STYLES = {
   'Vehicles Needing Attention': { icon: 'wrench', bg: '#fef3c7', color: '#d97706' },
 };
 const DASHBOARD_METRIC_STYLE_DEFAULT = { icon: 'grid', bg: '#dbeafe', color: '#2563eb' };
+// Kept out of the headline KPI row specifically because each is already
+// visible elsewhere on the dashboard (see the comment at that row) — not
+// because the underlying data is gone.
+// Kept out of the headline KPI row because each has its own slim secondary
+// row/panel already (see the dashboard-mini-stats row and the Action Queue /
+// Fleet Readiness & Risks panels) — not because the data disappears.
+const DASHBOARD_HEADLINE_HIDDEN_LABELS = new Set([
+  'Reported Issues',
+  'Upcoming Maintenance',
+  'Overdue Maintenance',
+]);
 
 // NOTE: no "In Use" card — the status exists in the DB enum but this system
 // tracks availability only (no dispatch flow ever sets a vehicle to In Use).
@@ -7370,7 +7615,12 @@ function showError(error, setNotice) {
   }
 
   const message = error.response?.data?.message ?? 'Something went wrong while saving.';
-  setNotice({ type: 'error', text: message });
+  const openTickets = error.response?.data?.open_tickets;
+  setNotice(
+    openTickets?.length
+      ? { type: 'error', text: message, openTickets }
+      : { type: 'error', text: message }
+  );
 }
 
 
@@ -8982,6 +9232,7 @@ function NewTicketPage({ onBack, ticketLookups, prefilledTicketData, onCreateTic
 
 function TicketModule({
   tickets,
+  allTickets,
   ticketLookups,
   notifications = [],
   onViewTicket,
@@ -9010,10 +9261,13 @@ function TicketModule({
 
   // Count alerts — now derived from sub-issues nested under each ticket,
   // since assignment/confirmation happen per sub-issue, not per ticket.
-  const allSubIssues = tickets.flatMap((t) => t.sub_issues ?? []);
+  // Sourced from the unfiltered list: these are "needs attention" banners,
+  // so applying a status filter shouldn't make them under-report or vanish.
+  const statSourceTickets = allTickets ?? tickets;
+  const allSubIssues = statSourceTickets.flatMap((t) => t.sub_issues ?? []);
   const openSubIssueCount = allSubIssues.filter((s) => s.status === 'Open').length;
   const forConfirmSubIssueCount = allSubIssues.filter((s) => s.status === 'For Confirmation').length;
-  const readyToCloseCount = tickets.filter((t) => t.status === 'Active' && (t.progress?.total ?? 0) > 0 && t.progress.done === t.progress.total).length;
+  const readyToCloseCount = statSourceTickets.filter((t) => t.status === 'Active' && (t.progress?.total ?? 0) > 0 && t.progress.done === t.progress.total).length;
 
   // Unread-updates badge per ticket card — counts this user's unread
   // notifications tied to that ticket (assignment, verification, etc.)
@@ -9028,13 +9282,17 @@ function TicketModule({
     return counts;
   }, [notifications]);
 
+  // Counts must come from the full ticket list, not the already
+  // status-filtered `tickets` prop — otherwise clicking "Open" (say, 0
+  // matches) would filter `tickets` down to nothing and every stat card,
+  // including Total, would collapse to 0 along with it.
   const ticketStats = useMemo(() => {
-    const counts = { total: tickets.length };
+    const counts = { total: statSourceTickets.length };
     ['Open', 'Active', 'Closed', 'Cancelled'].forEach((s) => {
-      counts[s] = tickets.filter((t) => t.status === s).length;
+      counts[s] = statSourceTickets.filter((t) => t.status === s).length;
     });
     return counts;
-  }, [tickets]);
+  }, [statSourceTickets]);
 
   return (
     <div className="module-grid">
@@ -9286,11 +9544,33 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, canManage = false, ca
   const handleReadinessCheck = async (payload) => {
     setNotice(null);
     try {
-      await api.post(`/vehicles/${vehicleId}/readiness-check`, payload);
+      const response = await api.post(`/vehicles/${vehicleId}/readiness-check`, payload);
       loadReadiness();
       await onSaved();
       setNotice({ type: 'success', text: 'Readiness check recorded.' });
       setCheckingReadiness(false);
+
+      // Only offered when the backend confirms it's safe: every item
+      // passed AND the vehicle has no open ticket. A vehicle with an open
+      // ticket must go back to Available through that ticket closing, not
+      // through a generic checklist that never looked at the actual repair.
+      if (response.data.can_mark_available) {
+        onRequestConfirmation?.({
+          title: 'Mark Vehicle Available',
+          message: `Every item passed and ${vehicle.vehicle_name} has no open ticket — mark it Available now?`,
+          confirmLabel: 'Mark Available',
+          onConfirm: async () => {
+            try {
+              await api.put(`/vehicles/${vehicleId}/mark-available`);
+              await onSaved();
+              loadReadiness();
+              setNotice({ type: 'success', text: 'Vehicle marked Available.' });
+            } catch (error) {
+              showError(error, setNotice);
+            }
+          },
+        });
+      }
     } catch (error) {
       showError(error, setNotice);
     }
@@ -9414,7 +9694,7 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, canManage = false, ca
             <Icon name="alert" size={18} /> Decommissioned — retired from the fleet
           </div>
           {vehicle.decommission_reason && <p style={{ margin: '4px 0 0' }}>Reason: {vehicle.decommission_reason}</p>}
-          {vehicle.decommissioned_at && <p style={{ margin: '4px 0 0', fontSize: '0.82rem', opacity: 0.85 }}>Retired {formatForecastDate(vehicle.decommissioned_at)}. Its history is preserved; it no longer counts toward readiness.</p>}
+          {vehicle.decommissioned_at && <p style={{ margin: '4px 0 0', fontSize: '0.82rem', opacity: 0.85 }}>Retired {formatDate(vehicle.decommissioned_at)}. Its history is preserved; it no longer counts toward readiness.</p>}
         </div>
       )}
 
@@ -9492,7 +9772,7 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, canManage = false, ca
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '0.76rem', fontWeight: 700, padding: '3px 10px', borderRadius: 999, background: READINESS_BADGE[readiness.state].bg, color: READINESS_BADGE[readiness.state].color, border: `1px solid ${READINESS_BADGE[readiness.state].border}` }}>
                     <Icon name={READINESS_BADGE[readiness.state].icon} size={11} /> {READINESS_BADGE[readiness.state].label}
                   </span>
-                  {readiness.last_checked && <div className="muted" style={{ fontSize: '0.72rem', marginTop: 3 }}>Last checked {formatForecastDate(readiness.last_checked)}</div>}
+                  {readiness.last_checked && <div className="muted" style={{ fontSize: '0.72rem', marginTop: 3 }}>Last checked {formatDate(readiness.last_checked)}</div>}
                 </dd></div>
               )}
               <div><dt>Current Location</dt><dd>{vehicle.current_location ?? '-'}</dd></div>
