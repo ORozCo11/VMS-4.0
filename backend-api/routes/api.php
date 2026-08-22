@@ -4,6 +4,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\BarangayController;
+use App\Http\Controllers\CatalogController;
 use App\Http\Controllers\CityController;
 use App\Http\Controllers\FleetController;
 use App\Http\Controllers\HubController;
@@ -65,6 +66,16 @@ Route::middleware(['auth:sanctum', EnsureUserIsActive::class])->group(function (
     Route::get('/lookups', [FleetController::class, 'lookups']);
     Route::get('/dashboard', [FleetController::class, 'dashboard']);
 
+    // The two small, user-growable catalogs behind every CreatableSelect
+    // dropdown (fault categories / maintenance types) — their own CRUD so
+    // adding or removing one doesn't depend on submitting an unrelated form.
+    Route::get('/fault-categories', [CatalogController::class, 'faultCategories']);
+    Route::post('/fault-categories', [CatalogController::class, 'storeFaultCategory']);
+    Route::delete('/fault-categories/{faultCategory}', [CatalogController::class, 'destroyFaultCategory']);
+    Route::get('/maintenance-types', [CatalogController::class, 'maintenanceTypes']);
+    Route::post('/maintenance-types', [CatalogController::class, 'storeMaintenanceType']);
+    Route::delete('/maintenance-types/{maintenanceType}', [CatalogController::class, 'destroyMaintenanceType']);
+
     Route::get('/categories', [FleetController::class, 'categories']);
     Route::post('/categories', [FleetController::class, 'storeCategory']);
     Route::put('/categories/{category}', [FleetController::class, 'updateCategory']);
@@ -82,6 +93,10 @@ Route::middleware(['auth:sanctum', EnsureUserIsActive::class])->group(function (
     Route::put('/vehicles/{vehicle}/mark-available', [FleetController::class, 'markVehicleAvailable']);
     Route::get('/vehicles/{vehicle}/open-tickets', [TicketController::class, 'openTicketsForVehicle']);
     Route::get('/vehicles/{vehicle}/recurrence', [FleetController::class, 'checkVehicleRecurrence']);
+    Route::get('/vehicles/{vehicle}/documents', [FleetController::class, 'vehicleDocuments']);
+    Route::post('/vehicles/{vehicle}/documents', [FleetController::class, 'storeVehicleDocument']);
+    Route::put('/documents/{document}', [FleetController::class, 'updateVehicleDocument']);
+    Route::delete('/documents/{document}', [FleetController::class, 'destroyVehicleDocument']);
 
     Route::get('/locations', [FleetController::class, 'locations']);
     Route::post('/locations', [FleetController::class, 'storeLocation']);

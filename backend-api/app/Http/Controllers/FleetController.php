@@ -5,12 +5,15 @@ namespace App\Http\Controllers;
 use App\Http\Controllers\Concerns\ChecksRecurrence;
 use App\Http\Controllers\Concerns\UploadsImages;
 use App\Models\ActivityLog;
+use App\Models\FaultCategory;
 use App\Models\MaintenanceTicket;
+use App\Models\MaintenanceType;
 use App\Models\TicketSubIssue;
 use App\Models\User;
 use App\Models\Vehicle;
 use App\Models\VehicleCategory;
 use App\Models\VehicleConditionCheck;
+use App\Models\VehicleDocument;
 use App\Models\VehicleHistory;
 use App\Models\VehicleHub;
 use App\Models\VehicleIssueReport;
@@ -35,33 +38,6 @@ class FleetController extends Controller
     // older than this and the vehicle reads "stale — needs re-check".
     private const READINESS_FRESHNESS_HOURS = 24;
 
-    private array $issueTypes = [
-        'Engine Problem',
-        'Brake Problem',
-        'Tire Problem',
-        'Battery Problem',
-        'Electrical Problem',
-        'Fuel Problem',
-        'Body Damage',
-        'Overheating',
-        'Lights / Siren Problem',
-        'Other',
-    ];
-
-    private array $maintenanceTypes = [
-        'General Inspection',
-        'Preventive Maintenance',
-        'Engine Repair',
-        'Brake Repair',
-        'Tire Replacement',
-        'Tire Rotation',
-        'Battery Replacement',
-        'Oil Change',
-        'Electrical Repair',
-        'Body Repair',
-        'Other',
-    ];
-
     public function lookups()
     {
         $this->syncVehicleStatuses();
@@ -75,8 +51,8 @@ class FleetController extends Controller
             'maintenance_personnel' => User::havingRole('Maintenance Personnel')
                 ->orderBy('name')
                 ->get(['id', 'name', 'email', 'role']),
-            'issue_types' => $this->issueTypes,
-            'maintenance_types' => $this->maintenanceTypes,
+            'issue_types' => FaultCategory::orderBy('name')->pluck('name'),
+            'maintenance_types' => MaintenanceType::orderBy('name')->pluck('name'),
             'severity_levels' => ['Low', 'Medium', 'High', 'Critical'],
             // 'In Use' exists in the DB enum but is intentionally not offered —
             // this system tracks availability only; nothing ever sets In Use.
@@ -215,6 +191,20 @@ class FleetController extends Controller
                 ->selectRaw('current_location as label, count(*) as value')
                 ->groupBy('current_location')
                 ->orderBy('current_location')
+                ->get(),
+            // Fleet health (Good/Needs Inspection/Needs Repair/Damaged) — a
+            // different signal than the status counts (Available/Under
+            // Maintenance/Inactive) already shown as their own KPI tiles,
+            // ordered by severity rather than alphabetically.
+            'vehicles_by_condition' => Vehicle::query()
+                ->selectRaw('condition as label, count(*) as value')
+                ->groupBy('condition')
+                ->orderByRaw("CASE condition
+                    WHEN 'Good' THEN 1
+                    WHEN 'Needs Inspection' THEN 2
+                    WHEN 'Needs Repair' THEN 3
+                    WHEN 'Damaged' THEN 4
+                    ELSE 5 END")
                 ->get(),
             'recent_updates' => VehicleHistory::with(['vehicle', 'updatedBy'])
                 ->latest('history_id')
@@ -1256,13 +1246,15 @@ class FleetController extends Controller
 
         $data = $request->validate([
             'vehicle_id' => ['required', 'exists:vehicles,vehicle_id'],
-            'issue_type' => ['required', Rule::in($this->issueTypes)],
+            'issue_type' => ['required', 'string', 'max:150'],
             'issue_description' => ['required', 'string'],
             'severity_level' => ['required', Rule::in(['Low', 'Medium', 'High', 'Critical'])],
             'reported_on_behalf_of' => ['nullable', 'string', 'max:255'],
             'photo' => ['nullable', 'image', 'max:4096'],
             'remarks' => ['nullable', 'string'],
         ]);
+
+        $data['issue_type'] = FaultCategory::resolve($data['issue_type']);
 
         // A retired/archived vehicle is out of the fleet — no new reports on it.
         $reportedVehicle = Vehicle::findOrFail($data['vehicle_id']);
@@ -1307,12 +1299,16 @@ class FleetController extends Controller
             abort_unless($issue->status === 'Pending', 422, 'This issue has already been reviewed and can no longer be edited.');
 
             $data = $request->validate([
-                'issue_type' => ['sometimes', Rule::in($this->issueTypes)],
+                'issue_type' => ['sometimes', 'string', 'max:150'],
                 'issue_description' => ['sometimes', 'string'],
                 'severity_level' => ['sometimes', Rule::in(['Low', 'Medium', 'High', 'Critical'])],
                 'photo' => ['nullable', 'image', 'max:4096'],
                 'remarks' => ['nullable', 'string'],
             ]);
+
+            if (isset($data['issue_type'])) {
+                $data['issue_type'] = FaultCategory::resolve($data['issue_type']);
+            }
 
             if ($request->hasFile('photo')) {
                 $data['photo_url'] = $this->storeUploadedImage($request->file('photo'), 'issue-attachments');
@@ -1328,10 +1324,14 @@ class FleetController extends Controller
         $data = $request->validate([
             'status' => ['sometimes', Rule::in(['Pending', 'Under Review', 'In Maintenance', 'Resolved'])],
             'remarks' => ['nullable', 'string'],
-            'issue_type' => ['sometimes', Rule::in($this->issueTypes)],
+            'issue_type' => ['sometimes', 'string', 'max:150'],
             'issue_description' => ['sometimes', 'string'],
             'severity_level' => ['sometimes', Rule::in(['Low', 'Medium', 'High', 'Critical'])],
         ]);
+
+        if (isset($data['issue_type'])) {
+            $data['issue_type'] = FaultCategory::resolve($data['issue_type']);
+        }
 
         DB::transaction(function () use ($issue, $data, $request) {
             $issue->update($data);
@@ -1397,6 +1397,77 @@ class FleetController extends Controller
             ->get(['issue_report_id', 'issue_type', 'severity_level', 'status', 'reported_by', 'created_at']);
     }
 
+    // File cabinet on a vehicle's profile page — deliberately separate from
+    // `photo_url` (the vehicle's own cover photo, shown elsewhere) so this
+    // list is only ever what a user explicitly uploaded here: receipts,
+    // registration papers, insurance, etc.
+    public function vehicleDocuments(Request $request, Vehicle $vehicle)
+    {
+        return VehicleDocument::where('vehicle_id', $vehicle->vehicle_id)
+            ->with('addedBy:id,name')
+            ->orderByDesc('document_id')
+            ->get();
+    }
+
+    public function storeVehicleDocument(Request $request, Vehicle $vehicle)
+    {
+        $this->requireRole($request, ['Admin', 'Custodian', 'Maintenance Personnel']);
+
+        $data = $request->validate([
+            'title' => ['required', 'string', 'max:255'],
+            'category' => ['nullable', 'string', 'max:100'],
+            'file' => ['required', 'file', 'max:10240'],
+        ]);
+
+        $data['file_url'] = $this->storeUploadedImage($request->file('file'), 'vehicle-documents');
+        unset($data['file']);
+
+        $document = DB::transaction(function () use ($data, $vehicle, $request) {
+            $document = VehicleDocument::create($data + [
+                'vehicle_id' => $vehicle->vehicle_id,
+                'added_by' => $request->user()->id,
+            ]);
+
+            $this->history($vehicle, 'Document Added', "{$data['title']} was added to {$vehicle->vehicle_name}'s file cabinet.", 'vehicle_documents', $document->document_id, $request);
+            $this->log($request, 'Add', 'Vehicle Documents', $document->document_id, "Added document {$data['title']}");
+
+            return $document;
+        });
+
+        return response()->json($document->load('addedBy:id,name'), 201);
+    }
+
+    public function updateVehicleDocument(Request $request, VehicleDocument $document)
+    {
+        $this->requireRole($request, ['Admin', 'Custodian', 'Maintenance Personnel']);
+
+        $data = $request->validate([
+            'title' => ['sometimes', 'string', 'max:255'],
+            'category' => ['nullable', 'string', 'max:100'],
+            'file' => ['nullable', 'file', 'max:10240'],
+        ]);
+
+        if ($request->hasFile('file')) {
+            $data['file_url'] = $this->storeUploadedImage($request->file('file'), 'vehicle-documents');
+        }
+        unset($data['file']);
+
+        $document->update($data);
+        $this->log($request, 'Edit', 'Vehicle Documents', $document->document_id, "Updated document #{$document->document_id}");
+
+        return $document->fresh()->load('addedBy:id,name');
+    }
+
+    public function destroyVehicleDocument(Request $request, VehicleDocument $document)
+    {
+        $this->requireRole($request, ['Admin', 'Custodian', 'Maintenance Personnel']);
+
+        $this->log($request, 'Delete', 'Vehicle Documents', $document->document_id, "Deleted document \"{$document->title}\"");
+        $document->delete();
+
+        return response()->json(['message' => 'Document deleted.']);
+    }
+
     public function maintenanceRecords(Request $request)
     {
         $query = VehicleMaintenanceRecord::with([
@@ -1455,7 +1526,7 @@ class FleetController extends Controller
             // actually what happened.
             'source_vehicle_id' => ['nullable', 'exists:vehicles,vehicle_id', 'different:vehicle_id'],
             'issue_report_id' => ['nullable', 'exists:vehicle_issue_reports,issue_report_id'],
-            'maintenance_type' => ['required', Rule::in($this->maintenanceTypes)],
+            'maintenance_type' => ['required', 'string', 'max:150'],
             'problem_reason' => ['required', 'string'],
             'date_started' => ['nullable', 'date'],
             'date_completed' => ['nullable', 'date'],
@@ -1472,6 +1543,8 @@ class FleetController extends Controller
         ], [
             'source_vehicle_id.different' => 'A vehicle cannot be the source of its own part.',
         ]);
+
+        $data['maintenance_type'] = MaintenanceType::resolve($data['maintenance_type']);
 
         if ($request->hasFile('receipt')) {
             $data['receipt_url'] = $this->storeUploadedImage($request->file('receipt'), 'maintenance-receipts');
@@ -1595,7 +1668,7 @@ class FleetController extends Controller
         $data = $request->validate([
             'source_vehicle_id' => ['nullable', 'exists:vehicles,vehicle_id', 'different:vehicle_id'],
             'issue_report_id' => ['nullable', 'exists:vehicle_issue_reports,issue_report_id'],
-            'maintenance_type' => ['sometimes', Rule::in($this->maintenanceTypes)],
+            'maintenance_type' => ['sometimes', 'string', 'max:150'],
             'problem_reason' => ['sometimes', 'string'],
             'date_started' => ['nullable', 'date'],
             'date_completed' => ['nullable', 'date'],
@@ -1612,6 +1685,10 @@ class FleetController extends Controller
         ], [
             'source_vehicle_id.different' => 'A vehicle cannot be the source of its own part.',
         ]);
+
+        if (isset($data['maintenance_type'])) {
+            $data['maintenance_type'] = MaintenanceType::resolve($data['maintenance_type']);
+        }
 
         if ($request->hasFile('receipt')) {
             $data['receipt_url'] = $this->storeUploadedImage($request->file('receipt'), 'maintenance-receipts');
@@ -1979,7 +2056,7 @@ class FleetController extends Controller
 
         $data = $request->validate([
             'vehicle_id' => ['required', 'exists:vehicles,vehicle_id'],
-            'maintenance_type' => ['required', Rule::in($this->maintenanceTypes)],
+            'maintenance_type' => ['required', 'string', 'max:150'],
             'scheduled_date' => ['required', 'date'],
             'scheduled_time' => ['nullable', 'date_format:H:i'],
             'service_location' => ['nullable', 'string', 'max:255'],
@@ -1989,6 +2066,8 @@ class FleetController extends Controller
             // schedule the next service when this one is completed.
             'recurrence_months' => ['nullable', 'integer', 'min:1', 'max:60'],
         ]);
+
+        $data['maintenance_type'] = MaintenanceType::resolve($data['maintenance_type']);
 
         // Guard against double-booking: one active (Scheduled) entry per
         // vehicle per date is enough — a second one is almost always a mistake.
@@ -2032,7 +2111,7 @@ class FleetController extends Controller
 
         $data = $request->validate([
             'vehicle_id' => ['sometimes', 'exists:vehicles,vehicle_id'],
-            'maintenance_type' => ['sometimes', Rule::in($this->maintenanceTypes)],
+            'maintenance_type' => ['sometimes', 'string', 'max:150'],
             'scheduled_date' => ['sometimes', 'date'],
             'scheduled_time' => ['nullable', 'date_format:H:i'],
             'service_location' => ['nullable', 'string', 'max:255'],
@@ -2046,6 +2125,10 @@ class FleetController extends Controller
             'status' => ['nullable', Rule::in(['Scheduled', 'Cancelled'])],
             'recurrence_months' => ['nullable', 'integer', 'min:1', 'max:60'],
         ]);
+
+        if (isset($data['maintenance_type'])) {
+            $data['maintenance_type'] = MaintenanceType::resolve($data['maintenance_type']);
+        }
 
         // Same double-booking guard as create (ignoring this schedule itself).
         $targetVehicle = $data['vehicle_id'] ?? $schedule->vehicle_id;

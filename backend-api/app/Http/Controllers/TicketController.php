@@ -5,7 +5,9 @@ namespace App\Http\Controllers;
 use App\Http\Controllers\Concerns\ChecksRecurrence;
 use App\Http\Controllers\Concerns\UploadsImages;
 use App\Models\ActivityLog;
+use App\Models\FaultCategory;
 use App\Models\MaintenanceTicket;
+use App\Models\MaintenanceType;
 use App\Models\TicketArchiveLog;
 use App\Models\TicketSubIssue;
 use App\Models\User;
@@ -44,34 +46,7 @@ class TicketController extends Controller
     use UploadsImages;
     use ChecksRecurrence;
 
-    private array $priorities       = ['Low', 'Medium', 'High', 'Critical'];
-    // Standardized fault catalog (mirrors FleetController's issue types) so a
-    // ticket's fault_category groups reliably for recurrence (#9) and cost (#10).
-    private array $faultCategories  = [
-        'Engine Problem',
-        'Brake Problem',
-        'Tire Problem',
-        'Battery Problem',
-        'Electrical Problem',
-        'Fuel Problem',
-        'Body Damage',
-        'Overheating',
-        'Lights / Siren Problem',
-        'Other',
-    ];
-    private array $maintenanceTypes = [
-        'General Inspection',
-        'Preventive Maintenance',
-        'Engine Repair',
-        'Brake Repair',
-        'Tire Replacement',
-        'Tire Rotation',
-        'Battery Replacement',
-        'Oil Change',
-        'Electrical Repair',
-        'Body Repair',
-        'Other',
-    ];
+    private array $priorities       = ['Low', 'Medium', 'High'];
 
     // ===================================================================
     // READ ENDPOINTS
@@ -124,13 +99,14 @@ class TicketController extends Controller
     {
         return response()->json([
             'vehicles'              => Vehicle::whereNotIn('status', ['Inactive', 'Decommissioned'])
+                ->with('category:category_id,category_name')
                 ->orderBy('vehicle_name')
-                ->get(['vehicle_id', 'vehicle_name', 'plate_number', 'status', 'condition']),
-            'custodians'            => User::havingRole('Custodian')->orderBy('name')->get(['id', 'name', 'email']),
+                ->get(['vehicle_id', 'vehicle_name', 'plate_number', 'status', 'condition', 'photo_url', 'brand', 'model', 'category_id', 'current_location']),
+            'custodians'            => User::havingRole('Custodian')->orderBy('name')->get(['id', 'name', 'email', 'photo_url']),
             'maintenance_personnel' => User::havingRole('Maintenance Personnel')->orderBy('name')->get(['id', 'name', 'email']),
             'priorities'            => $this->priorities,
-            'fault_categories'      => $this->faultCategories,
-            'maintenance_types'     => $this->maintenanceTypes,
+            'fault_categories'      => FaultCategory::orderBy('name')->pluck('name'),
+            'maintenance_types'     => MaintenanceType::orderBy('name')->pluck('name'),
             'ticket_statuses'       => ['Open', 'Active', 'Closed', 'Cancelled'],
             'sub_issue_statuses'    => ['Open', 'Under Repair', 'For Inspection', 'For Confirmation', 'Done', 'Deferred'],
         ]);
@@ -185,7 +161,7 @@ class TicketController extends Controller
             'vehicle_id'            => ['required', 'exists:vehicles,vehicle_id'],
             'issue_report_id'       => ['nullable', 'exists:vehicle_issue_reports,issue_report_id'],
             'ticket_title'          => ['required', 'string', 'max:255'],
-            'fault_category'        => ['nullable', Rule::in($this->faultCategories)],
+            'fault_category'        => ['nullable', 'string', 'max:150'],
             'ticket_description'    => ['required', 'string'],
             'priority'              => ['required', Rule::in($this->priorities)],
             'assigned_custodian_id' => ['required', 'exists:users,id'],
@@ -197,8 +173,23 @@ class TicketController extends Controller
             'entry_mode'            => ['nullable', Rule::in(['inspection', 'prediagnosed'])],
             'sub_issues'                    => ['required_if:entry_mode,prediagnosed', 'array', 'min:1'],
             'sub_issues.*.title'            => ['required_with:sub_issues', 'string', 'max:255'],
-            'sub_issues.*.maintenance_type' => ['nullable', Rule::in($this->maintenanceTypes)],
+            'sub_issues.*.maintenance_type' => ['nullable', 'string', 'max:150'],
         ]);
+
+        // Fault category / maintenance type are a growing catalog, not a
+        // fixed enum — a value that doesn't exist yet is persisted here so
+        // it's offered as a real option everywhere else next time.
+        if (!empty($data['fault_category'])) {
+            $data['fault_category'] = FaultCategory::resolve($data['fault_category']);
+        }
+        if (!empty($data['sub_issues'])) {
+            foreach ($data['sub_issues'] as &$subIssueInput) {
+                if (!empty($subIssueInput['maintenance_type'])) {
+                    $subIssueInput['maintenance_type'] = MaintenanceType::resolve($subIssueInput['maintenance_type']);
+                }
+            }
+            unset($subIssueInput);
+        }
 
         $entryMode = $data['entry_mode'] ?? 'inspection';
         $preDiagnosed = $entryMode === 'prediagnosed';
@@ -365,8 +356,17 @@ class TicketController extends Controller
             'inspection_notes'               => ['nullable', 'string'],
             'sub_issues'                     => ['required_if:inspection_result,Needs Maintenance', 'array', 'min:1'],
             'sub_issues.*.title'             => ['required_with:sub_issues', 'string', 'max:255'],
-            'sub_issues.*.maintenance_type'  => ['nullable', Rule::in($this->maintenanceTypes)],
+            'sub_issues.*.maintenance_type'  => ['nullable', 'string', 'max:150'],
         ]);
+
+        if (!empty($data['sub_issues'])) {
+            foreach ($data['sub_issues'] as &$subIssueInput) {
+                if (!empty($subIssueInput['maintenance_type'])) {
+                    $subIssueInput['maintenance_type'] = MaintenanceType::resolve($subIssueInput['maintenance_type']);
+                }
+            }
+            unset($subIssueInput);
+        }
 
         DB::transaction(function () use ($ticket, $data, $request) {
             $ticket->update([
@@ -447,9 +447,13 @@ class TicketController extends Controller
 
         $data = $request->validate([
             'title'            => ['required', 'string', 'max:255'],
-            'maintenance_type' => ['nullable', Rule::in($this->maintenanceTypes)],
+            'maintenance_type' => ['nullable', 'string', 'max:150'],
             'issue_report_id'  => ['nullable', 'exists:vehicle_issue_reports,issue_report_id'],
         ]);
+
+        if (!empty($data['maintenance_type'])) {
+            $data['maintenance_type'] = MaintenanceType::resolve($data['maintenance_type']);
+        }
 
         $subIssue = DB::transaction(function () use ($ticket, $data, $request) {
             $subIssue = TicketSubIssue::create([
@@ -488,9 +492,11 @@ class TicketController extends Controller
 
         $data = $request->validate([
             'assigned_mechanic_id' => ['required', 'exists:users,id'],
-            'maintenance_type'     => ['required', Rule::in($this->maintenanceTypes)],
+            'maintenance_type'     => ['required', 'string', 'max:150'],
             'work_order_notes'     => ['nullable', 'string'],
         ]);
+
+        $data['maintenance_type'] = MaintenanceType::resolve($data['maintenance_type']);
 
         $mechanic = User::findOrFail($data['assigned_mechanic_id']);
         abort_unless($mechanic->hasRole('Maintenance Personnel'), 422, 'The selected user is not Maintenance Personnel.');

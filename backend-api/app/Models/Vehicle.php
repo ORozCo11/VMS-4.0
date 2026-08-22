@@ -87,4 +87,9 @@ class Vehicle extends Model
     {
         return $this->hasMany(VehicleHistory::class, 'vehicle_id', 'vehicle_id');
     }
+
+    public function documents()
+    {
+        return $this->hasMany(VehicleDocument::class, 'vehicle_id', 'vehicle_id');
+    }
 }
