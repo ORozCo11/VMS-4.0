@@ -17,6 +17,7 @@ class VehicleMaintenanceRecord extends Model
         'date_started',
         'date_completed',
         'maintenance_personnel_id',
+        'performed_by_other',
         'is_external',
         'external_vendor',
         'warranty_until',

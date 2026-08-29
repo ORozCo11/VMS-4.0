@@ -393,6 +393,23 @@
   .auth-split-hero { display: none; }
 }
 
+/* Privacy/Terms brand mark — sits inside the white policy card itself,
+   pinned to its upper-right corner (the card is already position:relative
+   via .auth-page .auth-card above). */
+.policy-card-logo {
+  position: absolute;
+  top: 1.5rem;
+  right: 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #2563eb;
+}
+.policy-card-logo-wordmark { color: #2563eb; }
+@media (max-width: 480px) {
+  .policy-card-logo-wordmark { display: none; }
+}
+
 /* Filled counterpart to .auth-page-header-login-btn, placed beside it so
    the two public-facing CTAs (sign in vs. create an account) read as a
    primary/secondary pair rather than two identical outline buttons. */
@@ -1078,6 +1095,16 @@
 .auth-page-shell .notice.success { background: linear-gradient(90deg, #ecfdf5, #d1fae5); border: 1px solid #86efac; color: #065f46; }
 .auth-page-shell .notice.error { background: linear-gradient(90deg, #fef2f2, #fee2e2); border: 1px solid #fca5a5; color: #991b1b; }
 
+/* Same problem, same fix, for the Privacy/Terms body text: their section
+   headings and paragraphs inherit .auth-card's color from a dark-theme
+   variable (these public pages never carry data-theme="light"), reading
+   as near-illegible pale cream against the card's forced-white
+   background. Pin readable colors directly instead of relying on the
+   in-app theme cascade these pages never actually participate in. */
+.policy-card { color: #475569 !important; }
+.policy-card h3 { color: #0f172a !important; }
+.policy-card .eyebrow { color: #1d4ed8 !important; }
+
 /* Floating toast for every add/edit/delete/validation result — replaces the
    old full-width inline banner so it overlays the page instead of pushing
    content down, and auto-dismisses instead of sticking around. */
@@ -1399,6 +1426,11 @@ html[data-theme="light"] .toast-notice.error {
   border: 2px solid rgba(255, 255, 255, 0.35);
   border-top-color: #ffffff;
   animation: loaderSpin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+.btn-gear-spinner {
+  animation: loaderSpin 1s linear infinite;
   flex-shrink: 0;
 }
 
@@ -1900,6 +1932,7 @@ table a:hover {
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: #64748b;
+  transition: color 0.15s ease;
 }
 .smart-form .required-asterisk {
   color: #ef4444;
@@ -2787,6 +2820,14 @@ table button.icon-btn svg,
   animation: modalIn 0.22s ease;
   position: relative;
 }
+/* "Add New Issue" popup — a single short field would otherwise leave the
+   card barely taller than its Cancel/Save row, so the Issue Type dropdown
+   (which can run ~230px tall once catalog items load) visually spills past
+   the card's bottom edge instead of having room to sit inside it. */
+.modal-box:has(.new-issue-form) {
+  width: min(520px, 100%);
+  min-height: 360px;
+}
 .modal-header {
   display: flex; align-items: center; justify-content: space-between;
   padding: 22px 28px 16px;
@@ -3018,6 +3059,14 @@ button.wizard-step-pill:hover {
   background-position: right 10px center;
   background-size: 16px;
 }
+/* Focus accent — while actually focused, tint the border-sitting caption
+   the accent color instead of its default neutral gray, so it's clear
+   which field currently has focus without needing an idle/floated state
+   switch (every label already sits on the border permanently via the
+   rule above). */
+.smart-form label:not(:has(.checkbox-group)):not(:has(input[type="file"])):has(input:focus, textarea:focus, select:focus) > span {
+  color: var(--primary, #2563eb);
+}
 /* Page-level title, sitting inside the card above the field legends — dark
    like a section heading, distinct from the blue per-field legends above
    each box, matching the realcore reference's dark "Estimated Commissions"
@@ -3147,9 +3196,25 @@ button.wizard-step-pill:hover {
 }
 
 /* RESPONSIVE */
+/* Below this width there's no room for the full-label sidebar beside page
+   content, so it's forced into the same icon-only rail used for the
+   manual desktop-collapsed state — narrow enough that content always has
+   room, without the "stack the whole nav list above the page" bug a
+   `position: static` sidebar used to cause here. */
 @media (max-width: 1100px) {
-  .workspace { grid-template-columns: 1fr; }
-  .sidebar { position: static; height: auto; }
+  .workspace { grid-template-columns: 76px 1fr; }
+  .sidebar .module-nav-section { display: none; }
+  .sidebar .module-nav-group + .module-nav-group { margin-top: 8px; }
+  .sidebar .sidebar-brand { justify-content: center; padding: 8px 0 24px; }
+  .sidebar .eyebrow,
+  .sidebar .module-nav button span,
+  .sidebar .module-nav-badge,
+  .sidebar .profile-info,
+  .sidebar .profile-arrow-icon {
+    display: none;
+  }
+  .sidebar .module-nav button { justify-content: center; padding: 10px; }
+  .sidebar .profile-card { justify-content: center; }
   .content-area > *:not(.topbar) { padding: 20px 18px; }
   .module-grid { grid-template-columns: 1fr !important; }
   .form-panel { position: static; }
@@ -4964,7 +5029,11 @@ button.file-card-icon-btn:disabled { opacity: 0.4; cursor: not-allowed; pointer-
   top: calc(100% + 6px);
   left: 0;
   right: 0;
-  z-index: 40;
+  /* Above .modal-overlay (200) — CreatableSelect can be nested inside a
+     FormModal (e.g. the "Add New Issue" popup), and its own dropdown panel
+     still needs to paint above that modal's content, not get trapped
+     beneath later fields in the modal's local stacking order. */
+  z-index: 250;
   background: #ffffff;
   border: 1px solid #cbd5e1;
   border-radius: 10px;
@@ -5027,6 +5096,14 @@ button.file-card-icon-btn:disabled { opacity: 0.4; cursor: not-allowed; pointer-
 }
 .creatable-select-add:hover {
   background: #eff6ff;
+}
+.creatable-select-add-pinned {
+  margin-top: 0;
+  margin-bottom: 4px;
+  border-top: none;
+  border-bottom: 1px solid #e2e8f0;
+  padding-top: 7px;
+  padding-bottom: 8px;
 }
 .filter-label {
   font-size: 0.78rem;
@@ -5581,8 +5658,20 @@ table button,
   }
 }
 
+/* .dashboard-panel-chart-body's flex:1 only does anything once its parent
+   panel is itself a flex column — without this, a paired panel stretched
+   taller than its own content (align-self: stretch above) just left that
+   extra height as dead white space below a short list, instead of
+   centering it like a deliberately-composed card. */
+.dashboard-grid .panel {
+  display: flex;
+  flex-direction: column;
+}
 .dashboard-panel-chart-body {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 
 /* Quick-glance cards for Action Queue / Emergency Readiness / Risk &
@@ -8564,10 +8653,6 @@ button.btn-view-action svg {
 }
 
 @media (max-width: 1100px) {
-  .workspace {
-    grid-template-columns: 1fr;
-  }
-
   .dashboard-graphs {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -8578,17 +8663,6 @@ button.btn-view-action svg {
      full width instead of squeezing into ~350px each on a narrow viewport. */
   .dashboard-half {
     grid-column: span 12 !important;
-  }
-
-  .sidebar {
-    border-bottom: 1px solid var(--border-subtle);
-    border-right: none;
-    height: auto;
-    position: static;
-  }
-
-  .content-area > *:not(.topbar) {
-    padding: 20px 18px;
   }
 }
 
@@ -9408,8 +9482,23 @@ html[data-theme="light"] .filter-clear-all-btn {
   border-radius: 10px;
   box-shadow: none;
   color: #2575d8;
-  font-size: 0.74rem;
   font-weight: 600;
+}
+/* .ghost-button alone (not the compact table/row-action variants above,
+   which are deliberately small) keeps the base rule's 46px height — the
+   0.74rem shared above reads fine on a 36px row-action button but is
+   disproportionately tiny stretched across a full 46px standalone button
+   like "Add Another Part" or a modal's "Cancel". */
+html[data-theme="light"] .ghost-button {
+  font-size: 0.85rem;
+}
+html[data-theme="light"] .row-actions button,
+html[data-theme="light"] .report-heading button,
+html[data-theme="light"] table button,
+html[data-theme="light"] .table-shell button,
+html[data-theme="light"] .filter-clear-btn,
+html[data-theme="light"] .filter-clear-all-btn {
+  font-size: 0.74rem;
 }
 html[data-theme="light"] .btn-reassign-custodian {
   background: #d97706;
@@ -9867,7 +9956,7 @@ html[data-theme="light"] .issue-id-badge {
 
 @media (max-width: 1100px) {
   html[data-theme="light"] .workspace {
-    grid-template-columns: 1fr;
+    grid-template-columns: 76px 1fr;
   }
 }
 
@@ -9880,5 +9969,683 @@ html[data-theme="light"] .issue-id-badge {
   html[data-theme="light"] .module-action-bar,
   html[data-theme="light"] .filter-bar-container {
     align-items: stretch;
+  }
+}
+
+/* Smart dashboard redesign */
+.dashboard-grid-smart {
+  gap: 18px;
+}
+
+.dashboard-grid-smart > .dashboard-banner-compact,
+.dashboard-grid-smart > .dashboard-fleet-status-panel,
+.dashboard-grid-smart > .dashboard-quick-cards,
+.dashboard-grid-smart > .dashboard-headline-grid,
+.dashboard-grid-smart > .panel:not(.action-queue-panel) {
+  display: none !important;
+}
+
+.dashboard-grid-smart > .action-queue-panel {
+  grid-column: 1 / -1;
+}
+
+.dashboard-command-center {
+  --core: #22c55e;
+  --core-soft: rgba(34, 197, 94, 0.18);
+  background:
+    linear-gradient(135deg, rgba(7, 15, 28, 0.98), rgba(20, 45, 110, 0.98) 52%, rgba(29, 78, 216, 0.9));
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 8px;
+  box-shadow: 0 22px 44px rgba(15, 23, 42, 0.22);
+  color: #e5edf8;
+  display: grid;
+  grid-template-columns: minmax(260px, 1.18fr) minmax(210px, 0.62fr) minmax(300px, 1fr);
+  gap: 20px;
+  min-height: 230px;
+  overflow: hidden;
+  padding: 24px;
+  position: relative;
+}
+
+.dashboard-command-center::before {
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.055) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.045) 1px, transparent 1px);
+  background-size: 34px 34px;
+  content: '';
+  inset: 0;
+  opacity: 0.34;
+  pointer-events: none;
+  position: absolute;
+}
+
+.dashboard-command-center.is-warn {
+  --core: #f59e0b;
+  --core-soft: rgba(245, 158, 11, 0.2);
+}
+
+.dashboard-command-center.is-alert {
+  --core: #ef4444;
+  --core-soft: rgba(239, 68, 68, 0.2);
+}
+
+.dashboard-command-center > * {
+  position: relative;
+  z-index: 1;
+}
+
+.dashboard-command-copy {
+  align-self: center;
+  min-width: 0;
+}
+
+.dashboard-smart-panel-head span,
+.dashboard-live-chips span,
+.dashboard-micro-metric small {
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.dashboard-command-role {
+  color: #60a5fa;
+  display: block;
+  font-size: 1.5rem;
+  font-weight: 900;
+  letter-spacing: 0.03em;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+}
+
+.dashboard-command-copy h2 {
+  color: #ffffff;
+  font-size: clamp(1.6rem, 2.1vw, 2.35rem);
+  line-height: 1.08;
+  margin: 8px 0;
+  max-width: 680px;
+}
+
+.dashboard-command-copy p {
+  color: rgba(226, 232, 240, 0.78);
+  margin: 0;
+}
+
+.dashboard-command-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.dashboard-command-pills span {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  color: #dbeafe;
+  font-size: 0.74rem;
+  font-weight: 800;
+  padding: 6px 10px;
+}
+
+.dashboard-hologram-core {
+  align-self: center;
+  aspect-ratio: 1;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(15, 23, 42, 0.94) 0 43%, transparent 44%),
+    conic-gradient(var(--core) var(--score), rgba(148, 163, 184, 0.2) 0),
+    radial-gradient(circle, var(--core-soft), transparent 68%);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 50%;
+  box-shadow:
+    0 0 38px var(--core-soft),
+    inset 0 0 30px rgba(255, 255, 255, 0.06);
+  display: grid;
+  justify-self: center;
+  max-width: 230px;
+  min-width: 190px;
+  place-items: center;
+  position: relative;
+  width: 100%;
+}
+
+.dashboard-hologram-inner {
+  align-content: center;
+  background: rgba(2, 6, 23, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 50%;
+  display: grid;
+  height: 57%;
+  justify-items: center;
+  padding: 14px;
+  text-align: center;
+  width: 57%;
+}
+
+.dashboard-hologram-inner span {
+  color: #bae6fd;
+  font-size: 0.66rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.dashboard-hologram-inner strong {
+  color: #ffffff;
+  font-size: 3rem;
+  font-weight: 900;
+  line-height: 0.95;
+}
+
+.dashboard-hologram-inner small {
+  color: rgba(226, 232, 240, 0.72);
+  font-size: 0.7rem;
+  font-weight: 800;
+}
+
+.dashboard-hologram-scan {
+  animation: dashboardScan 3.8s linear infinite;
+  background: repeating-linear-gradient(180deg, rgba(125, 211, 252, 0.18) 0 2px, transparent 2px 9px);
+  border-radius: 50%;
+  clip-path: circle(48% at 50% 50%);
+  inset: 8%;
+  opacity: 0.42;
+  position: absolute;
+}
+
+.dashboard-hologram-orbit {
+  border: 1px solid rgba(186, 230, 253, 0.34);
+  border-radius: 50%;
+  height: 72%;
+  position: absolute;
+  width: 94%;
+}
+
+.dashboard-hologram-orbit.orbit-one {
+  animation: dashboardOrbit 12s linear infinite;
+  transform: rotateX(68deg) rotateZ(18deg);
+}
+
+.dashboard-hologram-orbit.orbit-two {
+  animation: dashboardOrbit 15s linear infinite reverse;
+  transform: rotateX(68deg) rotateZ(-42deg);
+}
+
+.dashboard-command-side {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  justify-content: center;
+  min-width: 0;
+}
+
+.dashboard-live-chips,
+.dashboard-command-mini-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.dashboard-live-chips > div,
+.dashboard-micro-metric {
+  background: rgba(255, 255, 255, 0.09);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  min-width: 0;
+  padding: 12px;
+}
+
+.dashboard-live-chips span,
+.dashboard-micro-metric small {
+  color: rgba(219, 234, 254, 0.72);
+  display: block;
+}
+
+.dashboard-live-chips strong {
+  color: #ffffff;
+  display: flex;
+  font-size: 1.2rem;
+  font-weight: 900;
+  gap: 6px;
+  line-height: 1.1;
+  margin-top: 4px;
+}
+
+.dashboard-live-chips small {
+  color: rgba(226, 232, 240, 0.68);
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  margin-top: 4px;
+}
+
+.dashboard-weather-mark {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.dashboard-micro-metric {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+
+.dashboard-micro-metric > span {
+  align-items: center;
+  background: rgba(148, 163, 184, 0.16);
+  border-radius: 8px;
+  color: #cbd5e1;
+  display: flex;
+  flex: 0 0 32px;
+  height: 32px;
+  justify-content: center;
+  width: 32px;
+}
+
+.dashboard-micro-metric strong {
+  color: #ffffff;
+  display: block;
+  font-size: 1.1rem;
+  font-weight: 900;
+  line-height: 1.1;
+}
+
+.dashboard-micro-metric.is-ok > span { color: #86efac; }
+.dashboard-micro-metric.is-warn > span { color: #fbbf24; }
+.dashboard-micro-metric.is-alert > span { color: #fca5a5; }
+
+.dashboard-signal-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.dashboard-signal-card {
+  --signal: #2563eb;
+  background: var(--card-bg, #101827);
+  border: 1px solid var(--border-subtle, rgba(148, 163, 184, 0.2));
+  border-radius: 8px;
+  box-shadow: var(--shadow-soft);
+  color: var(--text, #dbeafe);
+  cursor: default;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 15px;
+  text-align: left;
+  width: 100%;
+}
+
+button.dashboard-signal-card {
+  cursor: pointer;
+  font: inherit;
+}
+
+button.dashboard-signal-card:hover {
+  border-color: color-mix(in srgb, var(--signal) 64%, var(--border-subtle));
+  transform: translateY(-1px);
+}
+
+.dashboard-signal-card.is-ok { --signal: #16a34a; }
+.dashboard-signal-card.is-warn { --signal: #d97706; }
+.dashboard-signal-card.is-alert { --signal: #dc2626; }
+
+.dashboard-signal-card-head {
+  align-items: center;
+  color: var(--text-muted, #94a3b8);
+  display: flex;
+  font-size: 0.78rem;
+  font-weight: 800;
+  gap: 8px;
+  min-width: 0;
+}
+
+.dashboard-signal-card-icon {
+  align-items: center;
+  background: color-mix(in srgb, var(--signal) 14%, transparent);
+  border-radius: 7px;
+  color: var(--signal);
+  display: flex;
+  height: 28px;
+  justify-content: center;
+  width: 28px;
+}
+
+.dashboard-signal-card-chevron {
+  margin-left: auto;
+  opacity: 0.65;
+}
+
+.dashboard-signal-card strong {
+  color: var(--text-strong, #f8fafc);
+  font-size: 1.5rem;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.dashboard-signal-card p {
+  color: var(--text-muted, #94a3b8);
+  font-size: 0.76rem;
+  font-weight: 650;
+  line-height: 1.35;
+  margin: 0;
+  min-height: 2.05em;
+  overflow: hidden;
+}
+
+.dashboard-signal-meter {
+  background: rgba(148, 163, 184, 0.18);
+  border-radius: 999px;
+  display: block;
+  height: 5px;
+  overflow: hidden;
+}
+
+.dashboard-signal-meter span {
+  background: linear-gradient(90deg, var(--signal), color-mix(in srgb, var(--signal) 58%, #ffffff));
+  border-radius: inherit;
+  display: block;
+  height: 100%;
+}
+
+.dashboard-intelligence-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+}
+
+.dashboard-smart-panel {
+  background: var(--card-bg, linear-gradient(180deg, rgba(22, 23, 27, 0.98), rgba(14, 15, 18, 0.98)));
+  border: 1px solid var(--border, rgba(148, 163, 184, 0.2));
+  border-radius: 8px;
+  box-shadow: var(--shadow-soft);
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  padding: 18px;
+}
+
+.dashboard-readiness-matrix { grid-column: span 5; }
+.dashboard-condition-matrix { grid-column: span 3; }
+.dashboard-operations-matrix { grid-column: span 4; }
+.dashboard-distribution-matrix { grid-column: 1 / -1; }
+
+.dashboard-smart-panel-head {
+  align-items: flex-start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.dashboard-smart-panel-head span {
+  color: var(--primary-strong, #60a5fa);
+}
+
+.dashboard-smart-panel-head h3 {
+  color: var(--text-strong);
+  font-size: 0.98rem;
+  font-weight: 900;
+  line-height: 1.2;
+  margin: 4px 0 0;
+}
+
+.dashboard-smart-panel-head > strong {
+  color: var(--text-strong);
+  font-size: 1.35rem;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.dashboard-readiness-compact-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dashboard-readiness-compact-list .emergency-readiness-row {
+  margin: 0;
+  padding: 9px 10px;
+}
+
+.dashboard-readiness-compact-list .emergency-readiness-row-stat {
+  min-width: 76px;
+}
+
+.dashboard-inline-action {
+  align-self: flex-start;
+  background: rgba(37, 99, 235, 0.1);
+  border: 1px solid rgba(37, 99, 235, 0.22);
+  border-radius: 8px;
+  color: var(--primary-strong, #2563eb);
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 850;
+  padding: 8px 11px;
+}
+
+.dashboard-condition-core {
+  align-items: center;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 116px minmax(0, 1fr);
+}
+
+.dashboard-condition-donut .donut-chart {
+  width: 112px;
+}
+
+.dashboard-condition-core .chart-legend {
+  gap: 7px;
+}
+
+.dashboard-condition-core .chart-legend li {
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+}
+
+.dashboard-status-strip {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.dashboard-status-strip div {
+  background: color-mix(in srgb, var(--strip-color) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--strip-color) 26%, transparent);
+  border-radius: 8px;
+  min-width: 0;
+  padding: 8px 10px;
+}
+
+.dashboard-status-strip span {
+  color: var(--text-muted);
+  display: block;
+  font-size: 0.68rem;
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-status-strip strong {
+  color: var(--strip-color);
+  display: block;
+  font-size: 1rem;
+  font-weight: 900;
+  line-height: 1.1;
+  margin-top: 3px;
+}
+
+.dashboard-operations-matrix .column-chart {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  min-height: 142px;
+}
+
+.dashboard-operations-matrix .column-bar {
+  grid-template-rows: 96px auto auto;
+}
+
+.dashboard-operations-matrix .column-track {
+  height: 96px;
+}
+
+.dashboard-panel-note {
+  border-top: 1px solid var(--border-subtle, rgba(148, 163, 184, 0.2));
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1.4;
+  margin: auto 0 0;
+  padding-top: 10px;
+}
+
+.dashboard-dual-bars {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.dashboard-dual-bars > div {
+  min-width: 0;
+}
+
+.dashboard-dual-bars h4 {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 900;
+  letter-spacing: 0;
+  margin: 0 0 10px;
+  text-transform: uppercase;
+}
+
+.dashboard-grid-smart .horizontal-bars {
+  gap: 10px;
+}
+
+.dashboard-grid-smart .bar-track {
+  background: rgba(148, 163, 184, 0.18);
+  height: 7px;
+}
+
+@keyframes dashboardScan {
+  from { transform: translateY(-9px); }
+  to { transform: translateY(9px); }
+}
+
+@keyframes dashboardOrbit {
+  to { rotate: 360deg; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dashboard-hologram-scan,
+  .dashboard-hologram-orbit {
+    animation: none;
+  }
+}
+
+html[data-theme="light"] .dashboard-command-center {
+  background:
+    linear-gradient(135deg, #0b1f4d 0%, #1d4ed8 55%, #2563eb 100%);
+  border-color: rgba(37, 99, 235, 0.3);
+  box-shadow: 0 16px 34px rgba(31, 75, 122, 0.18);
+}
+
+html[data-theme="light"] .dashboard-smart-panel,
+html[data-theme="light"] .dashboard-signal-card {
+  background: #ffffff;
+  border-color: #cdddf0;
+  box-shadow: 0 8px 20px rgba(31, 75, 122, 0.1);
+}
+
+html[data-theme="light"] .dashboard-signal-card p,
+html[data-theme="light"] .dashboard-signal-card-head,
+html[data-theme="light"] .dashboard-panel-note,
+html[data-theme="light"] .dashboard-status-strip span,
+html[data-theme="light"] .dashboard-dual-bars h4 {
+  color: #64748b;
+}
+
+html[data-theme="light"] .dashboard-signal-card strong,
+html[data-theme="light"] .dashboard-smart-panel-head h3,
+html[data-theme="light"] .dashboard-smart-panel-head > strong {
+  color: #071a35;
+}
+
+html[data-theme="light"] .dashboard-hologram-inner {
+  background: rgba(248, 250, 252, 0.88);
+}
+
+html[data-theme="light"] .dashboard-hologram-inner strong {
+  color: #071a35;
+}
+
+html[data-theme="light"] .dashboard-hologram-inner span {
+  color: #0f766e;
+}
+
+html[data-theme="light"] .dashboard-hologram-inner small {
+  color: #475569;
+}
+
+@media (max-width: 1180px) {
+  .dashboard-command-center {
+    grid-template-columns: minmax(0, 1fr) minmax(210px, 0.72fr);
+  }
+
+  .dashboard-command-side {
+    grid-column: 1 / -1;
+  }
+
+  .dashboard-readiness-matrix,
+  .dashboard-condition-matrix,
+  .dashboard-operations-matrix {
+    grid-column: span 6;
+  }
+
+  .dashboard-operations-matrix {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 860px) {
+  .dashboard-command-center,
+  .dashboard-signal-grid,
+  .dashboard-dual-bars {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-hologram-core {
+    max-width: 220px;
+  }
+
+  .dashboard-readiness-matrix,
+  .dashboard-condition-matrix,
+  .dashboard-operations-matrix,
+  .dashboard-distribution-matrix {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 560px) {
+  .dashboard-command-center {
+    padding: 18px;
+  }
+
+  .dashboard-live-chips,
+  .dashboard-command-mini-grid,
+  .dashboard-condition-core,
+  .dashboard-status-strip,
+  .dashboard-operations-matrix .column-chart {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-hologram-inner strong {
+    font-size: 2.35rem;
+  }
+
+  .dashboard-signal-card p {
+    min-height: 0;
   }
 }

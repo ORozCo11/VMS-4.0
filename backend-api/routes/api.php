@@ -107,6 +107,9 @@ Route::middleware(['auth:sanctum', EnsureUserIsActive::class])->group(function (
     Route::put('/users/{user}/deactivate', [UserController::class, 'deactivate']);
     Route::put('/users/{user}/activate', [UserController::class, 'activate']);
 
+    Route::get('/registration-settings', [UserController::class, 'registrationSettings']);
+    Route::post('/registration-settings/regenerate', [UserController::class, 'regenerateRegistrationCode']);
+
     Route::get('/hubs', [HubController::class, 'index']);
     Route::post('/hubs', [HubController::class, 'store']);
     Route::put('/hubs/{hub}', [HubController::class, 'update']);

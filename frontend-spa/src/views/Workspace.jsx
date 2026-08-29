@@ -65,6 +65,7 @@ const modulesByRole = {
     { section: 'Monitoring & Schedules', items: [
       ['conditions', 'Condition Monitoring'],
       ['maintenanceStatus', 'Maintenance Status'],
+      ['maintenance', 'Maintenance Records'],
     ] },
   ],
   'Maintenance Personnel': [
@@ -464,6 +465,17 @@ function Workspace() {
   const [userInfoTarget, setUserInfoTarget] = useState(null);
   const [confirmDialog, setConfirmDialog] = useState(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
+  // First-time approval only — a pending self-registration's role is a
+  // request, not yet real, so Admin reviews/confirms it here instead of
+  // the plain yes/no ConfirmDialog every other activate/deactivate uses.
+  const [approvalTarget, setApprovalTarget] = useState(null);
+  // The Staff Registration Code the barangay office hands to real staff —
+  // Admin-only, fetched once so it's ready whenever they open Users.
+  const [registrationCode, setRegistrationCode] = useState(null);
+  useEffect(() => {
+    if (!hasRole(user, 'Admin')) return;
+    api.get('/registration-settings').then((res) => setRegistrationCode(res.data.staff_code)).catch(() => {});
+  }, [user]);
   const [notifications, setNotifications] = useState([]);
   const [showNotifications, setShowNotifications] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -891,6 +903,13 @@ function Workspace() {
   };
 
   const toggleUserActive = (row, activate) => {
+    // First-time approval (never approved before) — review the requested
+    // role instead of blindly activating. Re-activating an already-once-
+    // approved account, or deactivating, stays the plain confirm dialog.
+    if (activate && !row.approved_at) {
+      setApprovalTarget(row);
+      return;
+    }
     setConfirmDialog({
       title: 'Confirm Action',
       message: activate
@@ -903,6 +922,24 @@ function Workspace() {
           await api.put(`/users/${row.id}/${activate ? 'activate' : 'deactivate'}`);
           setNotice({ type: 'success', text: activate ? 'User activated.' : 'User deactivated.' });
           await refreshCurrent();
+        } catch (error) {
+          showError(error, setNotice);
+        }
+      },
+    });
+  };
+
+  const regenerateRegistrationCode = () => {
+    setConfirmDialog({
+      title: 'Regenerate Staff Registration Code',
+      message: 'This immediately invalidates the current code — anyone who still has the old one won\'t be able to register until you share the new one.',
+      confirmLabel: 'Regenerate',
+      variant: 'danger',
+      onConfirm: async () => {
+        try {
+          const res = await api.post('/registration-settings/regenerate');
+          setRegistrationCode(res.data.staff_code);
+          setNotice({ type: 'success', text: 'Staff registration code regenerated.' });
         } catch (error) {
           showError(error, setNotice);
         }
@@ -1031,20 +1068,23 @@ function Workspace() {
 
       // "+ Add New Issue" was picked on the maintenance form instead of an
       // existing report — file the Issue Report first, then point the
-      // maintenance record at the ID it comes back with.
+      // maintenance record at the ID it comes back with. The new report's
+      // required description/severity aren't asked for a second time in the
+      // "Add New Issue" popup — description reuses this same form's
+      // Problem/Reason (already describing what's wrong), and severity
+      // defaults to Medium since this form has no better signal for it.
       if (moduleKey === 'maintenance' && payload.issue_report_id === '__new_issue__') {
         const { data: newIssue } = await api.post('/issues', {
           vehicle_id: payload.vehicle_id,
           issue_type: payload.new_issue_type,
-          issue_description: payload.new_issue_description,
-          severity_level: payload.new_issue_severity,
+          issue_description: payload.problem_reason,
+          severity_level: 'Medium',
         });
         finalPayload = {
           ...payload,
           issue_report_id: newIssue.issue_report_id,
           new_issue_type: undefined,
-          new_issue_description: undefined,
-          new_issue_severity: undefined,
+          __new_issue_group__: undefined,
         };
       }
 
@@ -2026,8 +2066,8 @@ function Workspace() {
               description="Directly log external, historical, or third-party vehicle maintenance records and expenses without running the 5-phase ticket workflow."
               onBack={() => { setPrefilledMaintenanceData(null); returnToModule('maintenance'); }}
               fields={(vals) => maintenanceFields(lookups, user.role, vals)}
-              initialValues={editMaintenanceId ? withRepairType((records.maintenance ?? []).find((m) => String(m.maintenance_id) === String(editMaintenanceId))) : (prefilledMaintenanceData ?? EMPTY_OBJ)}
-              onSubmit={(payload) => submitFormPage('maintenance', editMaintenanceId ? { maintenance_id: editMaintenanceId } : null, applyRepairType(payload))}
+              initialValues={editMaintenanceId ? withPerformedBy(withRepairType((records.maintenance ?? []).find((m) => String(m.maintenance_id) === String(editMaintenanceId)))) : (prefilledMaintenanceData ?? EMPTY_OBJ)}
+              onSubmit={(payload) => submitFormPage('maintenance', editMaintenanceId ? { maintenance_id: editMaintenanceId } : null, applyPerformedBy(applyRepairType(payload)))}
               submitLabel={editMaintenanceId ? 'Update Maintenance' : 'Add Maintenance'}
               contextVehicles={lookups.vehicles}
               hubs={allHubs}
@@ -2076,6 +2116,37 @@ function Workspace() {
       onConfirm={handleConfirmDialog}
     />
     {userInfoTarget && <UserInfoModal user={userInfoTarget} onClose={() => setUserInfoTarget(null)} />}
+    <FormModal open={!!approvalTarget} title={`Approve ${approvalTarget?.name ?? ''}`} onClose={() => setApprovalTarget(null)}>
+      {approvalTarget && (
+        <SmartForm
+          fields={[
+            {
+              label: 'Role',
+              name: 'role',
+              options: ['Custodian', 'Maintenance Personnel', 'Admin'],
+              required: true,
+              type: 'select',
+              hint: `${approvalTarget.name} requested "${approvalTarget.role}" at signup — confirm it or pick a different role before activating their account.`,
+            },
+          ]}
+          initialValues={{ role: approvalTarget.role }}
+          onCancel={() => setApprovalTarget(null)}
+          onSubmit={async (payload) => {
+            setNotice(null);
+            try {
+              await api.put(`/users/${approvalTarget.id}/activate`, { role: payload.role });
+              setNotice({ type: 'success', text: 'User activated.' });
+              setApprovalTarget(null);
+              await refreshCurrent();
+            } catch (error) {
+              showError(error, setNotice);
+            }
+          }}
+          submitLabel="Activate"
+          title=""
+        />
+      )}
+    </FormModal>
     </RowActionsContext.Provider>
     </FormNoticeContext.Provider>
   );
@@ -2231,6 +2302,22 @@ function Workspace() {
             </div>
           }
         >
+          {hasRole(user, 'Admin') && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '12px 14px', marginBottom: 14, border: '1px solid var(--border-subtle, #e2e8f0)', borderRadius: 8 }}>
+              <div>
+                <strong style={{ display: 'block', fontSize: '0.8rem' }}>Staff Registration Code</strong>
+                <span className="muted" style={{ fontSize: '0.78rem' }}>
+                  Share this with real staff — they need it to register. Regenerating it locks out anyone who only has the old one.
+                </span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+                <code style={{ fontSize: '0.95rem', fontWeight: 700, padding: '6px 12px', background: 'var(--surface-2, #f8fafc)', borderRadius: 6 }}>
+                  {registrationCode ?? '…'}
+                </code>
+                <button className="ghost-button" type="button" onClick={regenerateRegistrationCode}>Regenerate</button>
+              </div>
+            </div>
+          )}
           <div className="panel-header-bar">
             <h3>Users <span className="count-badge">{visibleRows.length}</span></h3>
             <LocalSearchInput
@@ -2649,7 +2736,7 @@ function Workspace() {
                 value={searchQuery}
                 onChange={setSearchQuery}
                 placeholder="Search maintenance..."
-                onAdd={(hasRole(user, 'Admin') || hasRole(user, 'Maintenance Personnel')) ? () => navigate(`${roleRoutes[user.role]}/maintenance/new`) : undefined}
+                onAdd={(hasRole(user, 'Admin') || hasRole(user, 'Maintenance Personnel') || hasRole(user, 'Custodian')) ? () => navigate(`${roleRoutes[user.role]}/maintenance/new`) : undefined}
                 addLabel="Add Maintenance"
               />
             </div>
@@ -2838,7 +2925,7 @@ function Workspace() {
                     // Admin keeps the picker since they can complete an
                     // unassigned schedule on someone's behalf.
                     ...(hasRole(user, 'Admin')
-                      ? [{ label: 'Performed By', name: 'maintenance_personnel_id', options: options(lookups.maintenance_personnel, 'id', 'name'), type: 'select' }]
+                      ? [{ label: 'Performed By', name: 'maintenance_personnel_id', options: options(lookups.maintenance_performers, 'id', 'name'), type: 'select' }]
                       : []),
                     { label: 'Cost (optional)', name: 'maintenance_cost', type: 'number' },
                     // Sometimes a scheduled job turns out to need a
@@ -3477,6 +3564,63 @@ function ReadinessRow({ r }) {
   );
 }
 
+function clampPercent(value) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function DashboardMicroMetric({ icon, label, value, tone = 'neutral' }) {
+  return (
+    <div className={`dashboard-micro-metric is-${tone}`}>
+      <span><Icon name={icon} size={15} /></span>
+      <div>
+        <small>{label}</small>
+        <strong>{value}</strong>
+      </div>
+    </div>
+  );
+}
+
+function DashboardSignalCard({ icon, label, value, detail, tone = 'neutral', meter = 0, onClick }) {
+  const content = (
+    <>
+      <div className="dashboard-signal-card-head">
+        <span className="dashboard-signal-card-icon"><Icon name={icon} size={16} /></span>
+        <span>{label}</span>
+        {onClick && <Icon name="chevronRight" size={14} className="dashboard-signal-card-chevron" />}
+      </div>
+      <strong>{value}</strong>
+      <p>{detail}</p>
+      <span className="dashboard-signal-meter" aria-hidden="true">
+        <span style={{ width: `${clampPercent(meter)}%` }} />
+      </span>
+    </>
+  );
+
+  if (onClick) {
+    return (
+      <button type="button" className={`dashboard-signal-card is-${tone}`} onClick={onClick}>
+        {content}
+      </button>
+    );
+  }
+
+  return <article className={`dashboard-signal-card is-${tone}`}>{content}</article>;
+}
+
+function DashboardStatusStrip({ rows }) {
+  return (
+    <div className="dashboard-status-strip">
+      {rows.map((row) => (
+        <div key={row.label} style={{ '--strip-color': row.color }}>
+          <span>{row.label}</span>
+          <strong>{row.value}</strong>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedules }) {
   const [weather, setWeather] = useState(null);
   const [greeting, setGreeting] = useState(() => buildLocalGreeting(user?.name));
@@ -3555,8 +3699,11 @@ function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedu
   const metricValue = (label) => dashboardMetricValue(data.metrics, label);
   const totalVehicles = metricValue('Total Vehicles');
   const availableVehicles = metricValue('Available Vehicles');
+  const underMaintenanceVehicles = metricValue('Vehicles Under Maintenance');
+  const inactiveVehicles = metricValue('Inactive Vehicles');
   const reportedIssues = metricValue('Reported Issues');
   const upcomingMaintenance = metricValue('Upcoming Maintenance');
+  const overdueMaintenanceCount = metricValue('Overdue Maintenance');
   const maintenanceExpenses = data.metrics.find((metric) => metric.label === 'Total Maintenance Expenses')?.value ?? '0';
 
   // Re-group raw location rows into the same hubs the map shows, so the
@@ -3603,16 +3750,219 @@ function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedu
   const goodConditionCount = vehicleCondition.find((c) => c.label === 'Good')?.value ?? 0;
   const goodConditionRate = totalVehicles ? Math.round((goodConditionCount / totalVehicles) * 100) : 0;
 
-  const operationsQueue = [
-    { label: 'Issues', value: reportedIssues, color: '#ff5c5c' },
-    { label: 'Upcoming', value: upcomingMaintenance, color: '#ffba4a' },
-    { label: 'Ready', value: availableVehicles, color: '#36c66d' },
+  const operationalTotal = fleetSummary?.operational_total ?? totalVehicles;
+  const verifiedReady = fleetSummary?.verified_ready ?? Math.max(0, availableVehicles - readinessWatch.length);
+  const readinessRate = operationalTotal ? clampPercent((verifiedReady / operationalTotal) * 100) : 0;
+  const availabilityRate = totalVehicles ? clampPercent((availableVehicles / totalVehicles) * 100) : 0;
+  const atRiskCount = noCoverage.length + readinessWatch.length + fragility.length + forecastOut.length + preventiveWatch.length + overdueMaintenanceCount;
+  const riskPenalty = Math.min(35, (noCoverage.length * 10) + (overdueMaintenanceCount * 6) + (criticalActionCount * 5) + (readinessWatch.length * 3) + (reportedIssues * 2));
+  const opsScore = clampPercent((readinessRate * 0.42) + (goodConditionRate * 0.28) + (availabilityRate * 0.3) - riskPenalty);
+  const opsTone = opsScore >= 75 ? 'ok' : opsScore >= 45 ? 'warn' : 'alert';
+  const maintenanceLoad = underMaintenanceVehicles + upcomingMaintenance + overdueMaintenanceCount;
+  const statusSegments = [
+    { label: 'Available', value: availableVehicles, color: '#16a34a' },
+    { label: 'In shop', value: underMaintenanceVehicles, color: '#d97706' },
+    { label: 'Inactive', value: inactiveVehicles, color: '#64748b' },
   ];
+  const operationsQueue = [
+    { label: 'Issues', value: reportedIssues, color: '#ef4444' },
+    { label: 'Upcoming', value: upcomingMaintenance, color: '#f59e0b' },
+    { label: 'Overdue', value: overdueMaintenanceCount, color: '#dc2626' },
+    { label: 'Ready', value: availableVehicles, color: '#22c55e' },
+  ];
+  const topFailurePattern = failurePatterns[0];
+  const visibleReadiness = readiness.slice(0, 5);
+  const visibleLocationRows = locationsByHub.slice(0, 4);
+  const visibleTypeRows = (data.vehicles_by_type ?? []).slice(0, 5);
+  const isAdminDashboard = hasRole(user, 'Admin');
+  const isMaintenanceDashboard = hasRole(user, 'Maintenance Personnel') && !isAdminDashboard;
+  const primaryActionCount = isAdminDashboard
+    ? actionQueue.length
+    : isMaintenanceDashboard
+      ? myScheduledWork.length
+      : reportedIssues;
+  const primaryActionLabel = isAdminDashboard
+    ? (actionQueue[0]?.label ?? 'No urgent action')
+    : isMaintenanceDashboard
+      ? (myScheduledWork[0]?.maintenance_type ?? 'Nothing assigned')
+      : (reportedIssues > 0 ? 'Open reports need follow-up' : 'No open reported issues');
+  const primaryActionTitle = isAdminDashboard ? 'Action Queue' : isMaintenanceDashboard ? 'My Work' : 'My Reports';
+  const primaryActionIcon = isMaintenanceDashboard ? 'wrench' : reportedIssues > 0 ? 'alert' : 'checkCircle';
   const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
   const timeStr = now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
 
   return (
-    <div className="dashboard-grid">
+    <div className="dashboard-grid dashboard-grid-smart">
+      <section className={`dashboard-command-center full-span is-${opsTone}`}>
+        <div className="dashboard-command-copy">
+          <span className="dashboard-command-role">{greetingRole}</span>
+          <TextType
+            key={greeting}
+            as="h2"
+            text={[greeting]}
+            typingSpeed={150}
+            pauseDuration={1500}
+            loop={false}
+            showCursor={true}
+            cursorCharacter="|"
+          />
+          <p>{dateStr || 'Today'}</p>
+          <div className="dashboard-command-pills">
+            <span>{totalVehicles} fleet units</span>
+            <span>{locationsByHub.length} active sites</span>
+            <span>{data.vehicles_by_type?.length ?? 0} vehicle types</span>
+          </div>
+        </div>
+
+        <div className="dashboard-hologram-core" style={{ '--score': `${opsScore}%`, '--readiness': `${readinessRate}%` }}>
+          <span className="dashboard-hologram-scan" />
+          <span className="dashboard-hologram-orbit orbit-one" />
+          <span className="dashboard-hologram-orbit orbit-two" />
+          <div className="dashboard-hologram-inner">
+            <span>Ops Score</span>
+            <strong>{opsScore}</strong>
+            <small>{verifiedReady}/{operationalTotal} verified ready</small>
+          </div>
+        </div>
+
+        <div className="dashboard-command-side">
+          <div className="dashboard-live-chips">
+            <div>
+              <span>Local time</span>
+              <strong>{timeStr}</strong>
+            </div>
+            {weather && (
+              <div>
+                <span>Mandaue City, Cebu</span>
+                <strong><span className="dashboard-weather-mark">{weather.icon}</span>{weather.temp}C</strong>
+                <small>{weather.desc} / {weather.humidity}% humidity</small>
+              </div>
+            )}
+          </div>
+          <div className="dashboard-command-mini-grid">
+            <DashboardMicroMetric icon="vehicle" label="Available" value={availableVehicles} tone="ok" />
+            <DashboardMicroMetric icon="wrench" label="In Shop" value={underMaintenanceVehicles} tone="warn" />
+            <DashboardMicroMetric icon="alert" label="Issues" value={reportedIssues} tone={reportedIssues > 0 ? 'alert' : 'ok'} />
+            <DashboardMicroMetric icon="calendar" label="Overdue" value={overdueMaintenanceCount} tone={overdueMaintenanceCount > 0 ? 'alert' : 'neutral'} />
+          </div>
+        </div>
+      </section>
+
+      <section className="dashboard-signal-grid full-span" aria-label="Dashboard signals">
+        <DashboardSignalCard
+          icon={primaryActionIcon}
+          label={primaryActionTitle}
+          value={primaryActionCount === 0 ? 'Clear' : primaryActionCount}
+          detail={primaryActionLabel}
+          tone={criticalActionCount > 0 ? 'alert' : primaryActionCount > 0 ? 'warn' : 'ok'}
+          meter={primaryActionCount > 0 ? Math.min(100, primaryActionCount * 18) : 100}
+          onClick={isAdminDashboard ? () => setOpenDashboardModal('actionQueue') : undefined}
+        />
+        <DashboardSignalCard
+          icon="checkCircle"
+          label="Emergency Coverage"
+          value={operationalTotal ? `${verifiedReady}/${operationalTotal}` : '0/0'}
+          detail={noCoverage.length > 0 ? `No coverage: ${noCoverage.map((r) => r.category).join(', ')}` : `${readinessRate}% verified ready`}
+          tone={noCoverage.length > 0 ? 'alert' : readinessRate >= 75 ? 'ok' : 'warn'}
+          meter={readinessRate}
+          onClick={readiness.length > 0 ? () => setOpenDashboardModal('emergencyReadiness') : undefined}
+        />
+        <DashboardSignalCard
+          icon="flag"
+          label="Risk Watch"
+          value={atRiskCount === 0 ? 'Stable' : atRiskCount}
+          detail={fragility.length > 0 ? `${fragility.length} no-backup categories` : `${readinessWatch.length} available but unverified`}
+          tone={atRiskCount > 0 ? 'alert' : 'ok'}
+          meter={atRiskCount > 0 ? Math.min(100, atRiskCount * 12) : 100}
+          onClick={atRiskCount > 0 ? () => setOpenDashboardModal('riskWatch') : undefined}
+        />
+        <DashboardSignalCard
+          icon="calendar"
+          label="Maintenance Load"
+          value={maintenanceLoad}
+          detail={`${underMaintenanceVehicles} in shop / ${upcomingMaintenance} upcoming / ${overdueMaintenanceCount} overdue`}
+          tone={overdueMaintenanceCount > 0 ? 'alert' : maintenanceLoad > 0 ? 'warn' : 'ok'}
+          meter={totalVehicles ? Math.min(100, (maintenanceLoad / Math.max(totalVehicles, 1)) * 100) : 0}
+          onClick={onGoToSchedules}
+        />
+      </section>
+
+      <section className="dashboard-intelligence-grid full-span">
+        <article className="dashboard-smart-panel dashboard-readiness-matrix">
+          <div className="dashboard-smart-panel-head">
+            <div>
+              <span>Response Matrix</span>
+              <h3>Readiness by Vehicle Type</h3>
+            </div>
+            <strong>{readinessRate}%</strong>
+          </div>
+          {readiness.length === 0 ? (
+            <p className="empty-state">No vehicle types to show yet.</p>
+          ) : (
+            <div className="dashboard-readiness-compact-list">
+              {visibleReadiness.map((r) => <ReadinessRow key={r.category} r={r} />)}
+            </div>
+          )}
+          {readiness.length > visibleReadiness.length && (
+            <button type="button" className="dashboard-inline-action" onClick={() => setOpenDashboardModal('emergencyReadiness')}>
+              View all {readiness.length} types
+            </button>
+          )}
+        </article>
+
+        <article className="dashboard-smart-panel dashboard-condition-matrix">
+          <div className="dashboard-smart-panel-head">
+            <div>
+              <span>Fleet Health</span>
+              <h3>Condition and Status</h3>
+            </div>
+            <strong>{goodConditionRate}%</strong>
+          </div>
+          <div className="dashboard-condition-core">
+            <div className="dashboard-condition-donut">
+              <DonutChart centerLabel={totalVehicles} centerSubLabel="Vehicles" segments={vehicleCondition} />
+            </div>
+            <ChartLegend rows={vehicleCondition} />
+          </div>
+          <DashboardStatusStrip rows={statusSegments} />
+        </article>
+
+        <article className="dashboard-smart-panel dashboard-operations-matrix">
+          <div className="dashboard-smart-panel-head">
+            <div>
+              <span>Operations Pulse</span>
+              <h3>Workload Pressure</h3>
+            </div>
+            <strong>{maintenanceExpenses}</strong>
+          </div>
+          <ColumnChart rows={operationsQueue} />
+          <p className="dashboard-panel-note">
+            {topFailurePattern
+              ? `${topFailurePattern.type} leads the last 12 months with ${topFailurePattern.count} case${topFailurePattern.count === 1 ? '' : 's'}.`
+              : 'No recurring failure pattern logged yet.'}
+          </p>
+        </article>
+
+        <article className="dashboard-smart-panel dashboard-distribution-matrix">
+          <div className="dashboard-smart-panel-head">
+            <div>
+              <span>Fleet Distribution</span>
+              <h3>Sites and Types</h3>
+            </div>
+            <strong>{totalVehicles}</strong>
+          </div>
+          <div className="dashboard-dual-bars">
+            <div>
+              <h4>Sites</h4>
+              <HorizontalBarChart rows={visibleLocationRows} />
+            </div>
+            <div>
+              <h4>Types</h4>
+              <HorizontalBarChart rows={visibleTypeRows} />
+            </div>
+          </div>
+        </article>
+      </section>
       {/* SECTION 1: Welcome Header — compressed, and paired with Fleet
           Status instead of stretching full-width alone at the top. */}
       <div className="dashboard-banner dashboard-banner-compact col-span-7">
@@ -5023,6 +5373,7 @@ function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, cancelLabel = 
             <textarea
               name={field.name}
               onChange={handleChange}
+              placeholder={field.placeholder}
               required={field.required}
               rows={field.rows ?? 3}
               value={values[field.name] ?? ''}
@@ -5066,6 +5417,21 @@ function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, cancelLabel = 
               required={field.required}
               newItemLabel={field.newItemLabel}
               catalogEndpoint={field.catalogEndpoint}
+              idField={field.idField}
+              nameField={field.nameField}
+              valueIsId={field.valueIsId}
+              extraFields={field.extraFields}
+            />
+          ) : null}
+          {field.type === 'new-issue-modal' ? (
+            <NewIssueModalField
+              value={{ new_issue_type: values.new_issue_type }}
+              onChange={(patch) => {
+                const next = { ...values, ...patch };
+                setValues(next);
+                onValuesChange?.(next);
+              }}
+              issueTypeOptions={field.issueTypeOptions ?? []}
             />
           ) : null}
           {field.type === 'checkboxes' ? (
@@ -5139,8 +5505,8 @@ function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, cancelLabel = 
                         return merged;
                       })}
                       disabled={rows.length === 1}
-                      title="Remove issue"
-                      aria-label="Remove issue"
+                      title={`Remove ${field.removeLabel ?? 'issue'}`}
+                      aria-label={`Remove ${field.removeLabel ?? 'issue'}`}
                       style={{ padding: '8px 12px' }}
                     >
                       <Icon name="close" size={14} />
@@ -5398,6 +5764,7 @@ const emptyLookups = {
   categories: [],
   vehicles: [],
   maintenance_personnel: [],
+  maintenance_performers: [],
   issue_reports: [],
   issue_types: [],
   maintenance_types: [],
@@ -5858,7 +6225,11 @@ function vehicleFields(lookups, allHubs = [], domain = 'Land', existingPhotoUrl 
     { label: 'Vehicle Name', name: 'vehicle_name', required: true, type: 'text' },
     { label: 'Plate Number', name: 'plate_number', required: true, type: 'text' },
     { label: 'Vehicle Photo', name: 'photo', accept: 'image/*', type: 'file', existingUrl: existingPhotoUrl },
-    { label: 'Vehicle Type', name: 'category_id', options: options(lookups.categories, 'category_id', 'category_name'), required: true, type: 'select' },
+    {
+      label: 'Vehicle Type', name: 'category_id', options: lookups.categories ?? [], required: true, type: 'creatable-select',
+      newItemLabel: 'vehicle type', catalogEndpoint: '/categories', idField: 'category_id', nameField: 'category_name', valueIsId: true,
+      extraFields: [{ name: 'domain', label: 'Domain', options: ['Land', 'Water'], required: true, default: domain }],
+    },
     { label: 'Brand', name: 'brand', required: true, type: 'text' },
     { label: 'Model', name: 'model', required: true, type: 'text' },
     { label: 'Year Model', name: 'year_model', required: true, type: 'number' },
@@ -5970,6 +6341,27 @@ function applyRepairType(payload) {
   return { ...rest, is_external: 0, source_vehicle_id: null };
 }
 
+// "Performed By" (Admin-only, select-or-other) shares one field name for two
+// mutually-exclusive backend facts: a registered user's id, or a free-text
+// name for someone outside the system entirely (a volunteer, an outside
+// helper). withPerformedBy seeds the field from whichever the existing
+// record actually has (for editing); applyPerformedBy sorts a submitted
+// value back into the right one of the two real columns — a plain numeric
+// string is treated as a picked user id, anything else as typed "Other"
+// text. See FleetController::storeMaintenanceRecord.
+function withPerformedBy(record) {
+  if (!record) return EMPTY_OBJ;
+  return { ...record, maintenance_personnel_id: record.maintenance_personnel_id ?? record.performed_by_other ?? '' };
+}
+
+function applyPerformedBy(payload) {
+  if (!('maintenance_personnel_id' in payload)) return payload;
+  const raw = payload.maintenance_personnel_id;
+  const isOther = raw !== '' && raw != null && !/^\d+$/.test(String(raw));
+  if (isOther) return { ...payload, maintenance_personnel_id: null, performed_by_other: raw };
+  return { ...payload, performed_by_other: null };
+}
+
 function maintenanceFields(lookups, role, liveValues = EMPTY_OBJ) {
   const fields = [
     // Leads the form instead of trailing after Parts/Materials Used — it's
@@ -5988,7 +6380,7 @@ function maintenanceFields(lookups, role, liveValues = EMPTY_OBJ) {
       group: 'Repair Details',
       options: [
         { value: 'in_house', label: 'In-House Repair' },
-        { value: 'cannibalized', label: 'In-House — Used a Cannibalized Part' },
+        { value: 'cannibalized', label: 'Used Cannibalized Part' },
         { value: 'external', label: 'Sent to External Shop' },
       ],
     },
@@ -5999,7 +6391,15 @@ function maintenanceFields(lookups, role, liveValues = EMPTY_OBJ) {
     { label: 'Date Started', name: 'date_started', type: 'date', group: 'Schedule & Personnel' },
     { label: 'Date Completed', name: 'date_completed', type: 'date', group: 'Schedule & Personnel' },
     { label: 'Action Taken', name: 'action_taken', type: 'textarea', group: 'Work Log' },
-    { label: 'Parts / Materials Used', name: 'parts_used', type: 'textarea', group: 'Work Log' },
+    {
+      label: 'Parts / Materials Used',
+      name: 'parts_used',
+      type: 'list',
+      group: 'Work Log',
+      placeholder: 'e.g. Brake pads',
+      addLabel: 'Add Another Part',
+      removeLabel: 'part',
+    },
     { label: 'Maintenance Cost (PHP)', name: 'maintenance_cost', type: 'number', min: 0, placeholder: 'e.g. 1500', group: 'Cost & Completion' },
     // Proof-of-completion fast close: what actually justifies skipping
     // Custodian verification is that something REAL is attached — a receipt
@@ -6024,12 +6424,15 @@ function maintenanceFields(lookups, role, liveValues = EMPTY_OBJ) {
 
   if (role === 'Admin') {
     fields.splice(fields.findIndex((f) => f.name === 'action_taken'), 0, {
-      label: 'Maintenance Personnel',
+      label: 'Performed By',
       name: 'maintenance_personnel_id',
-      options: options(lookups.maintenance_personnel, 'id', 'name'),
+      options: options(lookups.maintenance_performers, 'id', 'name'),
       required: true,
-      type: 'select',
+      type: 'select-or-other',
+      otherLabel: 'Other (not in system)',
+      otherPlaceholder: 'e.g. a volunteer or outside helper\'s name',
       group: 'Schedule & Personnel',
+      hint: 'Whoever actually did the repair — not necessarily Maintenance Personnel; a Custodian or Admin who fixed it themselves belongs here too. Not registered in the system at all? Pick Other and type their name.',
     });
   }
 
@@ -6059,14 +6462,23 @@ function maintenanceFields(lookups, role, liveValues = EMPTY_OBJ) {
   }
 
   // No matching Issue Report yet (e.g. a mechanic self-filing a field repair
-  // with nothing on file) — let them create one inline instead of leaving
-  // this module and losing their in-progress record.
+  // with nothing on file) — let them create one instead of leaving this
+  // module and losing their in-progress record. Picking "+ Add New Issue…"
+  // pops the modal open immediately and only asks for Issue Type — the new
+  // report's description/severity come from this same form's Problem/Reason
+  // and a default (see submitFormPage), not asked for a second time.
   if (liveValues?.issue_report_id === NEW_ISSUE_OPTION.value) {
     const issueReportIndex = fields.findIndex((f) => f.name === 'issue_report_id');
     fields.splice(issueReportIndex + 1, 0,
-      { label: 'New Issue Type', name: 'new_issue_type', options: lookups.issue_types, required: true, type: 'creatable-select', newItemLabel: 'issue type', catalogEndpoint: '/fault-categories', group: 'Vehicle & Issue' },
-      { label: 'New Issue Description', name: 'new_issue_description', required: true, type: 'textarea', group: 'Vehicle & Issue' },
-      { label: 'New Issue Severity', name: 'new_issue_severity', options: lookups.severity_levels, required: true, type: 'select', group: 'Vehicle & Issue' },
+      {
+        label: 'New Issue Type',
+        name: '__new_issue_group__',
+        required: true,
+        type: 'new-issue-modal',
+        issueTypeOptions: lookups.issue_types,
+        fullWidth: true,
+        group: 'Vehicle & Issue',
+      },
     );
   }
 
@@ -6764,7 +7176,7 @@ function maintenanceColumns(role, setEditTarget, updateRecord, onViewRecord) {
     },
     { label: 'Source', width: '9%', render: (row) => <StatusBadge value={row.source} /> },
     { label: 'Problem / Reason', width: '14%', className: 'cell-text', render: (row) => <ExpandableText text={row.problem_reason} /> },
-    { label: 'Personnel', width: '10%', render: (row) => <UserAvatarName user={row.maintenance_personnel} /> },
+    { label: 'Personnel', width: '10%', render: (row) => <UserAvatarName user={row.maintenance_personnel} fallback={row.performed_by_other ?? '-'} /> },
     { label: 'Progress', width: '8%', render: (row) => <StatusBadge value={row.progress_status} /> },
     { label: 'Verification', width: '8%', render: (row) => row.verification_result ? <StatusBadge value={row.verification_result} /> : '-' },
     { label: 'Date Started', width: '5%', render: (row) => <DateBadge value={row.date_started} /> },
@@ -6881,7 +7293,7 @@ function MaintenanceRecordCard({ record, onClick }) {
       <div className="ticket-card-bottom">
         {record.verification_result
           ? <StatusBadge value={record.verification_result} />
-          : <span className="muted" style={{ fontSize: '0.72rem' }}>{record.maintenance_personnel?.name ?? '—'}</span>}
+          : <span className="muted" style={{ fontSize: '0.72rem' }}>{record.maintenance_personnel?.name ?? record.performed_by_other ?? '—'}</span>}
         <span className="ticket-card-date">{formatDate(record.date_completed ?? record.date_started)}</span>
       </div>
     </div>
@@ -6975,7 +7387,7 @@ function MaintenanceRecordDetail({ record, onConfirm, onReopen, onDecisionClose,
           </div>
           <div>
             <span className="muted" style={{ fontSize: '0.74rem', display: 'block' }}>Personnel</span>
-            <UserAvatarName user={record.maintenance_personnel} />
+            <UserAvatarName user={record.maintenance_personnel} fallback={record.performed_by_other ?? '-'} />
           </div>
           <div>
             <span className="muted" style={{ fontSize: '0.74rem', display: 'block' }}>Date Started / Completed</span>
@@ -7117,7 +7529,7 @@ function maintenanceStatusColumns(setEditTarget) {
     { label: 'Source', render: (row) => <StatusBadge value={row.source} /> },
     { label: 'Problem / Reason', className: 'cell-text', render: (row) => <ExpandableText text={row.problem_reason} /> },
     { label: 'Action Taken', className: 'cell-text', render: (row) => <ExpandableText text={row.action_taken} /> },
-    { label: 'Personnel', render: (row) => <UserAvatarName user={row.maintenance_personnel} /> },
+    { label: 'Personnel', render: (row) => <UserAvatarName user={row.maintenance_personnel} fallback={row.performed_by_other ?? '-'} /> },
     { label: 'Progress', render: (row) => <StatusBadge value={row.progress_status} /> },
     { label: 'Action', render: (row) => <button className="btn-edit-action icon-btn" onClick={() => setEditTarget(row)} type="button" title="Verify" aria-label="Verify"><Icon name="checkCircle" size={14} /></button> },
   ];
@@ -7329,7 +7741,7 @@ const maintenanceHistoryColumns = [
   { label: 'Problem / Reason', className: 'cell-text', render: (row) => <ExpandableText text={row.problem_reason} /> },
   { label: 'Action Taken', className: 'cell-text', render: (row) => <ExpandableText text={row.action_taken} /> },
   { label: 'Parts Used', render: (row) => <PartsTags value={row.parts_used} /> },
-  { label: 'Personnel', render: (row) => row.maintenance_personnel?.name ?? '-' },
+  { label: 'Personnel', render: (row) => row.maintenance_personnel?.name ?? row.performed_by_other ?? '-' },
   { label: 'Completed', render: (row) => <DateBadge value={row.date_completed ?? row.updated_at} /> },
   { label: 'Time', render: (row) => formatTime(row.date_completed ?? row.updated_at) },
 ];
@@ -9671,7 +10083,14 @@ function NewTicketPage({ onBack, ticketLookups, prefilledTicketData, onCreateTic
 
         <div className="form-actions">
           <button className="ghost-button" onClick={onBack} type="button">Cancel</button>
-          <button className="primary-button" type="submit" disabled={submitting}>{preDiagnosed ? 'Create Pre-Diagnosed Ticket' : 'Create Ticket & Assign'}</button>
+          <button className="primary-button" type="submit" disabled={submitting}>
+            {submitting ? (
+              <span className="btn-loading">
+                <Icon name="gear" size={16} className="btn-gear-spinner" filled />
+                Creating…
+              </span>
+            ) : (preDiagnosed ? 'Create Pre-Diagnosed Ticket' : 'Create Ticket & Assign')}
+          </button>
         </div>
       </form>
     </ModulePanel>
@@ -9821,7 +10240,7 @@ function TicketModule({
         {tickets.length === 0
           ? <p className="empty-state">No tickets yet. Create one to begin the workflow.</p>
           : ticketViewMode === 'table'
-            ? <PaginatedTable columns={ticketTableColumns()} rows={tickets} onRowClick={onViewTicket} />
+            ? <PaginatedTable columns={ticketTableColumns(unreadByTicket)} rows={tickets} onRowClick={onViewTicket} />
             : (
               <div className="ticket-card-grid">
                 {tickets.map((t) => (
@@ -10987,8 +11406,8 @@ function InspectTicketPage({ ticket, onBack, onSubmit, ticketLookups }) {
             <h4 style={{ margin: '0 0 4px 0', display: 'flex', alignItems: 'center', gap: 7 }}><Icon name="wrench" size={16} /> Root Causes Found</h4>
             <p className="muted" style={{ marginTop: 0, marginBottom: 14 }}>All root causes here belong to the same ticket, so they share one category.</p>
 
-            <label style={{ display: 'block', marginBottom: 16 }}>
-              <span style={{ display: 'block', fontSize: '0.72rem', fontWeight: 600, color: '#64748b', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.02em' }}>Category</span>
+            <label style={{ marginBottom: 16 }}>
+              <span>Category</span>
               <CreatableSelect
                 value={category}
                 onChange={setCategory}
@@ -11507,10 +11926,32 @@ function LogRepairsPage({ ticket, onBack, onSubmit }) {
 // TICKET TABLE VIEW COLUMNS (alternative to the ticket card grid)
 // =========================================================================
 
-function ticketTableColumns() {
+function ticketTableColumns(unreadByTicket = {}) {
   return [
     { label: 'Ticket ID', render: (r) => r.ticket_id },
-    { label: 'Title', render: (r) => r.ticket_title },
+    {
+      label: 'Title',
+      render: (r) => {
+        const unread = unreadByTicket[r.ticket_id] ?? 0;
+        return (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            {unread > 0 && (
+              <span
+                title={`${unread} unread update${unread > 1 ? 's' : ''} on this ticket`}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                  minWidth: 18, height: 18, padding: '0 4px', borderRadius: 999,
+                  background: '#dc2626', color: '#fff', fontSize: '0.65rem', fontWeight: 700,
+                }}
+              >
+                {unread > 9 ? '9+' : unread}
+              </span>
+            )}
+            {r.ticket_title}
+          </span>
+        );
+      },
+    },
     { label: 'Vehicle', render: (r) => <VehicleCell vehicle={r.vehicle} /> }, { label: 'Plate', render: (r) => r.vehicle?.plate_number ?? '-' },
     { label: 'Status', render: (r) => <TicketStatusBadge value={r.status} /> },
     { label: 'Next Step', render: (r) => <TicketStageBadge ticket={r} /> },
@@ -11659,7 +12100,22 @@ function MultiSelectDropdown({ placeholder = 'All', options = [], selected = [],
 // to grow with real use instead of being a fixed, admin-curated list; the
 // backend persists new values the same way, so anyone who adds one here
 // finds it waiting in the dropdown next time, everywhere it's offered.
-function CreatableSelect({ value, onChange, options = [], placeholder = 'Select or type to add new', newItemLabel = 'option', required = false, catalogEndpoint = null }) {
+function CreatableSelect({
+  value, onChange, options = [], placeholder = 'Select or type to add new', newItemLabel = 'option',
+  required = false, catalogEndpoint = null,
+  // For a catalog whose API doesn't use plain {id, name} — e.g. vehicle
+  // categories use {category_id, category_name} — read/write under these
+  // keys instead, normalizing to {id, name} internally either way.
+  idField = 'id', nameField = 'name',
+  // True when the field this drives (e.g. category_id) stores the
+  // catalog row's id, not its name — value/onChange deal in ids, and the
+  // displayed text is resolved by looking the id up in the catalog.
+  valueIsId = false,
+  // Extra required fields the create-endpoint needs beyond a bare name
+  // (e.g. vehicle categories also require a Domain) — rendered as simple
+  // selects in the add-new modal, merged into the POST body.
+  extraFields = [],
+}) {
   // Only an Admin can remove a catalog entry — it's a shared list everyone
   // adds to, so letting any role delete from it risks a Custodian or
   // Mechanic wiping out something others rely on. The backend enforces
@@ -11667,6 +12123,12 @@ function CreatableSelect({ value, onChange, options = [], placeholder = 'Select 
   // 403 on click.
   const { user: currentUser } = useContext(AuthContext);
   const canDeleteCatalogItems = hasRole(currentUser, 'Admin');
+  // Accepts either a plain name string (the simple catalogs) or a raw API
+  // row keyed by idField/nameField (e.g. vehicle categories) — either way,
+  // normalized to one {id, name} shape everything below works with.
+  const normalizeItem = useCallback((raw) => (
+    typeof raw === 'string' ? { id: null, name: raw } : { id: raw[idField] ?? null, name: raw[nameField] }
+  ), [idField, nameField]);
   const [open, setOpen] = useState(false);
   // Only holds what's being typed while the panel is open — closed, the
   // input just displays `value` directly, so there's nothing to keep in
@@ -11677,12 +12139,14 @@ function CreatableSelect({ value, onChange, options = [], placeholder = 'Select 
   // with the authoritative version once catalogEndpoint responds. Ids are
   // what make per-row delete possible; a bare string list (no catalog
   // backing) just never shows a delete button.
-  const [catalogItems, setCatalogItems] = useState(() => options.map((name) => ({ id: null, name })));
+  const [catalogItems, setCatalogItems] = useState(() => options.map(normalizeItem));
   // Non-null while the "complete new item" modal is open — holds its own
   // editable Name field, seeded from what was typed but not locked to it,
   // same as the reference add-new-Company flow (a real little form, not
   // just a yes/no confirmation of the raw typed text).
   const [addModalName, setAddModalName] = useState(null);
+  // Values for `extraFields` (e.g. Domain), keyed by field name.
+  const [addModalExtra, setAddModalExtra] = useState({});
   const [addModalError, setAddModalError] = useState(null);
   const [addSaving, setAddSaving] = useState(false);
   const [addedMessage, setAddedMessage] = useState(null);
@@ -11692,16 +12156,22 @@ function CreatableSelect({ value, onChange, options = [], placeholder = 'Select 
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleteError, setDeleteError] = useState(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
+  // True right after opening (via focus), before the user has actually
+  // typed anything — the input still shows the current value, but the
+  // option list is NOT filtered by it, so reopening an already-picked
+  // field shows the full catalog instead of just the one exact match
+  // (which used to look like every other option had vanished).
+  const [justOpened, setJustOpened] = useState(false);
   const containerRef = useRef(null);
 
   useEffect(() => {
     if (!catalogEndpoint) return;
     let cancelled = false;
     api.get(catalogEndpoint).then((res) => {
-      if (!cancelled) setCatalogItems(res.data);
+      if (!cancelled) setCatalogItems(res.data.map(normalizeItem));
     }).catch(() => {});
     return () => { cancelled = true; };
-  }, [catalogEndpoint]);
+  }, [catalogEndpoint, normalizeItem]);
 
   useEffect(() => {
     if (!addedMessage) return;
@@ -11720,18 +12190,32 @@ function CreatableSelect({ value, onChange, options = [], placeholder = 'Select 
     return () => document.removeEventListener('mousedown', handleOutsideClick);
   }, [open]);
 
-  const text = open ? draftText : (value ?? '');
-  const query = text.trim().toLowerCase();
+  // When the driven field stores an id (valueIsId), resolve it to a name
+  // for display — `value` itself is never text in that mode.
+  const selectedItem = valueIsId ? catalogItems.find((o) => String(o.id) === String(value)) : null;
+  const displayText = valueIsId ? (selectedItem?.name ?? '') : (value ?? '');
+  const text = open ? draftText : displayText;
+  const query = justOpened ? '' : text.trim().toLowerCase();
   const filtered = query ? catalogItems.filter((o) => o.name.toLowerCase().includes(query)) : catalogItems;
   const hasExactMatch = catalogItems.some((o) => o.name.toLowerCase() === query);
   const canAddNew = query.length > 0 && !hasExactMatch;
 
   const openPanel = () => {
-    setDraftText(value ?? '');
+    setDraftText(displayText);
+    setJustOpened(true);
     setOpen(true);
   };
-  const pick = (name) => {
-    onChange(name);
+  const pick = (item) => {
+    onChange(valueIsId ? item.id : item.name);
+    setOpen(false);
+  };
+  const openAddModal = (name) => {
+    setAddModalName(name);
+    // Extra fields can carry a sensible default from context (e.g. Domain
+    // pre-filled to match the vehicle already being filled out) — still
+    // shown and changeable, just not blank by default.
+    setAddModalExtra(Object.fromEntries(extraFields.map((f) => [f.name, f.default ?? ''])));
+    setAddModalError(null);
     setOpen(false);
   };
   const newItemTitle = newItemLabel.replace(/\b\w/g, (c) => c.toUpperCase());
@@ -11747,8 +12231,13 @@ function CreatableSelect({ value, onChange, options = [], placeholder = 'Select 
       setAddModalError('Name is required.');
       return;
     }
+    const missingExtra = extraFields.find((f) => f.required && !addModalExtra[f.name]);
+    if (missingExtra) {
+      setAddModalError(`${missingExtra.label} is required.`);
+      return;
+    }
     if (!catalogEndpoint) {
-      pick(val);
+      pick({ id: null, name: val });
       setAddModalName(null);
       setAddModalError(null);
       setAddedMessage(`"${val}" added as a new ${newItemLabel}.`);
@@ -11756,13 +12245,13 @@ function CreatableSelect({ value, onChange, options = [], placeholder = 'Select 
     }
     setAddSaving(true);
     try {
-      const res = await api.post(catalogEndpoint, { name: val });
-      const created = res.data;
+      const res = await api.post(catalogEndpoint, { [nameField]: val, ...addModalExtra });
+      const created = normalizeItem(res.data);
       setCatalogItems((items) => {
         const withoutDupe = items.filter((i) => i.name.toLowerCase() !== created.name.toLowerCase());
         return [...withoutDupe, created].sort((a, b) => a.name.localeCompare(b.name));
       });
-      pick(created.name);
+      pick(created);
       setAddModalName(null);
       setAddModalError(null);
       setAddedMessage(`"${created.name}" added as a new ${newItemLabel}.`);
@@ -11781,7 +12270,8 @@ function CreatableSelect({ value, onChange, options = [], placeholder = 'Select 
     try {
       await api.delete(`${catalogEndpoint}/${deleteTarget.id}`);
       setCatalogItems((items) => items.filter((i) => i.id !== deleteTarget.id));
-      if (value === deleteTarget.name) onChange('');
+      const wasSelected = valueIsId ? String(value) === String(deleteTarget.id) : value === deleteTarget.name;
+      if (wasSelected) onChange(valueIsId ? null : '');
       setDeleteTarget(null);
       setDeleteError(null);
     } catch (err) {
@@ -11799,14 +12289,19 @@ function CreatableSelect({ value, onChange, options = [], placeholder = 'Select 
         placeholder={placeholder}
         required={required}
         onFocus={openPanel}
-        onChange={(e) => { setDraftText(e.target.value); if (!open) setOpen(true); }}
+        onChange={(e) => { setDraftText(e.target.value); setJustOpened(false); if (!open) setOpen(true); }}
       />
       {open && (
         <div className="creatable-select-panel">
+          {!canAddNew && (
+            <button type="button" className="creatable-select-option creatable-select-add creatable-select-add-pinned" onClick={() => openAddModal('')}>
+              <Icon name="plus" size={13} /> Add New {newItemTitle}
+            </button>
+          )}
           <div className="creatable-select-option-list">
             {filtered.map((o) => (
               <div key={o.id ?? o.name} className="creatable-select-option-row">
-                <button type="button" className="creatable-select-option" onClick={() => pick(o.name)}>
+                <button type="button" className="creatable-select-option" onClick={() => pick(o)}>
                   {o.name}
                 </button>
                 {catalogEndpoint && canDeleteCatalogItems && o.id != null && (
@@ -11825,7 +12320,7 @@ function CreatableSelect({ value, onChange, options = [], placeholder = 'Select 
             {filtered.length === 0 && !canAddNew && <div className="multi-select-empty">No matches</div>}
           </div>
           {canAddNew && (
-            <button type="button" className="creatable-select-option creatable-select-add" onClick={() => setAddModalName(text.trim())}>
+            <button type="button" className="creatable-select-option creatable-select-add" onClick={() => openAddModal(text.trim())}>
               <Icon name="plus" size={13} /> Add "{text.trim()}" as a new {newItemLabel}
             </button>
           )}
@@ -11848,6 +12343,19 @@ function CreatableSelect({ value, onChange, options = [], placeholder = 'Select 
             <span>Name <span className="required-asterisk">*</span></span>
             <input type="text" required autoFocus value={addModalName ?? ''} onChange={(e) => setAddModalName(e.target.value)} />
           </label>
+          {extraFields.map((f) => (
+            <label key={f.name}>
+              <span>{f.label} {f.required && <span className="required-asterisk">*</span>}</span>
+              <select
+                required={f.required}
+                value={addModalExtra[f.name] ?? ''}
+                onChange={(e) => setAddModalExtra((cur) => ({ ...cur, [f.name]: e.target.value }))}
+              >
+                <option value="" disabled>Select {f.label}</option>
+                {f.options.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+              </select>
+            </label>
+          ))}
           <div className="form-actions">
             <button className="ghost-button" type="button" onClick={closeAddModal} disabled={addSaving}>Cancel</button>
             <button className="primary-button" type="submit" disabled={addSaving}>{addSaving ? 'Saving…' : 'Save'}</button>
@@ -11886,6 +12394,87 @@ function CreatableSelect({ value, onChange, options = [], placeholder = 'Select 
         document.body
       )}
     </div>
+  );
+}
+
+// Popup-modal version of the "+ Add New Issue…" field on the Maintenance
+// Record form. Opens immediately (lazy initial state, not an effect — no
+// extra click on an inline trigger first) and only asks for Issue Type;
+// Description/Severity aren't asked twice — submitFormPage fills those in
+// from the outer form's own Problem/Reason field and a default severity.
+// Writes new_issue_type plus a truthy sentinel on its own field name (so
+// SmartForm's generic required-field check has something to check) via one
+// onChange patch — nothing downstream needs to know it came from a modal.
+function NewIssueModalField({ value, onChange, issueTypeOptions = [] }) {
+  const hasValue = !!value?.new_issue_type;
+  const [open, setOpen] = useState(() => !hasValue);
+  const [draft, setDraft] = useState(() => value?.new_issue_type ?? '');
+  const [error, setError] = useState(null);
+
+  const openModal = () => {
+    setDraft(value?.new_issue_type ?? '');
+    setError(null);
+    setOpen(true);
+  };
+
+  // Cancelling out of a first-time add (nothing saved yet) reverts the
+  // Related Issue Report dropdown back to blank instead of leaving the
+  // field group stranded with no value and no visible way back in.
+  const cancel = () => {
+    if (!hasValue) onChange({ issue_report_id: '' });
+    setOpen(false);
+  };
+
+  const save = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!draft.trim()) {
+      setError('Issue Type is required.');
+      return;
+    }
+    onChange({ new_issue_type: draft.trim(), __new_issue_group__: 1 });
+    setOpen(false);
+  };
+
+  return (
+    <>
+      {hasValue && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '10px 12px', border: '1px solid var(--border-subtle, #e2e8f0)', borderRadius: 8 }}>
+          <strong>{value.new_issue_type}</strong>
+          <button type="button" className="ghost-button" onClick={openModal} style={{ flexShrink: 0 }}>Edit</button>
+        </div>
+      )}
+      <FormModal open={open} title="Add New Issue" onClose={cancel}>
+        <form className="smart-form new-issue-form" onSubmit={save} noValidate>
+          {error && (
+            <div className="toast-notice-overlay" onClick={() => setError(null)}>
+              <div className="toast-notice toast-notice-validation error" role="alert" onClick={(e) => e.stopPropagation()}>
+                <Icon name="alert" size={17} className="toast-notice-icon" />
+                <div className="toast-notice-lines"><span>{error}</span></div>
+                <button type="button" className="toast-notice-close" onClick={() => setError(null)} aria-label="Dismiss">
+                  <Icon name="close" size={13} />
+                </button>
+              </div>
+            </div>
+          )}
+          <label>
+            <span>Issue Type <span className="required-asterisk">*</span></span>
+            <CreatableSelect
+              value={draft}
+              onChange={setDraft}
+              options={issueTypeOptions}
+              newItemLabel="issue type"
+              catalogEndpoint="/fault-categories"
+              required
+            />
+          </label>
+          <div className="form-actions">
+            <button className="ghost-button" type="button" onClick={cancel}>Cancel</button>
+            <button className="primary-button" type="submit">Save</button>
+          </div>
+        </form>
+      </FormModal>
+    </>
   );
 }
 

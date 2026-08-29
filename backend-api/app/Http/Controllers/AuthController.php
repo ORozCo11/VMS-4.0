@@ -5,8 +5,10 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use App\Models\ActivityLog;
 use App\Models\Barangay;
+use App\Models\RegistrationSetting;
 use App\Models\User;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Validation\Rule;
 
 class AuthController extends Controller
 {
@@ -16,9 +18,23 @@ class AuthController extends Controller
      * (activate) it via the existing Users management screen before it can
      * log in, the same gate `login()` already enforces for any deactivated
      * account.
+     *
+     * Two exceptions to that, decided after we mapped out the actual risk
+     * of "who can become Admin":
+     * - The very first account ever created becomes Admin immediately,
+     *   active, no approval needed — there's nobody else yet who could
+     *   review them. Every registration after that goes through the
+     *   normal pending path below; this rule only ever fires once per
+     *   installation, the moment the very first person registers.
+     * - Everyone else must supply the Staff Registration Code the barangay
+     *   office hands directly to real staff — this is the actual gate
+     *   against a stranger who isn't barangay staff reaching Admin's
+     *   approval queue at all, checked before an account is even created.
      */
     public function register(Request $request)
     {
+        $isFirstAccount = !User::query()->exists();
+
         $data = $request->validate([
             // Letters, spaces, and the punctuation that legitimately shows up
             // in PH names (hyphenated surnames, "Ñ", apostrophes, "Jr.").
@@ -43,10 +59,35 @@ class AuthController extends Controller
                 },
             ],
             'barangay_name' => ['nullable', 'required_without:barangay_id', 'string', 'max:255'],
+            // The first account has no role choice (it's always Admin) and
+            // no code to check — there's nothing to gate yet.
+            'requested_role' => [$isFirstAccount ? 'nullable' : 'required', Rule::in(['Custodian', 'Maintenance Personnel'])],
+            'staff_code' => [$isFirstAccount ? 'nullable' : 'required', 'string'],
         ], [
             'name.regex' => 'Name may only contain letters.',
             'phone.regex' => 'Phone number must be 11 digits starting with 09 (e.g. 09171234567).',
+            'requested_role.required' => 'Please select whether you are a Custodian or Maintenance Personnel.',
+            'staff_code.required' => 'Please enter the staff registration code given to you by your barangay office.',
         ]);
+
+        if (!$isFirstAccount) {
+            abort_unless(
+                hash_equals(RegistrationSetting::current()->staff_code, strtoupper(trim($data['staff_code']))),
+                422,
+                'That staff registration code is not correct. Ask your barangay office for the current code.'
+            );
+        }
+
+        $role = $isFirstAccount ? 'Admin' : $data['requested_role'];
+
+        // No barangay picked from a dropdown (the city has no seeded list
+        // yet) — turn the free-typed name into a real Barangay row, scoped
+        // to this city, so it shows up as an option for the next person
+        // registering under the same city instead of staying a one-off string.
+        $barangayId = $data['barangay_id'] ?? null;
+        if (!$barangayId && !empty($data['barangay_name'])) {
+            $barangayId = Barangay::findOrCreateForCity((int) $data['city_id'], $data['barangay_name'])->id;
+        }
 
         $user = User::create([
             'name' => $data['name'],
@@ -55,15 +96,18 @@ class AuthController extends Controller
             'phone' => $data['phone'],
             'address' => $data['address'],
             'city_id' => $data['city_id'],
-            'barangay_id' => $data['barangay_id'] ?? null,
+            'barangay_id' => $barangayId,
             'barangay_name' => $data['barangay_name'] ?? null,
-            'role' => 'Custodian',
-            'roles' => ['Custodian'],
-            'is_active' => false,
+            'role' => $role,
+            'roles' => [$role],
+            'is_active' => $isFirstAccount,
+            'approved_at' => $isFirstAccount ? now() : null,
         ]);
 
         return response()->json([
-            'message' => 'Registration submitted. An administrator must approve your account before you can sign in.',
+            'message' => $isFirstAccount
+                ? 'Admin account created. You can sign in now.'
+                : 'Registration submitted. An administrator must approve your account before you can sign in.',
             'user' => [
                 'id' => $user->id,
                 'name' => $user->name,
@@ -128,11 +172,31 @@ class AuthController extends Controller
     }
 
     /**
+     * True for the real Admin who kicked off impersonation, AND for every
+     * account they've since jumped into — the 'impersonated' ability travels
+     * with the token so switching accounts (or back to yourself) mid-session
+     * doesn't require logging out. A genuine Custodian's normal login token
+     * never carries this ability, since it's only ever added by
+     * impersonate() below, which itself requires the caller to already pass
+     * this same check — a real Custodian has no way to obtain it.
+     */
+    private function canImpersonate(Request $request): bool
+    {
+        return $request->user()?->hasRole('Admin')
+            || (bool) $request->user()?->currentAccessToken()?->can('impersonated');
+    }
+
+    /**
      * DEV-ONLY: list accounts an authenticated user can jump into for testing.
+     * Admin-only (or an active impersonation session — see canImpersonate) —
+     * the environment gate alone only stops this in production; within
+     * local/testing it previously let ANY authenticated account (not just
+     * Admin) enumerate and impersonate any other, including an Admin.
      */
     public function impersonationCandidates(Request $request)
     {
         $this->assertImpersonationEnabled();
+        abort_unless($this->canImpersonate($request), 403, 'Only an Admin can impersonate another account.');
 
         return User::orderBy('name')->get(['id', 'name', 'email', 'role', 'roles', 'is_active']);
     }
@@ -140,14 +204,16 @@ class AuthController extends Controller
     /**
      * DEV-ONLY: issue a token for another account so a developer can switch
      * roles without logging out and back in. Guarded by environment (404 in
-     * production) AND, on the client, by import.meta.env.DEV — both must hold.
+     * production), the canImpersonate check, AND, on the client, by
+     * import.meta.env.DEV — all three must hold.
      */
     public function impersonate(Request $request, User $user)
     {
         $this->assertImpersonationEnabled();
+        abort_unless($this->canImpersonate($request), 403, 'Only an Admin can impersonate another account.');
         abort_if(!$user->is_active, 422, 'That account is deactivated.');
 
-        $token = $user->createToken('impersonation_token', $user->allRoles())->plainTextToken;
+        $token = $user->createToken('impersonation_token', [...$user->allRoles(), 'impersonated'])->plainTextToken;
 
         ActivityLog::create([
             'user_id' => $request->user()?->id,

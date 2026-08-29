@@ -24,6 +24,8 @@ const emptyForm = {
   city_id: '',
   barangay_id: '',
   barangay_name: '',
+  requested_role: '',
+  staff_code: '',
   password: '',
   password_confirmation: '',
 };
@@ -156,6 +158,14 @@ function Register() {
       setError('Street address is required.');
       return;
     }
+    if (!form.requested_role) {
+      setError('Please select whether you are a Custodian or Maintenance Personnel.');
+      return;
+    }
+    if (!form.staff_code.trim()) {
+      setError('Please enter the staff registration code given to you by your barangay office.');
+      return;
+    }
     if (form.password.length < 8) {
       setError('Password must be at least 8 characters.');
       return;
@@ -256,7 +266,7 @@ function Register() {
             </label>
 
             <label className="auth-field auth-field-full">
-              <span className="sr-only">Email Address</span>
+              <span>Email Address</span>
               <div className="auth-input-wrapper auth-input-plain">
                 <input
                   autoComplete="off"
@@ -271,7 +281,7 @@ function Register() {
             </label>
 
             <label className="auth-field">
-              <span className="sr-only">Phone Number</span>
+              <span>Phone Number</span>
               <div className="auth-input-wrapper auth-input-plain">
                 <input
                   autoComplete="off"
@@ -370,7 +380,38 @@ function Register() {
             </label>
 
             <label className="auth-field">
-              <span className="sr-only">Password</span>
+              <span>I am a...</span>
+              <div className="auth-input-wrapper auth-input-plain">
+                <select
+                  name="requested_role"
+                  onChange={handleChange}
+                  required
+                  value={form.requested_role}
+                >
+                  <option value="" disabled>Select your role</option>
+                  <option value="Custodian">Custodian</option>
+                  <option value="Maintenance Personnel">Maintenance Personnel</option>
+                </select>
+              </div>
+            </label>
+
+            <label className="auth-field">
+              <span>Staff Registration Code</span>
+              <div className="auth-input-wrapper auth-input-plain">
+                <input
+                  autoComplete="off"
+                  name="staff_code"
+                  onChange={handleChange}
+                  placeholder="Given to you by your barangay office"
+                  required
+                  type="text"
+                  value={form.staff_code}
+                />
+              </div>
+            </label>
+
+            <label className="auth-field">
+              <span>Password</span>
               <div className="auth-input-wrapper auth-input-plain">
                 <input
                   autoComplete="new-password"
@@ -394,7 +435,7 @@ function Register() {
             </label>
 
             <label className="auth-field">
-              <span className="sr-only">Confirm Password</span>
+              <span>Confirm Password</span>
               <div className="auth-input-wrapper auth-input-plain">
                 <input
                   autoComplete="new-password"

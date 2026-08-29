@@ -1,28 +1,21 @@
 import { Link } from 'react-router-dom';
-import LineWaves from '../components/LineWaves';
+import Aurora from '../components/Aurora';
+import Icon from '../components/Icon';
 
 export default function Terms() {
   return (
     <main className="auth-page" style={{ alignItems: 'flex-start', padding: '2rem 1rem' }}>
-      <LineWaves
-        speed={0.5}
-        innerLineCount={3}
-        outerLineCount={4}
-        warpIntensity={0.7}
-        rotation={1}
-        colorCycleSpeed={0.5}
-        brightness={0.1}
-        color1="#ff6600"
-        color2="#e9903a"
-        color3="#f3c08d"
-        mouseInfluence={1.4}
-        enableMouseInteraction={true}
-      />
-      <section className="auth-card" style={{ maxWidth: 680, width: '100%', textAlign: 'left', gap: '1rem' }}>
+      <Aurora colorStops={['#0b1220', '#1e3a5f', '#0f172a']} amplitude={0.6} blend={0.55} />
+      <section className="auth-card policy-card" style={{ maxWidth: 680, width: '100%', textAlign: 'left', gap: '1rem' }}>
+
+        <div className="policy-card-logo">
+          <Icon name="gear" size={28} className="auth-page-header-gear" filled />
+          <span className="vms-wordmark vms-wordmark-sm policy-card-logo-wordmark">vms</span>
+        </div>
 
         <p className="eyebrow">Barangay VMS</p>
-        <h1 style={{ marginBottom: '0.25rem' }}>Terms of Service</h1>
-        <p style={{ fontSize: '0.8rem', opacity: 0.5, marginBottom: '1rem' }}>Effective: January 1, 2025</p>
+        <h1 className="auth-login-heading" style={{ marginBottom: '0.25rem' }}>Terms of Service</h1>
+        <p style={{ fontSize: '0.8rem', opacity: 0.7, marginBottom: '1rem' }}>Effective: January 1, 2025</p>
 
         <TermsSection title="1. Acceptance of Terms">
           By accessing or using the Barangay Vehicle Management System (VMS), you confirm that

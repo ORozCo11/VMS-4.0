@@ -25,4 +25,34 @@ class Barangay extends Model
     {
         return $this->hasMany(User::class);
     }
+
+    /**
+     * Look up a barangay by name within a city (case-insensitive, trimmed),
+     * creating it if it doesn't exist yet. Lets a registrant's free-typed
+     * barangay name (used whenever a city has no seeded dropdown list)
+     * become a real, selectable option for the next person registering
+     * under the same city — instead of staying a one-off string forever.
+     */
+    public static function findOrCreateForCity(int $cityId, string $name): self
+    {
+        $name = trim($name);
+
+        $barangay = static::where('city_id', $cityId)
+            ->whereRaw('LOWER(name) = ?', [strtolower($name)])
+            ->first();
+
+        if ($barangay) {
+            return $barangay;
+        }
+
+        try {
+            return static::create(['city_id' => $cityId, 'name' => $name]);
+        } catch (\Illuminate\Database\QueryException $e) {
+            // Another request created the same barangay between our lookup
+            // and our insert — use theirs instead of failing the signup.
+            return static::where('city_id', $cityId)
+                ->whereRaw('LOWER(name) = ?', [strtolower($name)])
+                ->firstOr(fn () => throw $e);
+        }
+    }
 }

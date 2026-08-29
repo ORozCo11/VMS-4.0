@@ -77,7 +77,7 @@ function Login() {
 
         <form className="auth-form" autoComplete="off" onSubmit={handleSubmit} noValidate>
           <label className="auth-field">
-            <span className="sr-only">Email Address</span>
+            <span>Email Address</span>
             <div className="auth-input-wrapper auth-input-plain">
               <input
                 autoComplete="off"
@@ -92,7 +92,7 @@ function Login() {
           </label>
 
           <label className="auth-field">
-            <span className="sr-only">Password</span>
+            <span>Password</span>
             <div className="auth-input-wrapper auth-input-plain">
               <input
                 autoComplete="new-password"

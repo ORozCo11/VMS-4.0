@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Http\Controllers\Concerns\UploadsImages;
+use App\Models\RegistrationSetting;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -142,13 +143,45 @@ class UserController extends Controller
     {
         $this->requireAdmin($request);
 
-        $user->update([
+        $data = $request->validate([
+            // Only meaningful on a FIRST approval — Admin reviewing a
+            // self-registered role request can confirm it or pick a
+            // different one before it actually takes effect. Re-activating
+            // an already-approved account never needs this; the frontend
+            // only sends it the first time around.
+            'role' => ['nullable', Rule::in(self::ROLES)],
+        ]);
+
+        $update = [
             'is_active' => true,
             // Only stamp on the FIRST approval — re-activating an account
             // that was already approved before shouldn't touch it.
             'approved_at' => $user->approved_at ?? now(),
-        ]);
+        ];
+
+        if (!empty($data['role'])) {
+            $update['role'] = $data['role'];
+            $update['roles'] = [$data['role']];
+        }
+
+        $user->update($update);
 
         return response()->json(['message' => 'User activated.']);
+    }
+
+    public function registrationSettings(Request $request)
+    {
+        $this->requireAdmin($request);
+
+        return response()->json(['staff_code' => RegistrationSetting::current()->staff_code]);
+    }
+
+    public function regenerateRegistrationCode(Request $request)
+    {
+        $this->requireAdmin($request);
+
+        $setting = RegistrationSetting::regenerate();
+
+        return response()->json(['staff_code' => $setting->staff_code]);
     }
 }

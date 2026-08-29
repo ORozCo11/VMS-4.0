@@ -51,6 +51,13 @@ class FleetController extends Controller
             'maintenance_personnel' => User::havingRole('Maintenance Personnel')
                 ->orderBy('name')
                 ->get(['id', 'name', 'email', 'role']),
+            // Distinct from maintenance_personnel above (which stays scoped to
+            // dispatchable mechanics for ticket/schedule assignment) — this one
+            // powers "who actually performed this repair" on a Maintenance
+            // Record, which can legitimately be anyone: a Custodian or Admin
+            // sometimes does the work themselves, not just Maintenance Personnel.
+            'maintenance_performers' => User::orderBy('name')
+                ->get(['id', 'name', 'email', 'role']),
             'issue_types' => FaultCategory::orderBy('name')->pluck('name'),
             'maintenance_types' => MaintenanceType::orderBy('name')->pluck('name'),
             'severity_levels' => ['Low', 'Medium', 'High', 'Critical'],
@@ -1517,7 +1524,7 @@ class FleetController extends Controller
 
     public function storeMaintenanceRecord(Request $request)
     {
-        $this->requireRole($request, ['Admin', 'Maintenance Personnel']);
+        $this->requireRole($request, ['Admin', 'Maintenance Personnel', 'Custodian']);
 
         $data = $request->validate([
             'vehicle_id' => ['required', 'exists:vehicles,vehicle_id'],
@@ -1531,6 +1538,10 @@ class FleetController extends Controller
             'date_started' => ['nullable', 'date'],
             'date_completed' => ['nullable', 'date'],
             'maintenance_personnel_id' => ['nullable', 'exists:users,id'],
+            // Free-text fallback for someone outside the system entirely
+            // (a volunteer, an outside helper) — mutually exclusive with
+            // maintenance_personnel_id, never both set at once.
+            'performed_by_other' => ['nullable', 'string', 'max:255'],
             'is_external' => ['nullable', 'boolean'],
             'external_vendor' => ['nullable', 'string', 'max:255'],
             'warranty_until' => ['nullable', 'date'],
@@ -1551,13 +1562,20 @@ class FleetController extends Controller
         }
         unset($data['receipt']);
 
-        // A pure mechanic logs work as themselves; an Admin (even one who also
-        // holds the Maintenance hat) keeps the ability to assign someone else.
-        if ($request->user()->hasRole('Maintenance Personnel') && !$request->user()->hasRole('Admin')) {
+        // A pure mechanic (or now, a Custodian logging their own field fix)
+        // logs work as themselves; only Admin keeps the ability to assign
+        // someone else — a registered user or, via performed_by_other,
+        // someone outside the system — as the one who actually performed it.
+        if (!$request->user()->hasRole('Admin')) {
             $data['maintenance_personnel_id'] = $request->user()->id;
+            $data['performed_by_other'] = null;
         }
 
-        abort_if(empty($data['maintenance_personnel_id']), 422, 'Please select maintenance personnel.');
+        abort_if(
+            empty($data['maintenance_personnel_id']) && empty($data['performed_by_other']),
+            422,
+            'Please select who performed the repair.'
+        );
 
         // Proof-of-completion fast close: what actually justifies skipping
         // Custodian verification is that something REAL is attached — a
@@ -1663,7 +1681,7 @@ class FleetController extends Controller
 
     public function updateMaintenanceRecord(Request $request, VehicleMaintenanceRecord $record)
     {
-        $this->requireRole($request, ['Admin', 'Maintenance Personnel']);
+        $this->requireRole($request, ['Admin', 'Maintenance Personnel', 'Custodian']);
 
         $data = $request->validate([
             'source_vehicle_id' => ['nullable', 'exists:vehicles,vehicle_id', 'different:vehicle_id'],
@@ -1673,6 +1691,7 @@ class FleetController extends Controller
             'date_started' => ['nullable', 'date'],
             'date_completed' => ['nullable', 'date'],
             'maintenance_personnel_id' => ['nullable', 'exists:users,id'],
+            'performed_by_other' => ['nullable', 'string', 'max:255'],
             'is_external' => ['nullable', 'boolean'],
             'external_vendor' => ['nullable', 'string', 'max:255'],
             'warranty_until' => ['nullable', 'date'],
@@ -1817,6 +1836,16 @@ class FleetController extends Controller
             $record->verification_result === null,
             409,
             'This record has already been verified. An Admin needs to Reopen it before it can be re-verified.'
+        );
+
+        // Independent check is the entire point of this step — a Custodian
+        // who also performed the repair (dual-role accounts can) can't be
+        // the one who signs off on their own work. Someone else with the
+        // Custodian hat, or Admin via the fast-close path, has to instead.
+        abort_if(
+            $record->maintenance_personnel_id === $request->user()->id,
+            403,
+            'You performed this repair — another Custodian needs to verify it.'
         );
 
         $data = $request->validate([
