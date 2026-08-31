@@ -15,12 +15,19 @@ class UserSeeder extends Seeder
     {
         // Remove any other users (like Jake or Precious)
         User::whereNotIn('email', [
+            'superadmin@barangay.gov',
             'admin@barangay.gov',
             'custodian@barangay.gov',
             'maintenance@barangay.gov'
         ])->delete();
 
         $users = [
+            [
+                'name' => 'Super Admin',
+                'email' => 'superadmin@barangay.gov',
+                'password' => 'superadmin123',
+                'role' => 'Super Admin',
+            ],
             [
                 'name' => 'Roel Degulacion',
                 'email' => 'admin@barangay.gov',

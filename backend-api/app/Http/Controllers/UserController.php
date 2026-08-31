@@ -21,6 +21,18 @@ class UserController extends Controller
     }
 
     /**
+     * Cross-tenant guard for the User model, which — unlike Vehicle/Hub —
+     * deliberately does NOT carry a global scope (see BelongsToBarangay's
+     * docblock: scoping User itself recurses into Sanctum's own auth
+     * resolution). 404, not 403, so this reads the same as "no such user"
+     * rather than confirming a user with that id exists in another barangay.
+     */
+    private function requireSameBarangay(Request $request, User $target): void
+    {
+        abort_if($target->barangay_id !== $request->user()->barangay_id, 404);
+    }
+
+    /**
      * Normalize role input into a {role: primary, roles: [...]} pair.
      * Prefers the multi-select `roles[]`; falls back to a single `role`.
      * The first role in the list is the primary (drives portal/routing).
@@ -42,7 +54,7 @@ class UserController extends Controller
     {
         $this->requireAdmin($request);
 
-        $query = User::query();
+        $query = User::where('barangay_id', $request->user()->barangay_id);
 
         if ($request->filled('q')) {
             $search = $request->string('q');
@@ -81,6 +93,9 @@ class UserController extends Controller
         $data = $this->normalizeRoles($request, $data);
         $data['password'] = Hash::make($data['password']);
         $data['is_active'] = true;
+        // Always the creating Admin's own barangay — never client-supplied,
+        // so an Admin can't plant a user into a barangay they don't manage.
+        $data['barangay_id'] = $request->user()->barangay_id;
 
         if ($request->hasFile('photo')) {
             $data['photo_url'] = $this->storeUploadedImage($request->file('photo'), 'profile-photos');
@@ -95,6 +110,7 @@ class UserController extends Controller
     public function update(Request $request, User $user)
     {
         $this->requireAdmin($request);
+        $this->requireSameBarangay($request, $user);
 
         $data = $request->validate([
             'name' => ['sometimes', 'required', 'string', 'max:255'],
@@ -129,6 +145,7 @@ class UserController extends Controller
     public function deactivate(Request $request, User $user)
     {
         $this->requireAdmin($request);
+        $this->requireSameBarangay($request, $user);
         abort_if($user->id === $request->user()->id, 422, 'You cannot deactivate your own account.');
 
         $user->update(['is_active' => false]);
@@ -142,6 +159,7 @@ class UserController extends Controller
     public function activate(Request $request, User $user)
     {
         $this->requireAdmin($request);
+        $this->requireSameBarangay($request, $user);
 
         $data = $request->validate([
             // Only meaningful on a FIRST approval — Admin reviewing a
@@ -173,14 +191,14 @@ class UserController extends Controller
     {
         $this->requireAdmin($request);
 
-        return response()->json(['staff_code' => RegistrationSetting::current()->staff_code]);
+        return response()->json(['staff_code' => RegistrationSetting::for($request->user()->barangay_id)->staff_code]);
     }
 
     public function regenerateRegistrationCode(Request $request)
     {
         $this->requireAdmin($request);
 
-        $setting = RegistrationSetting::regenerate();
+        $setting = RegistrationSetting::regenerateFor($request->user()->barangay_id);
 
         return response()->json(['staff_code' => $setting->staff_code]);
     }

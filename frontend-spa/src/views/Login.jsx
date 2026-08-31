@@ -11,6 +11,7 @@ const roleRoutes = {
   Admin: '/admin',
   Custodian: '/custodian',
   'Maintenance Personnel': '/maintenance',
+  'Super Admin': '/superadmin',
 };
 
 function Login() {

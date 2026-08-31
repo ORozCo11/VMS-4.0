@@ -1582,6 +1582,95 @@ html[data-theme="light"] .toast-notice.error {
   text-align: center;
   gap: 6px;
 }
+/* Activity-timeline variant — a scrollable dashed timeline of recent
+   reports, each with an icon bubble, title/description, and a relative
+   "X ago" timestamp. */
+.latest-issue-timeline-list {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  max-height: 440px;
+  overflow-y: auto;
+  padding-left: 22px;
+  margin-top: 4px;
+}
+.latest-issue-timeline-list::before {
+  content: '';
+  position: absolute;
+  left: 5px;
+  top: 22px;
+  bottom: 22px;
+  border-left: 2px dashed var(--border, #cbd5e1);
+}
+.latest-issue-timeline-item {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 14px 4px;
+  border: none;
+  border-bottom: 1px solid var(--border-subtle, #eef2f7);
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+.latest-issue-timeline-item:last-child {
+  border-bottom: none;
+}
+.latest-issue-timeline-item:hover {
+  background: var(--surface-hover, #f8fafc);
+}
+.latest-issue-timeline-dot {
+  position: absolute;
+  left: -22px;
+  top: 22px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #2563eb;
+  box-shadow: 0 0 0 2px var(--surface, #fff);
+}
+.latest-issue-timeline-icon {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #eff6ff;
+  color: #2563eb;
+}
+.latest-issue-timeline-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.latest-issue-timeline-body strong {
+  font-size: 0.85rem;
+  color: var(--text-strong, #0f172a);
+}
+.latest-issue-timeline-body span {
+  font-size: 0.76rem;
+  color: var(--text-muted, #64748b);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.latest-issue-timeline-time {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding-top: 2px;
+  font-size: 0.7rem;
+  color: var(--text-muted, #94a3b8);
+  white-space: nowrap;
+}
 
 /* DASHBOARD */
 .dashboard-grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 14px; }
@@ -3029,7 +3118,7 @@ button.wizard-step-pill:hover {
   padding: 0 6px;
   background: var(--surface-2, #f8fafc);
 }
-.smart-form input:not([type="file"]),
+.smart-form input:not([type="file"]):not([type="checkbox"]),
 .smart-form select,
 .smart-form textarea {
   border: 1px solid var(--border, #cbd5e1);
@@ -3042,11 +3131,32 @@ button.wizard-step-pill:hover {
    than the plain-text <input> beside it in the same grid row — visible as
    the two boxes not lining up ("dropdowns are misplaced"). A fixed height
    on both, plus a hand-drawn chevron once appearance is reset, fixes it. */
-.smart-form input:not([type="file"]),
+.smart-form input:not([type="file"]):not([type="checkbox"]),
 .smart-form select {
   height: 42px;
   line-height: 1.2;
   box-sizing: border-box;
+}
+/* Per-option rows inside a 'checkboxes' field aren't excluded by the
+   :not(:has(.checkbox-group)) guards above — those only exclude the OUTER
+   field label wrapping the whole group, not each option's own row, which
+   doesn't itself contain .checkbox-group (that's its parent, not a
+   descendant). Left unguarded, the option row inherited position:relative
+   + its <span> got pulled position:absolute (the "legend on border" look
+   above), AND the row's own flex-direction fell back to .smart-form
+   label's base column setting since the row's inline style never
+   overrides that one property — together, that scattered the checkbox
+   and its text across the row instead of sitting side by side. Reset
+   both here with enough specificity to win regardless of source order. */
+.smart-form .checkbox-group label {
+  position: static;
+  margin-top: 0;
+  flex-direction: row;
+}
+.smart-form .checkbox-group label > span {
+  position: static;
+  padding: 0;
+  background: none;
 }
 .smart-form select {
   appearance: none;
@@ -3469,6 +3579,244 @@ button.wizard-step-pill:hover {
 .ticket-progress-step.is-active .ticket-progress-stage {
   color: #86efac;
   opacity: 1;
+}
+
+/* Ticket process hero — the at-a-glance summary at the top of a ticket's
+   detail page: title/status/description on the left, a resolved-% ring in
+   the middle, and a "what to do next" card with a quick stat grid on the
+   right. Tone (is-ok/is-warn/is-alert/is-active) mirrors nextSignal and
+   tints the card so its urgency reads before any text is even parsed. */
+/* Same dark navy-to-blue "command center" gradient as the dashboard banner
+   — tone (ok/warn/alert/active) now only tints the accent ring and label,
+   not the whole card, matching how the dashboard's Ops Score ring works. */
+.ticket-process-hero {
+  display: grid;
+  grid-template-columns: minmax(240px, 1.3fr) minmax(140px, 0.6fr) minmax(240px, 1fr);
+  gap: 20px;
+  align-items: center;
+  padding: 24px 28px;
+  margin: 20px 28px 0;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  background: linear-gradient(135deg, rgba(7, 15, 28, 0.98), rgba(20, 45, 110, 0.98) 52%, rgba(29, 78, 216, 0.9));
+  color: #e5edf8;
+}
+.ticket-process-hero.is-ok { --ticket-hero-accent: #22c55e; --ticket-hero-accent-text: #86efac; }
+.ticket-process-hero.is-warn { --ticket-hero-accent: #f59e0b; --ticket-hero-accent-text: #fbbf24; }
+.ticket-process-hero.is-alert { --ticket-hero-accent: #ef4444; --ticket-hero-accent-text: #fca5a5; }
+.ticket-process-hero.is-active { --ticket-hero-accent: #2563eb; --ticket-hero-accent-text: #93c5fd; }
+
+.ticket-process-hero-main { min-width: 0; }
+.ticket-process-kicker {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ticket-hero-accent-text, #93c5fd);
+  margin-bottom: 6px;
+}
+.ticket-process-kicker > span:not(:first-child) {
+  color: rgba(226, 232, 240, 0.75);
+  font-weight: 700;
+  text-transform: none;
+  letter-spacing: normal;
+}
+html section.ticket-process-hero .ticket-detail-title { margin-bottom: 8px; color: #ffffff; }
+.ticket-process-hero .ticket-detail-subline { margin-top: 8px; color: rgba(226, 232, 240, 0.78); }
+.ticket-process-hero .ticket-meta-item { color: rgba(226, 232, 240, 0.78); }
+.ticket-process-description {
+  margin-top: 10px;
+  font-size: 0.85rem;
+  color: rgba(226, 232, 240, 0.85);
+  line-height: 1.55;
+  max-width: 60ch;
+}
+.ticket-process-cancelled { margin: 20px 28px 0; }
+
+/* Resolved-% ring — same conic-gradient technique as the dashboard's Ops
+   Score, and the same dark inner circle, so the two rings read as one
+   consistent design language. */
+.ticket-process-meter {
+  aspect-ratio: 1;
+  width: 100%;
+  max-width: 148px;
+  min-width: 108px;
+  justify-self: center;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: conic-gradient(var(--ticket-hero-accent, #2563eb) var(--ticket-progress, 0%), rgba(148, 163, 184, 0.28) 0);
+}
+.ticket-process-meter-core {
+  width: 78%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: rgba(2, 6, 23, 0.78);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+.ticket-process-meter-core span {
+  font-size: 0.62rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #bae6fd;
+}
+.ticket-process-meter-core strong {
+  font-size: 1.5rem;
+  font-weight: 900;
+  color: #ffffff;
+  line-height: 1.1;
+}
+.ticket-process-meter-core small {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: rgba(226, 232, 240, 0.72);
+  margin-top: 2px;
+}
+
+.ticket-process-next-card {
+  position: relative;
+  background: rgba(255, 255, 255, 0.09);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 10px;
+  padding: 16px 18px;
+}
+.ticket-process-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  color: rgba(226, 232, 240, 0.85);
+}
+.ticket-process-next-label {
+  display: block;
+  font-size: 0.66rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: rgba(226, 240, 255, 0.8);
+  margin-bottom: 4px;
+}
+.ticket-process-next-card > strong {
+  display: block;
+  font-size: 1.02rem;
+  font-weight: 800;
+  color: #ffffff;
+}
+.ticket-process-next-card > p {
+  margin: 4px 0 12px;
+  font-size: 0.8rem;
+  color: rgba(226, 232, 240, 0.78);
+  line-height: 1.45;
+}
+.ticket-process-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(64px, 1fr));
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.14);
+}
+.ticket-process-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  text-align: center;
+}
+.ticket-process-stat svg { color: rgba(226, 232, 240, 0.85); }
+.ticket-process-stat span {
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: rgba(226, 232, 240, 0.72);
+}
+.ticket-process-stat strong {
+  font-size: 0.88rem;
+  font-weight: 800;
+  color: #ffffff;
+}
+
+/* Phase flow — same dot-and-line language as .ticket-progress-tracker, plus
+   a one-line hint under each phase name explaining what happens there. */
+.ticket-process-flow {
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+  padding: 18px 28px 6px;
+}
+.ticket-process-flow-step {
+  flex: 1;
+  min-width: 90px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  position: relative;
+  text-align: center;
+}
+.ticket-process-flow-step:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  top: 15px;
+  left: 50%;
+  width: 100%;
+  height: 3px;
+  background: rgba(128, 138, 158, 0.25);
+  z-index: 0;
+}
+.ticket-process-flow-step.is-done:not(:last-child)::after { background: #22c55e; }
+.ticket-process-flow-marker {
+  position: relative;
+  z-index: 1;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #f1f5f9;
+  border: 2px solid rgba(128, 138, 158, 0.4);
+  color: #ffffff;
+}
+.ticket-process-flow-step.is-done .ticket-process-flow-marker {
+  background: #22c55e;
+  border-color: #22c55e;
+}
+.ticket-process-flow-step.is-active .ticket-process-flow-marker {
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.18);
+}
+.ticket-process-flow-step.is-upcoming .ticket-process-flow-marker { color: #94a3b8; }
+.ticket-process-flow-label {
+  font-size: 0.76rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #94a3b8;
+}
+.ticket-process-flow-step > small {
+  font-size: 0.68rem;
+  color: #94a3b8;
+  max-width: 130px;
+  line-height: 1.3;
+}
+
+@media (max-width: 860px) {
+  .ticket-process-hero {
+    grid-template-columns: 1fr;
+    margin: 16px 16px 0;
+    padding: 18px;
+  }
+  .ticket-process-meter { max-width: 110px; }
+  .ticket-process-flow { padding: 14px 16px 4px; flex-wrap: wrap; gap: 14px 0; }
+  .ticket-process-flow-step { min-width: 80px; }
 }
 
 /* Ticket Detail Body */
@@ -4144,6 +4492,26 @@ button.wizard-step-pill:hover {
 .veh-edit-card { margin-bottom: 16px; }
 .veh-edit-body { padding: 20px 22px; }
 .veh-edit-body .smart-form .form-actions { grid-column: 1 / -1; margin-top: 6px; }
+/* Override the generic "file inputs always span both columns" rule here —
+   the photo box caps at 460px regardless, so forcing the full row just
+   leaves the rest of that row empty. Letting it sit in one column means
+   Vehicle Type naturally fills the column beside it instead. */
+.form-grid-2col.veh-edit-body .smart-form label:has(input[type="file"]) {
+  grid-column: auto;
+}
+.form-grid-2col.veh-edit-body .photo-box {
+  max-width: 280px;
+}
+/* Same fix as .veh-edit-body above, for the Add/Edit User page — the photo
+   box caps at 460px regardless, so forcing the label to span the full row
+   just leaves the rest of that row empty. Pairs it beside Roles instead
+   (see userFields()'s comment on field order). */
+.form-grid-2col.user-form-grid .smart-form label:has(input[type="file"]) {
+  grid-column: auto;
+}
+.form-grid-2col.user-form-grid .photo-box {
+  max-width: 280px;
+}
 
 /* Create Ticket form — sectioned card layout instead of one long vertical
    list of full-width fields. */
@@ -10137,7 +10505,7 @@ html[data-theme="light"] .issue-id-badge {
 }
 
 .dashboard-hologram-inner small {
-  color: rgba(226, 232, 240, 0.72);
+  color: rgba(226, 232, 240, 0.88);
   font-size: 0.7rem;
   font-weight: 800;
 }
@@ -10197,7 +10565,7 @@ html[data-theme="light"] .issue-id-badge {
 
 .dashboard-live-chips span,
 .dashboard-micro-metric small {
-  color: rgba(219, 234, 254, 0.72);
+  color: rgba(226, 240, 255, 0.92);
   display: block;
 }
 
@@ -10212,7 +10580,7 @@ html[data-theme="light"] .issue-id-badge {
 }
 
 .dashboard-live-chips small {
-  color: rgba(226, 232, 240, 0.68);
+  color: rgba(226, 232, 240, 0.85);
   display: block;
   font-size: 0.72rem;
   font-weight: 700;

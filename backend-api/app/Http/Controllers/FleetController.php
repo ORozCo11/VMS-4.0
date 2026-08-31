@@ -38,9 +38,14 @@ class FleetController extends Controller
     // older than this and the vehicle reads "stale — needs re-check".
     private const READINESS_FRESHNESS_HOURS = 24;
 
-    public function lookups()
+    public function lookups(Request $request)
     {
         $this->syncVehicleStatuses();
+        // User carries no global scope (see BelongsToBarangay's docblock),
+        // so every person-lookup below has to filter by barangay by hand —
+        // otherwise a Custodian could assign a mechanic from a different
+        // barangay onto their own ticket.
+        $barangayId = $request->user()->barangay_id;
         return response()->json([
             'categories' => VehicleCategory::orderBy('category_name')->get(),
             'vehicles' => Vehicle::with('category')->orderBy('vehicle_name')->get(),
@@ -48,7 +53,8 @@ class FleetController extends Controller
                 ->whereNot('status', 'Resolved')
                 ->latest('issue_report_id')
                 ->get(),
-            'maintenance_personnel' => User::havingRole('Maintenance Personnel')
+            'maintenance_personnel' => User::where('barangay_id', $barangayId)
+                ->havingRole('Maintenance Personnel')
                 ->orderBy('name')
                 ->get(['id', 'name', 'email', 'role']),
             // Distinct from maintenance_personnel above (which stays scoped to
@@ -56,7 +62,8 @@ class FleetController extends Controller
             // powers "who actually performed this repair" on a Maintenance
             // Record, which can legitimately be anyone: a Custodian or Admin
             // sometimes does the work themselves, not just Maintenance Personnel.
-            'maintenance_performers' => User::orderBy('name')
+            'maintenance_performers' => User::where('barangay_id', $barangayId)
+                ->orderBy('name')
                 ->get(['id', 'name', 'email', 'role']),
             'issue_types' => FaultCategory::orderBy('name')->pluck('name'),
             'maintenance_types' => MaintenanceType::orderBy('name')->pluck('name'),
@@ -427,6 +434,9 @@ class FleetController extends Controller
         }
         if ($vehicle->status !== 'Available') {
             return 'in_maintenance';
+        }
+        if (in_array($vehicle->condition, ['Needs Repair', 'Damaged'], true)) {
+            return 'not_ready';
         }
         if (!$latest) {
             return 'unchecked';
@@ -1669,7 +1679,8 @@ class FleetController extends Controller
                 $this->notifyAdmins(
                     'Maintenance Record Filed',
                     "{$request->user()->name} logged a {$data['maintenance_type']} record for {$vehicle->vehicle_name}: {$data['problem_reason']}",
-                    'maintenance_recorded'
+                    'maintenance_recorded',
+                    $vehicle->barangay_id
                 );
             }
 
@@ -2027,7 +2038,8 @@ class FleetController extends Controller
             $this->notifyCustodians(
                 'Verification No Longer Needed',
                 "Admin closed maintenance #{$record->maintenance_id} ({$record->vehicle->vehicle_name}) without verification. Reason: {$data['closure_reason']}",
-                'maintenance_verification_withdrawn'
+                'maintenance_verification_withdrawn',
+                $record->vehicle->barangay_id
             );
 
             $serviceNote = $returnToService ? 'Vehicle returned to service.' : 'Vehicle kept out of service.';
@@ -2306,7 +2318,8 @@ class FleetController extends Controller
                 $this->notifyCustodians(
                     'Verification Required: Scheduled Maintenance',
                     "{$schedule->maintenance_type} for {$vehicle->vehicle_name} was logged as done — please verify.",
-                    'maintenance_verification_needed'
+                    'maintenance_verification_needed',
+                    $vehicle->barangay_id
                 );
             }
 
@@ -2577,9 +2590,13 @@ class FleetController extends Controller
         abort_unless($request->user()->hasAnyRole($roles), 403, 'Your account role cannot perform this action.');
     }
 
-    private function notifyAdmins(string $title, string $message, string $type): void
+    // User carries no global scope — every "notify everyone with this role"
+    // helper takes the relevant vehicle's barangay_id explicitly so it
+    // never floods a different barangay's admins/custodians about
+    // something that isn't theirs.
+    private function notifyAdmins(string $title, string $message, string $type, ?int $barangayId): void
     {
-        $admins = User::havingRole('Admin')->get();
+        $admins = User::where('barangay_id', $barangayId)->havingRole('Admin')->get();
         foreach ($admins as $admin) {
             \App\Models\Notification::create([
                 'user_id'   => $admin->id,
@@ -2591,9 +2608,9 @@ class FleetController extends Controller
         }
     }
 
-    private function notifyCustodians(string $title, string $message, string $type): void
+    private function notifyCustodians(string $title, string $message, string $type, ?int $barangayId): void
     {
-        $custodians = User::havingRole('Custodian')->get();
+        $custodians = User::where('barangay_id', $barangayId)->havingRole('Custodian')->get();
         foreach ($custodians as $custodian) {
             \App\Models\Notification::create([
                 'user_id'   => $custodian->id,

@@ -2,10 +2,13 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\BelongsToBarangay;
 use Illuminate\Database\Eloquent\Model;
 
 class VehicleHub extends Model
 {
+    use BelongsToBarangay;
+
     protected $primaryKey = 'hub_id';
 
     protected $fillable = [
@@ -18,6 +21,7 @@ class VehicleHub extends Model
         'is_default',
         'is_hidden',
         'created_by',
+        'barangay_id',
     ];
 
     protected $casts = [

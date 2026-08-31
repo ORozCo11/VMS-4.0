@@ -102,8 +102,10 @@ class TicketController extends Controller
                 ->with('category:category_id,category_name')
                 ->orderBy('vehicle_name')
                 ->get(['vehicle_id', 'vehicle_name', 'plate_number', 'status', 'condition', 'photo_url', 'brand', 'model', 'category_id', 'current_location']),
-            'custodians'            => User::havingRole('Custodian')->orderBy('name')->get(['id', 'name', 'email', 'photo_url']),
-            'maintenance_personnel' => User::havingRole('Maintenance Personnel')->orderBy('name')->get(['id', 'name', 'email']),
+            // User carries no global scope — filter by barangay by hand,
+            // or a ticket could get assigned to staff from another barangay.
+            'custodians'            => User::where('barangay_id', $request->user()->barangay_id)->havingRole('Custodian')->orderBy('name')->get(['id', 'name', 'email', 'photo_url']),
+            'maintenance_personnel' => User::where('barangay_id', $request->user()->barangay_id)->havingRole('Maintenance Personnel')->orderBy('name')->get(['id', 'name', 'email']),
             'priorities'            => $this->priorities,
             'fault_categories'      => FaultCategory::orderBy('name')->pluck('name'),
             'maintenance_types'     => MaintenanceType::orderBy('name')->pluck('name'),
@@ -221,6 +223,7 @@ class TicketController extends Controller
 
         $custodian = User::findOrFail($data['assigned_custodian_id']);
         abort_unless($custodian->hasRole('Custodian'), 422, 'The selected user is not a Custodian.');
+        abort_unless($custodian->barangay_id === $vehicle->barangay_id, 422, 'The selected Custodian does not belong to this barangay.');
 
         // #8 — a ticket's fault category defaults to the linked issue report's
         // standardized issue type when the Admin didn't pick one, so recurrence
@@ -303,7 +306,8 @@ class TicketController extends Controller
                     'Pre-Diagnosed Ticket Ready for Assignment',
                     "Ticket #{$ticket->ticket_id} ({$data['ticket_title']}) on {$vehicle->vehicle_name} is pre-diagnosed and ready — assign a mechanic to each sub-issue.",
                     'ticket_prediagnosed',
-                    $ticket->ticket_id
+                    $ticket->ticket_id,
+                    $vehicle->barangay_id
                 );
             } else {
                 $this->notifyUser(
@@ -330,7 +334,8 @@ class TicketController extends Controller
                     'Recurring Fault Detected',
                     "This is the " . ($recurrence + 1) . "{$ordinal} time \"" . ($faultCategory ?? $data['ticket_title']) . "\" has been logged on {$vehicle->vehicle_name} in 90 days — last fixed via {$lastFixSource} (Ticket #{$ticket->ticket_id}). Consider a deeper fix or decommission review.",
                     'recurring_fault',
-                    $ticket->ticket_id
+                    $ticket->ticket_id,
+                    $vehicle->barangay_id
                 );
             }
 
@@ -411,7 +416,8 @@ class TicketController extends Controller
                 'Inspection Submitted',
                 "Custodian {$custodianName} submitted inspection for Ticket #{$ticket->ticket_id} ({$vehicleName}). Result: {$data['inspection_result']}.",
                 'inspection_submitted',
-                $ticket->ticket_id
+                $ticket->ticket_id,
+                $ticket->vehicle->barangay_id
             );
         });
 
@@ -500,6 +506,7 @@ class TicketController extends Controller
 
         $mechanic = User::findOrFail($data['assigned_mechanic_id']);
         abort_unless($mechanic->hasRole('Maintenance Personnel'), 422, 'The selected user is not Maintenance Personnel.');
+        abort_unless($mechanic->barangay_id === $ticket->vehicle->barangay_id, 422, 'The selected mechanic does not belong to this barangay.');
 
         DB::transaction(function () use ($ticket, $subIssue, $data, $request) {
             $subIssue->update([
@@ -549,6 +556,7 @@ class TicketController extends Controller
 
         $newMechanic = User::findOrFail($data['assigned_mechanic_id']);
         abort_unless($newMechanic->hasRole('Maintenance Personnel'), 422, 'The selected user is not Maintenance Personnel.');
+        abort_unless($newMechanic->barangay_id === $ticket->vehicle->barangay_id, 422, 'The selected mechanic does not belong to this barangay.');
         abort_if($newMechanic->id === $subIssue->assigned_mechanic_id, 422, 'That mechanic is already assigned to this work order.');
 
         $previousMechanicId = $subIssue->assigned_mechanic_id;
@@ -627,6 +635,7 @@ class TicketController extends Controller
 
         $newCustodian = User::findOrFail($data['assigned_custodian_id']);
         abort_unless($newCustodian->hasRole('Custodian'), 422, 'The selected user is not a Custodian.');
+        abort_unless($newCustodian->barangay_id === $ticket->vehicle->barangay_id, 422, 'The selected Custodian does not belong to this barangay.');
         abort_if($newCustodian->id === $ticket->assigned_custodian_id, 422, 'That Custodian is already assigned to this ticket.');
 
         $previousCustodianId = $ticket->assigned_custodian_id;
@@ -802,7 +811,8 @@ class TicketController extends Controller
                     'Repairs Approved by Custodian',
                     "Custodian {$custodianName} approved \"{$subIssue->title}\" on Ticket #{$ticket->ticket_id} ({$vehicleName}). Please give final confirmation.",
                     'repairs_approved',
-                    $ticket->ticket_id
+                    $ticket->ticket_id,
+                    $ticket->vehicle->barangay_id
                 );
             } else {
                 $this->notifyUser(
@@ -893,7 +903,8 @@ class TicketController extends Controller
                         'Ticket Ready to Close',
                         "All sub-issues on Ticket #{$ticket->ticket_id} ({$vehicleName}) are Done ({$progress['done']}/{$progress['total']}). You may now close the ticket.",
                         'ticket_ready_to_close',
-                        $ticket->ticket_id
+                        $ticket->ticket_id,
+                        $ticket->vehicle->barangay_id
                     );
                 }
             } else {
@@ -1460,9 +1471,12 @@ class TicketController extends Controller
         ]);
     }
 
-    private function notifyAdmins($title, $message, $type, $ticketId)
+    // User carries no global scope — pass the relevant vehicle's
+    // barangay_id explicitly, or this would notify every barangay's
+    // Admins about something that only happened in one of them.
+    private function notifyAdmins($title, $message, $type, $ticketId, ?int $barangayId)
     {
-        $admins = User::havingRole('Admin')->get();
+        $admins = User::where('barangay_id', $barangayId)->havingRole('Admin')->get();
         foreach ($admins as $admin) {
             $this->notifyUser($admin->id, $title, $message, $type, $ticketId);
         }

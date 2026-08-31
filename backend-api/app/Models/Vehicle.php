@@ -2,16 +2,20 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\BelongsToBarangay;
 use Illuminate\Database\Eloquent\Model;
 
 class Vehicle extends Model
 {
+    use BelongsToBarangay;
+
     protected $primaryKey = 'vehicle_id';
 
     protected $fillable = [
         'vehicle_name',
         'plate_number',
         'category_id',
+        'barangay_id',
         'brand',
         'model',
         'year_model',

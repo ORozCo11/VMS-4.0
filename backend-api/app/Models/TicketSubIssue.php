@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\ScopedThroughVehicle;
 use Illuminate\Database\Eloquent\Model;
 
 /**
@@ -12,7 +13,15 @@ use Illuminate\Database\Eloquent\Model;
  */
 class TicketSubIssue extends Model
 {
+    use ScopedThroughVehicle;
+
     protected $primaryKey = 'sub_issue_id';
+
+    protected static function vehicleRelationPath(): string
+    {
+        // Reaches Vehicle through its parent ticket, not directly.
+        return 'ticket.vehicle';
+    }
 
     protected $fillable = [
         'ticket_id',

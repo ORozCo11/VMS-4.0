@@ -11,8 +11,10 @@ use App\Http\Controllers\HubController;
 use App\Http\Controllers\TicketController;
 use App\Http\Controllers\NotificationController;
 use App\Http\Controllers\ProvinceController;
+use App\Http\Controllers\SuperAdminController;
 use App\Http\Controllers\UserController;
 use App\Http\Middleware\EnsureUserIsActive;
+use App\Http\Middleware\RestrictSuperAdminScope;
 
 /*
 |--------------------------------------------------------------------------
@@ -24,6 +26,7 @@ Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:10
 
 // Self-registration — rate-limited to blunt scripted account-creation spam.
 Route::post('/register', [AuthController::class, 'register'])->middleware('throttle:5,1');
+Route::get('/registration-status', [AuthController::class, 'registrationStatus']);
 
 // Cascading Province -> City/Municipality -> Barangay lists for the
 // registration form's address fields.
@@ -44,7 +47,7 @@ Route::get('/barangays/{barangay}', [BarangayController::class, 'show']);
 | Protected Routes (Requires a Valid Sanctum Token in Header)
 |--------------------------------------------------------------------------
 */
-Route::middleware(['auth:sanctum', EnsureUserIsActive::class])->group(function () {
+Route::middleware(['auth:sanctum', EnsureUserIsActive::class, RestrictSuperAdminScope::class])->group(function () {
     
     // Session termination route
     Route::post('/logout', [AuthController::class, 'logout']);
@@ -109,6 +112,22 @@ Route::middleware(['auth:sanctum', EnsureUserIsActive::class])->group(function (
 
     Route::get('/registration-settings', [UserController::class, 'registrationSettings']);
     Route::post('/registration-settings/regenerate', [UserController::class, 'regenerateRegistrationCode']);
+
+    /*
+    |--------------------------------------------------------------------------
+    | Super Admin — account administration only, across every barangay.
+    | Each method also self-guards via requireSuperAdmin, same pattern as
+    | UserController's requireAdmin.
+    |--------------------------------------------------------------------------
+    */
+    Route::get('/superadmin/barangays', [SuperAdminController::class, 'barangays']);
+    Route::get('/superadmin/users', [SuperAdminController::class, 'users']);
+    Route::put('/superadmin/users/{user}/activate', [SuperAdminController::class, 'activateUser']);
+    Route::put('/superadmin/users/{user}/deactivate', [SuperAdminController::class, 'deactivateUser']);
+    Route::put('/superadmin/users/{user}/role', [SuperAdminController::class, 'updateUserRole']);
+    Route::get('/superadmin/barangays/{barangay}/registration-code', [SuperAdminController::class, 'registrationCode']);
+    Route::post('/superadmin/barangays/{barangay}/registration-code/regenerate', [SuperAdminController::class, 'regenerateRegistrationCode']);
+    Route::get('/superadmin/activity-log', [SuperAdminController::class, 'activityLog']);
 
     Route::get('/hubs', [HubController::class, 'index']);
     Route::post('/hubs', [HubController::class, 'store']);

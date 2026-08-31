@@ -2,10 +2,13 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\ScopedThroughVehicle;
 use Illuminate\Database\Eloquent\Model;
 
 class VehicleHistory extends Model
 {
+    use ScopedThroughVehicle;
+
     protected $primaryKey = 'history_id';
 
     protected $fillable = [

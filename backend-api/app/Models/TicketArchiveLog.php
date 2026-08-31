@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\ScopedThroughVehicle;
 use Illuminate\Database\Eloquent\Model;
 
 /**
@@ -10,6 +11,8 @@ use Illuminate\Database\Eloquent\Model;
  */
 class TicketArchiveLog extends Model
 {
+    use ScopedThroughVehicle;
+
     protected $primaryKey = 'archive_id';
 
     // Explicitly disable auto-timestamps since this table is immutable.

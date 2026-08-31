@@ -20,6 +20,7 @@ const roleRoutes = {
   Admin: '/admin',
   Custodian: '/custodian',
   'Maintenance Personnel': '/maintenance',
+  'Super Admin': '/superadmin',
 };
 
 // Sidebar structure, grouped into collapsible sections. `section: null` means
@@ -994,14 +995,30 @@ function Workspace() {
     }
   }, [navigate, user.role]);
 
+  // Clears a ticket's "unread updates" badge (Maintenance Tickets card/table
+  // view) the moment it's opened directly from that list — without this,
+  // the badge only ever clears via the notification bell, so opening the
+  // ticket itself wouldn't acknowledge the updates you just saw on it.
+  // Best-effort: a failed mark-as-read just leaves the badge until the next
+  // notifications poll picks it up, not worth surfacing as an error.
+  const markTicketNotificationsRead = useCallback(async (ticketId) => {
+    const toMark = notifications.filter((n) => !n.read_at && String(n.ticket_id) === String(ticketId));
+    if (!toMark.length) return;
+    try {
+      await Promise.all(toMark.map((n) => api.put(`/notifications/${n.notification_id}/read`)));
+      await loadNotifications();
+    } catch { /* best-effort */ }
+  }, [notifications, loadNotifications]);
+
   // Per-cell click targets shared with tables via context. A user cell opens
   // that user's own profile page (carrying the row's user object as fallback so
   // it renders even for roles that can't list all users).
   const openTicketProfile = useCallback((ticket) => {
     if (ticket?.ticket_id) {
       navigate(`${roleRoutes[user.role]}/tickets/${ticket.ticket_id}`);
+      markTicketNotificationsRead(ticket.ticket_id);
     }
-  }, [navigate, user.role]);
+  }, [navigate, user.role, markTicketNotificationsRead]);
 
   const rowActions = useMemo(
     () => ({
@@ -1413,16 +1430,6 @@ function Workspace() {
     [records.issues]
   );
 
-  // Newest report regardless of the active filters/search — a quick-glance
-  // "what just came in" card next to the stat row, not another filtered view.
-  const latestIssue = useMemo(() => {
-    const rows = records.issues ?? [];
-    if (!rows.length) return null;
-    return rows.reduce((latest, row) => (
-      !latest || (row.issue_report_id ?? 0) > (latest.issue_report_id ?? 0) ? row : latest
-    ), null);
-  }, [records.issues]);
-
   const scheduleStats = useMemo(() => {
     const base = countByValues(records.schedules ?? [], (r) => r.status, ['Scheduled', 'Completed', 'Cancelled']);
     // A schedule marked "Completed" only means the calendar task is done —
@@ -1550,9 +1557,12 @@ function Workspace() {
   // without logging out and back in. import.meta.env.DEV is compile-time, so
   // this entire block (and its UI below) is stripped from a production build;
   // the backend also 404s the endpoint outside local/testing.
+  //
+  // Deliberately reuses the map boundary selector's own Province/Barangay
+  // dropdowns below (mapProvinceId/mapBarangayId) instead of adding its own
+  // — one barangay picker driving two things is simpler than two pickers
+  // sitting side by side doing almost the same job.
   const [impersonateCandidates, setImpersonateCandidates] = useState([]);
-  // Default the selection to the currently logged-in account, so the dropdown
-  // shows who you are now and the button reads as active (not faded).
   const [impersonateId, setImpersonateId] = useState(user?.id ?? '');
   useEffect(() => {
     if (!import.meta.env.DEV) return;
@@ -1562,6 +1572,17 @@ function Workspace() {
     // full page reload, since this effect would otherwise only ever run once
     // on mount.
   }, [records.users]);
+  // {key, label, users[]} per barangay — key matches mapBarangayId's value
+  // so the same dropdown selection resolves which staff list to show here.
+  const impersonateGroups = useMemo(() => {
+    const groups = {};
+    impersonateCandidates.forEach((u) => {
+      const key = String(u.barangay_id ?? '');
+      const label = u.province_name && u.barangay_name ? `${u.province_name} — ${u.barangay_name}` : 'Unassigned';
+      (groups[key] ??= { label, users: [] }).users.push(u);
+    });
+    return Object.entries(groups).map(([key, g]) => ({ key, ...g }));
+  }, [impersonateCandidates]);
   const doImpersonate = async () => {
     if (!impersonateId) return;
     try {
@@ -1587,6 +1608,42 @@ function Workspace() {
   const [mapBarangays, setMapBarangays] = useState([]);
   const [mapBarangayId, setMapBarangayId] = useState('');
   const [mapBoundaryOverride, setMapBoundaryOverride] = useState(null);
+
+  // DEV-only: the same two dropdowns also drive Impersonate below, so a
+  // barangay with registered staff but no boundary polygon (anything other
+  // than Paknaan today) still needs to show up here, not just barangays
+  // the map can actually draw. Merged in, never replacing the boundary-
+  // sourced list — production keeps working with zero impersonation data.
+  const provinceOptions = useMemo(() => {
+    const byId = new Map(mapProvinces.map((p) => [String(p.id), p]));
+    impersonateCandidates.forEach((u) => {
+      if (u.province_id && !byId.has(String(u.province_id))) {
+        byId.set(String(u.province_id), { id: u.province_id, name: u.province_name });
+      }
+    });
+    return Array.from(byId.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [mapProvinces, impersonateCandidates]);
+  const barangayOptions = useMemo(() => {
+    const byId = new Map(mapBarangays.map((b) => [String(b.id), b]));
+    impersonateCandidates.forEach((u) => {
+      if (u.barangay_id && String(u.province_id) === String(mapProvinceId) && !byId.has(String(u.barangay_id))) {
+        byId.set(String(u.barangay_id), { id: u.barangay_id, name: u.barangay_name });
+      }
+    });
+    return Array.from(byId.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [mapBarangays, impersonateCandidates, mapProvinceId]);
+  // Keeps the Impersonate staff dropdown valid for whichever barangay is
+  // currently selected above — re-runs whenever the barangay changes or the
+  // candidate list itself first loads.
+  const impersonateGroupUsers = impersonateGroups.find((g) => g.key === String(mapBarangayId))?.users ?? [];
+  useEffect(() => {
+    const stillValid = impersonateGroupUsers.some((u) => String(u.id) === String(impersonateId));
+    if (!stillValid) setImpersonateId(impersonateGroupUsers[0]?.id ?? '');
+    // impersonateGroupUsers is a derived array (new reference every render);
+    // keying off mapBarangayId/impersonateCandidates instead avoids re-running
+    // this on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapBarangayId, impersonateCandidates]);
 
   // Fetches one barangay's boundary and sets it as the map override.
   const selectBarangayBoundary = useCallback(async (barangayId) => {
@@ -1659,14 +1716,6 @@ function Workspace() {
     selectBarangayBoundary(barangayId);
   };
 
-  // "Reset" returns to the system's home barangay (Paknaan), not a blank
-  // selection — that's the map's true default state, not an empty one.
-  const resetMapBoundary = () => {
-    const paknaan = mapBarangays.find((b) => b.name === 'Paknaan');
-    setMapBarangayId(paknaan ? String(paknaan.id) : '');
-    selectBarangayBoundary(paknaan?.id);
-  };
-  const isDefaultMapBoundary = mapBarangays.find((b) => String(b.id) === mapBarangayId)?.name === 'Paknaan';
 
   return (
     <FormNoticeContext.Provider value={notice}>
@@ -1692,34 +1741,29 @@ function Workspace() {
               onChange={handleMapProvinceChange}
               value={mapProvinceId}
             >
-              {mapProvinces.map((province) => (
+              {provinceOptions.map((province) => (
                 <option key={province.id} value={province.id}>{province.name}</option>
               ))}
             </select>
             <select
               aria-label="Map boundary barangay"
-              disabled={mapBarangays.length === 0}
+              disabled={barangayOptions.length === 0}
               onChange={handleMapBarangayChange}
               value={mapBarangayId}
             >
-              {mapBarangays.length > 0 ? (
-                mapBarangays.map((barangay) => (
+              {barangayOptions.length > 0 ? (
+                barangayOptions.map((barangay) => (
                   <option key={barangay.id} value={barangay.id}>{barangay.name}</option>
                 ))
               ) : (
                 <option value="">No registered barangay</option>
               )}
             </select>
-            {mapBarangayId && !isDefaultMapBoundary && (
-              <button type="button" onClick={resetMapBoundary} title="Reset to default Paknaan boundary">
-                Reset
-              </button>
-            )}
           </div>
-          {import.meta.env.DEV && impersonateCandidates.length > 0 && (
-            <div className="dev-impersonate" title="Dev only — switch account without logging out. Not present in production.">
+          {import.meta.env.DEV && impersonateGroupUsers.length > 0 && (
+            <div className="dev-impersonate" title="Dev only — switch account without logging out. Not present in production. Staff list follows the barangay picked above.">
               <select value={impersonateId} onChange={(e) => setImpersonateId(e.target.value)} aria-label="Impersonate account">
-                {impersonateCandidates.map((u) => (
+                {impersonateGroupUsers.map((u) => (
                   <option key={u.id} value={u.id} disabled={!u.is_active}>
                     {u.name} · {u.role}{u.is_active ? '' : ' (inactive)'}
                   </option>
@@ -2090,6 +2134,7 @@ function Workspace() {
               initialValues={editUserInitialValues}
               onSubmit={(payload) => submitFormPage('users', editUserId ? { id: editUserId } : null, payload)}
               submitLabel={editUserId ? 'Update User' : 'Add User'}
+              wrapperClassName="user-form-grid"
             />
           ) : logRepairsTicketId ? (
             <LogRepairsPage
@@ -2420,10 +2465,11 @@ function Workspace() {
                   />
                 </div>
                 <div style={{ overflowX: 'auto' }}>
-                  <DataTable
+                  <PaginatedTable
                     columns={locationTableColumns}
                     rows={locationRows}
                     onRowClick={(row) => row.vehicle && openVehicleProfile(row.vehicle)}
+                    emptyMessage="No location records yet."
                   />
                 </div>
                 {editTarget !== null && (
@@ -2649,7 +2695,7 @@ function Workspace() {
                   }}
                 />
               </section>
-              <LatestIssueCard issue={latestIssue} />
+              <LatestIssueCard issues={records.issues ?? []} onRowClick={(row) => row.vehicle && openVehicleProfile(row.vehicle)} />
             </div>
           }
         >
@@ -3448,7 +3494,7 @@ const ACTION_QUEUE_META = {
   schedule_overdue:        { icon: 'wrench',      color: '#b91c1c', route: null },
 };
 
-const READINESS_STATE_LABEL = { stale: 'Check stale', not_ready: 'Not ready', unchecked: 'Never checked' };
+const READINESS_STATE_LABEL = { stale: 'Readiness check', not_ready: 'Not ready', unchecked: 'Never checked' };
 
 function ActionQueueRow({ item, basePath, onNavigate, onGoToSchedules }) {
   const meta = ACTION_QUEUE_META[item.type] ?? ACTION_QUEUE_META.issue_pending;
@@ -5803,6 +5849,12 @@ function userFields(isEditing, liveValues = EMPTY_OBJ) {
     { label: 'Email', name: 'email', required: true, type: 'text', placeholder: 'name@barangay.gov' },
     { label: 'Phone', name: 'phone', type: 'tel', pattern: '[0-9]{10}', placeholder: '09XXXXXXXXX', title: 'Phone must be exactly 10 digits' },
     { label: 'Address', name: 'address', type: 'text' },
+    // Deliberately paired side by side, in this order, both NOT full-width:
+    // the grid's dense auto-flow (App.css .form-grid-2col .smart-form)
+    // only backfills gaps when one exists — keeping every field here a
+    // plain single-column item, in strict declared order, means each row
+    // fills left-then-right with no gaps for later fields to jump into
+    // (which is what previously stranded Confirm Password alone).
     { label: 'Roles (a person can hold more than one — the first is their primary)', name: 'roles', options: ['Admin', 'Custodian', 'Maintenance Personnel'], required: true, type: 'checkboxes' },
     { label: 'Profile Photo', name: 'photo', accept: 'image/*', type: 'file' },
     {
@@ -5841,6 +5893,17 @@ function capacityUnits(domain) {
   return domain === 'Water' ? ['L', 'gal', 'm³', 'pax'] : ['kg', 'tons', 'L', 'pax'];
 }
 
+// Same underlying column (plate_number) either way — a boat has no LTO
+// plate, so the label/placeholder/validation just read right for whichever
+// domain the vehicle actually is.
+function plateFieldLabel(domain) {
+  return domain === 'Water' ? 'Registration / Hull No.' : 'Plate Number';
+}
+
+function vehicleIconName(domain) {
+  return domain === 'Water' ? 'boat' : 'vehicle';
+}
+
 function vehicleDomainFields(domain) {
   return domain === 'Water'
     ? [
@@ -5877,13 +5940,18 @@ function NewVehiclePage({ onBack, lookups, allHubs, onSubmit }) {
   const stepFields = {
     1: [
       { label: 'Vehicle Name', name: 'vehicle_name', required: true, type: 'text' },
-      {
-        label: 'Plate Number', name: 'plate_number', required: true, type: 'text',
-        // NOTE: browsers compile `pattern` with the strict `v` flag, where `\s`
-        // inside a character class is invalid — use a literal space instead.
-        placeholder: 'e.g. ABC 1234', pattern: '^[A-Za-z]{2,6}[ \\-]?\\d{2,6}[A-Za-z]?$',
-        title: 'Enter a valid plate number, e.g. ABC 1234 or ABC-1234', uppercase: true,
-      },
+      domainFilter === 'Water'
+        ? {
+            label: plateFieldLabel('Water'), name: 'plate_number', required: true, type: 'text',
+            placeholder: 'e.g. HULL-2024-001', uppercase: true,
+          }
+        : {
+            label: plateFieldLabel('Land'), name: 'plate_number', required: true, type: 'text',
+            // NOTE: browsers compile `pattern` with the strict `v` flag, where `\s`
+            // inside a character class is invalid — use a literal space instead.
+            placeholder: 'e.g. ABC 1234', pattern: '^[A-Za-z]{2,6}[ \\-]?\\d{2,6}[A-Za-z]?$',
+            title: 'Enter a valid plate number, e.g. ABC 1234 or ABC-1234', uppercase: true,
+          },
       { label: 'Category', name: 'vehicle_domain', options: domainOptions, required: true, type: 'select' },
       {
         label: 'Vehicle Type',
@@ -6113,7 +6181,7 @@ function FormPage({ description, onBack, fields, initialValues, onSubmit, submit
   // sitting in a separate persistent side panel throughout.
   const vehicleInfoCard = vehicle ? (
     <section className="veh-card">
-      <div className="veh-card-head"><Icon name="vehicle" size={16} /><h4>Selected Vehicle</h4></div>
+      <div className="veh-card-head"><Icon name={vehicleIconName(vehicle.category?.domain)} size={16} /><h4>Selected Vehicle</h4></div>
       {vehicle.photo_url && (
         <div className="form-context-photo">
           <img src={resolvePhotoUrl(vehicle.photo_url)} alt={vehicle.vehicle_name} />
@@ -6121,7 +6189,7 @@ function FormPage({ description, onBack, fields, initialValues, onSubmit, submit
       )}
       <dl className="veh-kv">
         <div><dt>Vehicle</dt><dd>{vehicle.vehicle_name}</dd></div>
-        <div><dt>Plate Number</dt><dd>{vehicle.plate_number}</dd></div>
+        <div><dt>{plateFieldLabel(vehicle.category?.domain)}</dt><dd>{vehicle.plate_number}</dd></div>
         <div><dt>Type</dt><dd>{vehicle.category?.category_name ?? 'Unassigned'}</dd></div>
         <div><dt>Brand / Model</dt><dd>{`${vehicle.brand ?? '-'} ${vehicle.model ?? ''}`.trim() || '-'}</dd></div>
         <div><dt>Status</dt><dd><StatusBadge value={vehicle.status} /></dd></div>
@@ -6223,7 +6291,7 @@ function vehicleFields(lookups, allHubs = [], domain = 'Land', existingPhotoUrl 
 
   return [
     { label: 'Vehicle Name', name: 'vehicle_name', required: true, type: 'text' },
-    { label: 'Plate Number', name: 'plate_number', required: true, type: 'text' },
+    { label: plateFieldLabel(domain), name: 'plate_number', required: true, type: 'text' },
     { label: 'Vehicle Photo', name: 'photo', accept: 'image/*', type: 'file', existingUrl: existingPhotoUrl },
     {
       label: 'Vehicle Type', name: 'category_id', options: lookups.categories ?? [], required: true, type: 'creatable-select',
@@ -6239,7 +6307,6 @@ function vehicleFields(lookups, allHubs = [], domain = 'Land', existingPhotoUrl 
     { label: 'Acquisition Cost (optional)', name: 'acquisition_cost', type: 'number', placeholder: 'e.g. 850000' },
     { label: 'Vehicle Color', name: 'vehicle_color', required: true, type: 'text' },
     ...vehicleDomainFields(domain),
-    { label: 'Estimated Return Date', name: 'estimated_return_date', type: 'date' },
     {
       label: 'Current Location', name: 'current_location', options: hubOptions, required: true, type: 'select',
       // Full-width (not inline in the select's own half-column) — this map
@@ -7038,36 +7105,67 @@ function conditionColumns(role, onEdit, deleteRecord, onCreateTicketFromConditio
   return columns;
 }
 
-// Quick-glance companion to the stat row — the newest report's vehicle,
-// reporter, and severity, so "what just came in" doesn't require opening
-// the table. Sourced from the unfiltered list, so a search/filter that
-// hides the newest report from the table below doesn't also blank this.
-function LatestIssueCard({ issue }) {
-  if (!issue) {
-    return (
-      <aside className="panel latest-issue-card is-empty">
-        <span className="latest-issue-card-label">Latest Report</span>
-        <p className="empty-state" style={{ margin: 0 }}>No issues reported yet.</p>
-      </aside>
-    );
+// "X ago" — coarse, single-unit relative time (seconds up to years), the
+// same granularity a typical activity-feed timestamp uses.
+function timeAgo(value) {
+  if (!value) return '';
+  const then = new Date(value).getTime();
+  if (Number.isNaN(then)) return '';
+  const seconds = Math.max(0, Math.floor((Date.now() - then) / 1000));
+  const units = [
+    ['year', 31536000],
+    ['month', 2592000],
+    ['week', 604800],
+    ['day', 86400],
+    ['hour', 3600],
+    ['minute', 60],
+  ];
+  for (const [unit, secondsInUnit] of units) {
+    const count = Math.floor(seconds / secondsInUnit);
+    if (count >= 1) return `${count} ${unit}${count > 1 ? 's' : ''} ago`;
   }
+  return 'Just now';
+}
+
+// Quick-glance companion to the stat row — a scrollable activity timeline of
+// the newest reports (vehicle, issue, reporter), so "what's come in
+// recently" doesn't require scrolling the full table below. Sourced from the
+// unfiltered list, so a search/filter on the main table doesn't empty it out.
+function LatestIssueCard({ issues = [], onRowClick }) {
+  const sorted = useMemo(
+    () => [...issues].sort((a, b) => (b.issue_report_id ?? 0) - (a.issue_report_id ?? 0)),
+    [issues]
+  );
 
   return (
-    <aside className="panel latest-issue-card">
+    <aside className="panel latest-issue-card latest-issue-timeline">
       <div className="latest-issue-card-head">
-        <span className="latest-issue-card-label">Latest Report</span>
-        <DateBadge value={issue.created_at} />
+        <span className="latest-issue-card-label">Latest Reports</span>
+        <span className="count-badge">{issues.length}</span>
       </div>
-      <strong className="latest-issue-card-title">{issue.issue_type ?? 'Unspecified issue'}</strong>
-      <div className="latest-issue-card-row">
-        <VehicleCell vehicle={issue.vehicle} />
-      </div>
-      <div className="latest-issue-card-row">
-        <UserAvatarName user={issue.reported_by} fallback="Unknown reporter" />
-      </div>
-      <div className="latest-issue-card-tags">
-        <TicketStatusBadge value={issue.severity_level} />
-        <StatusBadge value={issue.status} />
+      <div className="latest-issue-timeline-list">
+        {sorted.length === 0 ? (
+          <p className="muted">No issues reported yet.</p>
+        ) : (
+          sorted.map((row) => (
+            <button
+              key={row.issue_report_id}
+              type="button"
+              className="latest-issue-timeline-item"
+              onClick={() => onRowClick?.(row)}
+            >
+              <span className="latest-issue-timeline-dot" />
+              <span className="latest-issue-timeline-icon"><Icon name="mail" size={16} /></span>
+              <span className="latest-issue-timeline-body">
+                <strong>{row.vehicle?.vehicle_name ?? 'Unknown vehicle'}</strong>
+                <span className="muted">
+                  {row.issue_type ?? 'Unspecified issue'} reported by {row.reported_by?.name ?? 'Unknown reporter'}.
+                </span>
+              </span>
+              <span className="latest-issue-timeline-time">{timeAgo(row.created_at)}</span>
+            </button>
+          ))
+        )}
       </div>
     </aside>
   );
@@ -9071,6 +9169,35 @@ function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, on
   const canClose = ticket.status === 'Active' && allResolved;
   const canDecisionClose = ticket.status === 'Active' && hasUnresolved;
   const isAdmin = role === 'Admin';
+  const resolvedCount = subIssues.filter((s) => isResolvedStatus(s.status)).length;
+  const unresolvedCount = Math.max(0, progress.total - resolvedCount);
+  const pendingMechanicCount = subIssues.filter((s) => s.status === 'Open').length;
+  const inRepairCount = subIssues.filter((s) => s.status === 'Under Repair').length;
+  const awaitingVerificationCount = subIssues.filter((s) => s.status === 'For Inspection').length;
+  const awaitingConfirmationCount = subIssues.filter((s) => s.status === 'For Confirmation').length;
+  const ticketCost = subIssues.reduce((sum, s) => sum + (Number(s.maintenance_cost) || 0), 0);
+  const resolvedPercent = progress.total > 0
+    ? Math.round((resolvedCount / progress.total) * 100)
+    : ticket.status === 'Closed' ? 100 : 0;
+  const nextSignal = (() => {
+    if (ticket.status === 'Cancelled') return { tone: 'alert', label: 'Ticket cancelled', detail: 'Restore it only if work needs to resume.' };
+    if (ticket.status === 'Closed') return { tone: 'ok', label: 'Closed', detail: 'All recorded work is complete.' };
+    if (canClose) return { tone: 'ok', label: 'Ready to close', detail: 'Return the vehicle once the final close is recorded.' };
+    if (canDecisionClose) return { tone: 'warn', label: 'Decision needed', detail: `${unresolvedCount} unresolved item${unresolvedCount === 1 ? '' : 's'} must be finished, deferred, or decision-closed.` };
+    if (ticket.status === 'Open') return { tone: 'active', label: 'Inspection first', detail: ticket.assigned_custodian?.name ? `${ticket.assigned_custodian.name} owns the inspection step.` : 'Assign and complete the custodian inspection.' };
+    if (pendingMechanicCount > 0) return { tone: 'warn', label: 'Dispatch mechanic', detail: `${pendingMechanicCount} sub-issue${pendingMechanicCount === 1 ? '' : 's'} still need assignment.` };
+    if (inRepairCount > 0) return { tone: 'active', label: 'Repair in progress', detail: `${inRepairCount} work order${inRepairCount === 1 ? '' : 's'} waiting for repair logs.` };
+    if (awaitingVerificationCount > 0) return { tone: 'active', label: 'Verify repair', detail: `${awaitingVerificationCount} item${awaitingVerificationCount === 1 ? '' : 's'} awaiting custodian verification.` };
+    if (awaitingConfirmationCount > 0) return { tone: 'active', label: 'Confirm outcome', detail: `${awaitingConfirmationCount} repair${awaitingConfirmationCount === 1 ? '' : 's'} awaiting final admin verdict.` };
+    return { tone: 'active', label: 'Work in motion', detail: 'Follow the active handoff shown in the repair board.' };
+  })();
+  const processStats = [
+    { icon: 'list', label: 'Sub-issues', value: progress.total },
+    { icon: 'checkCircle', label: 'Resolved', value: resolvedCount },
+    { icon: 'wrench', label: 'In repair', value: inRepairCount },
+    { icon: 'flag', label: 'Confirm', value: awaitingConfirmationCount },
+    { icon: 'clipboard', label: 'Cost', value: ticketCost ? `PHP ${ticketCost.toLocaleString('en-US', { minimumFractionDigits: 2 })}` : 'PHP 0.00' },
+  ];
 
   // Adding a sub-issue requires firsthand contact with the vehicle — the
   // assigned Custodian, or a mechanic currently working one of its
@@ -9108,89 +9235,98 @@ function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, on
 
   const panel = (
       <div className={`ticket-detail-panel${asPage ? ' is-page' : ''}`} onClick={asPage ? undefined : (e) => e.stopPropagation()}>
-        <div className="ticket-detail-header">
-          <div>
-            <span className="ticket-detail-id">Ticket #{ticket.ticket_id}</span>
+        <section className={`ticket-process-hero is-${nextSignal.tone}`}>
+          <div className="ticket-process-hero-main">
+            <div className="ticket-process-kicker">
+              <span>Ticket #{ticket.ticket_id}</span>
+              {typeof daysOpen === 'number' && (
+                <span>{daysOpen === 0 ? 'Opened today' : `${daysOpen} day${daysOpen === 1 ? '' : 's'} open`}</span>
+              )}
+            </div>
             <h3 className="ticket-detail-title">{ticket.ticket_title}</h3>
-            {/* Tier 1 — real status chips only: the ticket's state, its
-                priority, and any genuine warnings (aging / recurring). Routine
-                facts (age, created date, progress) drop to the quiet metadata
-                line below so nothing competes with the two states that matter. */}
             <div className="ticket-detail-meta">
               <TicketStatusBadge value={ticket.status} size="large" />
               <TicketStatusBadge value={ticket.priority} />
               <TicketStageBadge ticket={ticket} variant="pill" />
               {isAging && (
-                <span className="status-badge ticket-cancelled" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }} title="This ticket has been open a long time — resolve or close it.">
-                  <Icon name="alert" size={12} /> Aging — open {daysOpen} days
+                <span className="status-badge ticket-cancelled" title="This ticket has been open a long time; resolve or close it.">
+                  <Icon name="alert" size={12} /> Aging: {daysOpen} days
                 </span>
               )}
               {ticket.recurrence_count > 0 && (
-                <span className="status-badge rework-warning" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }} title="This Main Issue was already fixed on this vehicle recently — a recurring failure.">
-                  <Icon name="undo" size={12} /> Recurring — {ticket.recurrence_count + 1}
+                <span className="status-badge rework-warning" title="This Main Issue was already fixed on this vehicle recently; a recurring failure.">
+                  <Icon name="undo" size={12} /> Recurring: {ticket.recurrence_count + 1}
                   {['st', 'nd', 'rd'][ticket.recurrence_count] ?? 'th'} time
                 </span>
               )}
             </div>
-
-            {/* Tier 2 — quiet reference metadata: no pills, muted text with dot
-                separators, read as a caption under the status chips. */}
             <div className="ticket-detail-subline">
-              {typeof daysOpen === 'number' && !isAging && (
-                <span><Icon name="calendar" size={12} /> {daysOpen === 0 ? 'Opened today' : `Opened ${daysOpen} day${daysOpen === 1 ? '' : 's'} ago`}</span>
-              )}
               {ticket.created_at && (
                 <span><Icon name="clipboard" size={12} /> Created {formatDate(ticket.created_at)}</span>
               )}
               {progress.total > 0 && (
-                <span className={progress.done === progress.total ? 'is-complete' : undefined}>
-                  <Icon name="checkCircle" size={12} /> {progress.done} of {progress.total} done{progress.deferred > 0 ? ` · ${progress.deferred} deferred` : ''}
+                <span className={resolvedCount === progress.total ? 'is-complete' : undefined}>
+                  <Icon name="checkCircle" size={12} /> {resolvedCount} of {progress.total} resolved{progress.deferred > 0 ? ` / ${progress.deferred} deferred` : ''}
                 </span>
               )}
+              {ticket.vehicle?.vehicle_name && (
+                <span><Icon name="vehicle" size={12} /> {ticket.vehicle.vehicle_name}</span>
+              )}
+            </div>
+            <p className="ticket-process-description">{ticket.ticket_description || 'No description provided.'}</p>
+          </div>
+
+          <div className="ticket-process-meter" style={{ '--ticket-progress': `${resolvedPercent}%` }}>
+            <div className="ticket-process-meter-core">
+              <span>Resolved</span>
+              <strong>{resolvedPercent}%</strong>
+              <small>{resolvedCount}/{progress.total || 0} items</small>
             </div>
           </div>
-          {/* As a full page, the breadcrumb above already says "back to
-              Maintenance Tickets" and the sidebar is always one click away —
-              a redundant arrow here just duplicates that. Only the modal
-              variant (opened over another page) needs its own close button. */}
-          {asPage ? null : (
-            <button className="icon-btn" onClick={onClose} type="button" title="Close" aria-label="Close"><Icon name="close" size={18} /></button>
-          )}
-        </div>
+
+          <div className="ticket-process-next-card">
+            {asPage ? null : (
+              <button className="icon-btn ticket-process-close" onClick={onClose} type="button" title="Close" aria-label="Close"><Icon name="close" size={18} /></button>
+            )}
+            <span className="ticket-process-next-label">Next best action</span>
+            <strong>{nextSignal.label}</strong>
+            <p>{nextSignal.detail}</p>
+            <div className="ticket-process-stat-grid">
+              {processStats.map((stat) => (
+                <div key={stat.label} className="ticket-process-stat">
+                  <Icon name={stat.icon} size={14} />
+                  <span>{stat.label}</span>
+                  <strong>{stat.value}</strong>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
 
         {ticket.status === 'Cancelled' ? (
-          <p className="notice danger" style={{ margin: '12px 20px', display: 'flex', alignItems: 'center', gap: 8 }}><Icon name="alert" size={15} /> This ticket was cancelled.</p>
+          <p className="notice danger ticket-process-cancelled"><Icon name="alert" size={15} /> This ticket was cancelled.</p>
         ) : (
-          <div className="ticket-progress-tracker" role="list" aria-label="Ticket progress">
+          <div className="ticket-process-flow" role="list" aria-label="Ticket progress">
             {phaseOrder.map((s, i) => {
               const current = phaseOrder.indexOf(ticket.status);
               const state = i < current ? 'done' : i === current ? 'active' : 'upcoming';
+              const hint = {
+                Open: 'Custodian inspection',
+                Active: 'Repair, verify, confirm',
+                Closed: 'Return or archive',
+              }[s];
               return (
-                <div key={s} className={`ticket-progress-step is-${state}`} role="listitem">
-                  <span className="ticket-progress-marker">
-                    {state === 'done' ? (
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round">
-                        <polyline points="20 6 9 17 4 12" />
-                      </svg>
-                    ) : (
-                      <span className="ticket-progress-dot" />
-                    )}
+                <div key={s} className={`ticket-process-flow-step is-${state}`} role="listitem">
+                  <span className="ticket-process-flow-marker" style={state === 'active' ? { background: PHASE_STEP_COLORS[s], borderColor: PHASE_STEP_COLORS[s] } : undefined}>
+                    {state === 'done' ? <Icon name="checkCircle" size={15} /> : <Icon name={PHASE_STEP_ICONS[s]} size={15} />}
                   </span>
-                  <span className="ticket-progress-label">
-                    <Icon
-                      name={PHASE_STEP_ICONS[s]}
-                      size={13}
-                      style={state !== 'upcoming' ? { color: PHASE_STEP_COLORS[s] } : undefined}
-                    />
-                    {s}
-                  </span>
-                  <span className="ticket-progress-stage">Stage {i + 1}</span>
+                  <span className="ticket-process-flow-label" style={state !== 'upcoming' ? { color: PHASE_STEP_COLORS[s] } : undefined}>{s}</span>
+                  <small>{hint}</small>
                 </div>
               );
             })}
           </div>
         )}
-
         <div className="ticket-detail-body ticket-detail-body-columns">
           <div className="ticket-detail-col-left">
             <section className="ticket-section">
@@ -10272,7 +10408,7 @@ function readinessChecklist(vehicle) {
 
 const READINESS_BADGE = {
   ready:          { label: 'Ready to respond', bg: '#ecfdf5', color: '#065f46', border: '#a7f3d0', icon: 'checkCircle' },
-  stale:          { label: 'Check stale — re-check', bg: '#fef3c7', color: '#92400e', border: '#fde68a', icon: 'alert' },
+  stale:          { label: 'Readiness check', bg: '#fef3c7', color: '#92400e', border: '#fde68a', icon: 'alert' },
   not_ready:      { label: 'NOT ready to respond', bg: '#fee2e2', color: '#b91c1c', border: '#fecaca', icon: 'alert' },
   unchecked:      { label: 'Never checked', bg: '#f1f5f9', color: '#475569', border: '#cbd5e1', icon: 'alert' },
   in_maintenance: { label: 'In maintenance', bg: '#fff7ed', color: '#9a3412', border: '#fed7aa', icon: 'wrench' },
@@ -10700,8 +10836,21 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, canManage = false, ca
   const [readiness, setReadiness] = useState(null);
   const [checkingReadiness, setCheckingReadiness] = useState(false);
   const [reliability, setReliability] = useState(null);
+  // Live-tracks the Edit form's Vehicle Type select so switching a vehicle
+  // to a Water category shows Hull Material/Engine Type immediately,
+  // instead of only after saving and reloading. Reset whenever a different
+  // vehicle's edit form opens (see the effect below).
+  const [editCategoryId, setEditCategoryId] = useState(null);
 
   const vehicle = (lookups.vehicles ?? []).find((v) => String(v.vehicle_id) === String(vehicleId));
+
+  useEffect(() => {
+    setEditCategoryId(vehicle?.category_id ?? null);
+    // Deliberately keyed off vehicle_id only, not category_id — the latter
+    // is exactly what this state tracks live while editing; including it
+    // here would reset every live change right back.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vehicle?.vehicle_id]);
 
   // Load every related dataset up front so the overview's analytics (donut,
   // cost-by-record) can tally maintenance/ticket/issue counts for this
@@ -10908,9 +11057,17 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, canManage = false, ca
           <div className="veh-card-head"><Icon name="edit" size={16} /><h4>Edit Vehicle Information</h4></div>
           <div className="form-grid-2col veh-edit-body">
             <SmartForm
-              fields={vehicleFields(lookups, allHubs, vehicle.category?.domain ?? 'Land', vehicle.photo_url)}
+              fields={vehicleFields(
+                lookups,
+                allHubs,
+                lookups.categories?.find((c) => String(c.category_id) === String(editCategoryId))?.domain
+                  ?? vehicle.category?.domain
+                  ?? 'Land',
+                vehicle.photo_url
+              )}
               initialValues={vehicle}
               key={vehicle.vehicle_id}
+              onValuesChange={(vals) => setEditCategoryId(vals.category_id)}
               onCancel={() => setEditing(false)}
               onSubmit={handleSave}
               submitLabel="Save Changes"
@@ -10923,7 +11080,7 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, canManage = false, ca
       <div className="veh-dash">
         <div className="veh-dash-left">
           <section className="veh-card veh-info">
-            <div className="veh-card-head"><Icon name="vehicle" size={16} /><h4>Vehicle Information</h4></div>
+            <div className="veh-card-head"><Icon name={vehicleIconName(vehicle.category?.domain)} size={16} /><h4>Vehicle Information</h4></div>
             <div className="veh-info-body">
               <div className="veh-info-identity">
                 <h3>{vehicle.vehicle_name}</h3>
@@ -11055,7 +11212,7 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, canManage = false, ca
             <div className="veh-print-info">
               <div className="veh-report-band">Vehicle Information</div>
               <dl className="veh-report-grid">
-                <div><dt>Plate Number</dt><dd>{vehicle.plate_number}</dd></div>
+                <div><dt>{plateFieldLabel(vehicle.category?.domain)}</dt><dd>{vehicle.plate_number}</dd></div>
                 <div><dt>Vehicle Name</dt><dd>{vehicle.vehicle_name}</dd></div>
                 <div><dt>Vehicle Type</dt><dd>{vehicle.category?.category_name ?? 'Unassigned'}</dd></div>
                 <div><dt>Brand / Model</dt><dd>{`${vehicle.brand ?? '-'} ${vehicle.model ?? ''}`.trim() || '-'}</dd></div>

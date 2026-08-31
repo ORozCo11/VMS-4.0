@@ -7,21 +7,25 @@ use Illuminate\Support\Str;
 
 class RegistrationSetting extends Model
 {
-    protected $fillable = ['staff_code'];
+    protected $fillable = ['barangay_id', 'staff_code'];
 
     /**
-     * There's only ever one row. Fetch it (creating one with a fresh code
-     * if, somehow, none exists yet) instead of every caller having to
-     * know that.
+     * One row per barangay. Fetch it (lazily creating one with a fresh code
+     * the first time it's needed — e.g. the moment that barangay's brand
+     * new Admin first opens the Users module) instead of every caller
+     * having to know that.
      */
-    public static function current(): self
+    public static function for(int $barangayId): self
     {
-        return static::first() ?? static::create(['staff_code' => static::generateCode()]);
+        return static::firstOrCreate(
+            ['barangay_id' => $barangayId],
+            ['staff_code' => static::generateCode()]
+        );
     }
 
-    public static function regenerate(): self
+    public static function regenerateFor(int $barangayId): self
     {
-        $setting = static::current();
+        $setting = static::for($barangayId);
         $setting->update(['staff_code' => static::generateCode()]);
         return $setting;
     }

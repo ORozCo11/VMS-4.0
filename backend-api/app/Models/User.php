@@ -7,7 +7,7 @@ use Illuminate\Notifications\Notifiable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 
 // CHANGE THIS LINE to use Laravel's built-in token trait instead:
-use Laravel\Sanctum\HasApiTokens; 
+use Laravel\Sanctum\HasApiTokens;
 
 class User extends Authenticatable
 {

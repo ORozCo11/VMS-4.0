@@ -11,6 +11,7 @@ const roleRoutes = {
   Admin: '/admin',
   Custodian: '/custodian',
   'Maintenance Personnel': '/maintenance',
+  'Super Admin': '/superadmin',
 };
 
 const emptyForm = {
@@ -48,6 +49,13 @@ function Register() {
   const [submitting, setSubmitting] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  // null = not checked yet. true/false once we know whether this barangay
+  // already has anyone registered — drives whether the role/staff-code
+  // fields even need to be shown, and doubles as the client-side hint for
+  // "you'll become this barangay's Administrator". The backend
+  // independently re-derives this at submit time regardless of what this
+  // says — this is purely a UX preview, never the source of truth.
+  const [isFirstForBarangay, setIsFirstForBarangay] = useState(null);
 
   useEffect(() => {
     api.get('/provinces')
@@ -71,6 +79,26 @@ function Register() {
       .then((response) => setBarangays(response.data))
       .catch(() => setBarangays([]));
   }, [form.city_id]);
+
+  // Live "will I become this barangay's Admin?" preview. Instant for a
+  // dropdown pick (a discrete choice); debounced for free-typed names so it
+  // doesn't fire on every keystroke.
+  useEffect(() => {
+    if (!form.city_id || (!form.barangay_id && !form.barangay_name.trim())) {
+      setIsFirstForBarangay(null);
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      const params = { city_id: form.city_id };
+      if (form.barangay_id) params.barangay_id = form.barangay_id;
+      else params.barangay_name = form.barangay_name.trim();
+      api.get('/registration-status', { params })
+        .then((response) => { if (!cancelled) setIsFirstForBarangay(response.data.is_first); })
+        .catch(() => { if (!cancelled) setIsFirstForBarangay(null); });
+    }, form.barangay_id ? 0 : 500);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [form.city_id, form.barangay_id, form.barangay_name]);
 
   if (token && user) {
     return <Navigate to={roleRoutes[user.role] ?? '/unauthorized'} replace />;
@@ -158,13 +186,15 @@ function Register() {
       setError('Street address is required.');
       return;
     }
-    if (!form.requested_role) {
-      setError('Please select whether you are a Custodian or Maintenance Personnel.');
-      return;
-    }
-    if (!form.staff_code.trim()) {
-      setError('Please enter the staff registration code given to you by your barangay office.');
-      return;
+    if (!isFirstForBarangay) {
+      if (!form.requested_role) {
+        setError('Please select whether you are a Custodian or Maintenance Personnel.');
+        return;
+      }
+      if (!form.staff_code.trim()) {
+        setError('Please enter the staff registration code given to you by your barangay office.');
+        return;
+      }
     }
     if (form.password.length < 8) {
       setError('Password must be at least 8 characters.');
@@ -364,6 +394,12 @@ function Register() {
               </div>
             </label>
 
+            {isFirstForBarangay === true && (
+              <p className="notice success auth-field-full">
+                You&apos;ll be the first to register here — you&apos;ll become this barangay&apos;s Administrator.
+              </p>
+            )}
+
             <label className="auth-field auth-field-full">
               <span>Street Address</span>
               <div className="auth-input-wrapper auth-input-plain">
@@ -379,36 +415,40 @@ function Register() {
               </div>
             </label>
 
-            <label className="auth-field">
-              <span>I am a...</span>
-              <div className="auth-input-wrapper auth-input-plain">
-                <select
-                  name="requested_role"
-                  onChange={handleChange}
-                  required
-                  value={form.requested_role}
-                >
-                  <option value="" disabled>Select your role</option>
-                  <option value="Custodian">Custodian</option>
-                  <option value="Maintenance Personnel">Maintenance Personnel</option>
-                </select>
-              </div>
-            </label>
+            {isFirstForBarangay !== true && (
+              <>
+                <label className="auth-field">
+                  <span>I am a...</span>
+                  <div className="auth-input-wrapper auth-input-plain">
+                    <select
+                      name="requested_role"
+                      onChange={handleChange}
+                      required
+                      value={form.requested_role}
+                    >
+                      <option value="" disabled>Select your role</option>
+                      <option value="Custodian">Custodian</option>
+                      <option value="Maintenance Personnel">Maintenance Personnel</option>
+                    </select>
+                  </div>
+                </label>
 
-            <label className="auth-field">
-              <span>Staff Registration Code</span>
-              <div className="auth-input-wrapper auth-input-plain">
-                <input
-                  autoComplete="off"
-                  name="staff_code"
-                  onChange={handleChange}
-                  placeholder="Given to you by your barangay office"
-                  required
-                  type="text"
-                  value={form.staff_code}
-                />
-              </div>
-            </label>
+                <label className="auth-field">
+                  <span>Staff Registration Code</span>
+                  <div className="auth-input-wrapper auth-input-plain">
+                    <input
+                      autoComplete="off"
+                      name="staff_code"
+                      onChange={handleChange}
+                      placeholder="Given to you by your barangay office"
+                      required
+                      type="text"
+                      value={form.staff_code}
+                    />
+                  </div>
+                </label>
+              </>
+            )}
 
             <label className="auth-field">
               <span>Password</span>

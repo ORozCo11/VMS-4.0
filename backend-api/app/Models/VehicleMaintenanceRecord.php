@@ -2,10 +2,13 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\ScopedThroughVehicle;
 use Illuminate\Database\Eloquent\Model;
 
 class VehicleMaintenanceRecord extends Model
 {
+    use ScopedThroughVehicle;
+
     protected $primaryKey = 'maintenance_id';
 
     protected $fillable = [

@@ -2,10 +2,13 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\ScopedThroughVehicle;
 use Illuminate\Database\Eloquent\Model;
 
 class VehicleLocation extends Model
 {
+    use ScopedThroughVehicle;
+
     protected $primaryKey = 'location_record_id';
 
     protected $fillable = [
