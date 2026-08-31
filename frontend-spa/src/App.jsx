@@ -7,6 +7,7 @@ import Terms from './views/Terms';
 import About from './views/About';
 import Developers from './views/Developers';
 import Workspace from './views/Workspace';
+import SuperAdminWorkspace from './views/SuperAdminWorkspace';
 import './App.css';
 
 function Unauthorized() {
@@ -54,6 +55,14 @@ function App() {
           element={
             <ProtectedRoute allowedRoles={['Maintenance Personnel']}>
               <Workspace />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/superadmin/*"
+          element={
+            <ProtectedRoute allowedRoles={['Super Admin']}>
+              <SuperAdminWorkspace />
             </ProtectedRoute>
           }
         />

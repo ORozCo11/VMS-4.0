@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\ScopedThroughVehicle;
 use Illuminate\Database\Eloquent\Model;
 
 /**
@@ -11,6 +12,8 @@ use Illuminate\Database\Eloquent\Model;
  */
 class VehicleReadinessCheck extends Model
 {
+    use ScopedThroughVehicle;
+
     protected $primaryKey = 'readiness_check_id';
 
     protected $fillable = [

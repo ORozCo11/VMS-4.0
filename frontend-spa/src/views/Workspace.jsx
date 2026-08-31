@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useMemo, useRef, useState, createContext } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef, useState, createContext, Fragment } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate, useLocation } from 'react-router-dom';
 import api from '../api/axios';
@@ -20,6 +20,7 @@ const roleRoutes = {
   Admin: '/admin',
   Custodian: '/custodian',
   'Maintenance Personnel': '/maintenance',
+  'Super Admin': '/superadmin',
 };
 
 // Sidebar structure, grouped into collapsible sections. `section: null` means
@@ -65,6 +66,7 @@ const modulesByRole = {
     { section: 'Monitoring & Schedules', items: [
       ['conditions', 'Condition Monitoring'],
       ['maintenanceStatus', 'Maintenance Status'],
+      ['maintenance', 'Maintenance Records'],
     ] },
   ],
   'Maintenance Personnel': [
@@ -464,13 +466,40 @@ function Workspace() {
   const [userInfoTarget, setUserInfoTarget] = useState(null);
   const [confirmDialog, setConfirmDialog] = useState(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
+  // First-time approval only — a pending self-registration's role is a
+  // request, not yet real, so Admin reviews/confirms it here instead of
+  // the plain yes/no ConfirmDialog every other activate/deactivate uses.
+  const [approvalTarget, setApprovalTarget] = useState(null);
+  // The Staff Registration Code the barangay office hands to real staff —
+  // Admin-only, fetched once so it's ready whenever they open Users.
+  const [registrationCode, setRegistrationCode] = useState(null);
+  useEffect(() => {
+    if (!hasRole(user, 'Admin')) return;
+    api.get('/registration-settings').then((res) => setRegistrationCode(res.data.staff_code)).catch(() => {});
+  }, [user]);
   const [notifications, setNotifications] = useState([]);
   const [showNotifications, setShowNotifications] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [filterCategory, setFilterCategory] = useState('');
-  const [filterCapacity, setFilterCapacity] = useState('');
-  const [filterStatus, setFilterStatus] = useState('');
-  const [filterPriority, setFilterPriority] = useState('');
+  const [filterCategory, setFilterCategory] = useState([]);
+  const [filterCapacity, setFilterCapacity] = useState([]);
+  const [filterStatus, setFilterStatus] = useState([]);
+  const [filterPriority, setFilterPriority] = useState([]);
+  // Advanced filter — Vehicle Management only (see FilterBar's `showAdvanced`).
+  const [filterLocation, setFilterLocation] = useState([]);
+  const [filterDomain, setFilterDomain] = useState([]);
+  // Module-specific extra filter dimensions — each only read/written by its
+  // own activeModule branch below, but declared centrally alongside the
+  // rest so the module-switch reset effect can clear them all in one place.
+  const [filterReadiness, setFilterReadiness] = useState([]); // vehicles: Ready to Respond
+  const [filterIssueType, setFilterIssueType] = useState([]); // issues
+  const [filterMaintType, setFilterMaintType] = useState([]); // maintenance
+  const [filterSource, setFilterSource] = useState([]); // maintenance
+  const [filterActive, setFilterActive] = useState([]); // users
+  const [filterAssignedTo, setFilterAssignedTo] = useState([]); // schedules
+  const [filterVerdict, setFilterVerdict] = useState([]); // ticketVerifications
+  const [filterCheckedBy, setFilterCheckedBy] = useState([]); // conditions
+  const [filterDateStart, setFilterDateStart] = useState(''); // issues/maintenance/tickets
+  const [filterDateEnd, setFilterDateEnd] = useState('');
 
   // Ticket Archives date/status filters
   const [archiveDraft, setArchiveDraft] = useState({ start: '', end: '', status: '', quick: '' });
@@ -482,7 +511,7 @@ function Workspace() {
   const [condFilterStartDate, setCondFilterStartDate] = useState('');
   const [condFilterEndDate, setCondFilterEndDate] = useState('');
   // Draft for the condition filter bar — applied only on "Filter" click.
-  const [condDraft, setCondDraft] = useState({ category: '', status: '', start: '', end: '' });
+  const [condDraft, setCondDraft] = useState({ category: [], status: [], capacity: [], checkedBy: [], start: '', end: '' });
   const [prefilledTicketData, setPrefilledTicketData] = useState(null);
   const [prefilledMaintenanceData, setPrefilledMaintenanceData] = useState(null);
   const [allHubs, setAllHubs] = useState([]);
@@ -643,13 +672,25 @@ function Workspace() {
      setReport(null);
      setNotice(null);
      setSearchQuery('');
-     setFilterCategory('');
-     setFilterCapacity('');
-     setFilterStatus('');
-     setFilterPriority('');
+     setFilterCategory([]);
+     setFilterCapacity([]);
+     setFilterStatus([]);
+     setFilterPriority([]);
+     setFilterLocation([]);
+     setFilterDomain([]);
+     setFilterReadiness([]);
+     setFilterIssueType([]);
+     setFilterMaintType([]);
+     setFilterSource([]);
+     setFilterActive([]);
+     setFilterAssignedTo([]);
+     setFilterVerdict([]);
+     setFilterCheckedBy([]);
+     setFilterDateStart('');
+     setFilterDateEnd('');
      setCondFilterStartDate('');
      setCondFilterEndDate('');
-     setCondDraft({ category: '', status: '', start: '', end: '' });
+     setCondDraft({ category: [], status: [], capacity: [], checkedBy: [], start: '', end: '' });
      setArchiveDraft({ start: '', end: '', status: '', quick: '' });
      setArchiveStart('');
      setArchiveEnd('');
@@ -716,8 +757,10 @@ function Workspace() {
       setEditTarget(null);
       setNotice({ type: 'success', text: successMsg });
       await refreshCurrent();
+      return true;
     } catch (error) {
       showError(error, setNotice);
+      return false;
     }
   };
 
@@ -728,8 +771,10 @@ function Workspace() {
       setEditTarget(null);
       setNotice({ type: 'success', text: 'Ticket created & inspection assigned to Custodian.' });
       await refreshCurrent();
+      return true;
     } catch (error) {
       showError(error, setNotice);
+      return false;
     }
   };
 
@@ -859,6 +904,13 @@ function Workspace() {
   };
 
   const toggleUserActive = (row, activate) => {
+    // First-time approval (never approved before) — review the requested
+    // role instead of blindly activating. Re-activating an already-once-
+    // approved account, or deactivating, stays the plain confirm dialog.
+    if (activate && !row.approved_at) {
+      setApprovalTarget(row);
+      return;
+    }
     setConfirmDialog({
       title: 'Confirm Action',
       message: activate
@@ -871,6 +923,24 @@ function Workspace() {
           await api.put(`/users/${row.id}/${activate ? 'activate' : 'deactivate'}`);
           setNotice({ type: 'success', text: activate ? 'User activated.' : 'User deactivated.' });
           await refreshCurrent();
+        } catch (error) {
+          showError(error, setNotice);
+        }
+      },
+    });
+  };
+
+  const regenerateRegistrationCode = () => {
+    setConfirmDialog({
+      title: 'Regenerate Staff Registration Code',
+      message: 'This immediately invalidates the current code — anyone who still has the old one won\'t be able to register until you share the new one.',
+      confirmLabel: 'Regenerate',
+      variant: 'danger',
+      onConfirm: async () => {
+        try {
+          const res = await api.post('/registration-settings/regenerate');
+          setRegistrationCode(res.data.staff_code);
+          setNotice({ type: 'success', text: 'Staff registration code regenerated.' });
         } catch (error) {
           showError(error, setNotice);
         }
@@ -925,14 +995,30 @@ function Workspace() {
     }
   }, [navigate, user.role]);
 
+  // Clears a ticket's "unread updates" badge (Maintenance Tickets card/table
+  // view) the moment it's opened directly from that list — without this,
+  // the badge only ever clears via the notification bell, so opening the
+  // ticket itself wouldn't acknowledge the updates you just saw on it.
+  // Best-effort: a failed mark-as-read just leaves the badge until the next
+  // notifications poll picks it up, not worth surfacing as an error.
+  const markTicketNotificationsRead = useCallback(async (ticketId) => {
+    const toMark = notifications.filter((n) => !n.read_at && String(n.ticket_id) === String(ticketId));
+    if (!toMark.length) return;
+    try {
+      await Promise.all(toMark.map((n) => api.put(`/notifications/${n.notification_id}/read`)));
+      await loadNotifications();
+    } catch { /* best-effort */ }
+  }, [notifications, loadNotifications]);
+
   // Per-cell click targets shared with tables via context. A user cell opens
   // that user's own profile page (carrying the row's user object as fallback so
   // it renders even for roles that can't list all users).
   const openTicketProfile = useCallback((ticket) => {
     if (ticket?.ticket_id) {
       navigate(`${roleRoutes[user.role]}/tickets/${ticket.ticket_id}`);
+      markTicketNotificationsRead(ticket.ticket_id);
     }
-  }, [navigate, user.role]);
+  }, [navigate, user.role, markTicketNotificationsRead]);
 
   const rowActions = useMemo(
     () => ({
@@ -961,10 +1047,15 @@ function Workspace() {
     setNotice(null);
     try {
       const request = moduleRequest('vehicles', null, payload);
-      await sendPayload(request.method, request.path, payload);
+      const response = await sendPayload(request.method, request.path, payload);
       await refreshCurrent();
       setNotice({ type: 'success', text: 'Vehicle added.' });
-      returnToModule('vehicles');
+      const newVehicleId = response?.data?.vehicle_id;
+      if (newVehicleId) {
+        navigate(`${roleRoutes[user.role]}/vehicles/${newVehicleId}`);
+      } else {
+        returnToModule('vehicles');
+      }
     } catch (error) {
       showError(error, setNotice);
     }
@@ -994,20 +1085,23 @@ function Workspace() {
 
       // "+ Add New Issue" was picked on the maintenance form instead of an
       // existing report — file the Issue Report first, then point the
-      // maintenance record at the ID it comes back with.
+      // maintenance record at the ID it comes back with. The new report's
+      // required description/severity aren't asked for a second time in the
+      // "Add New Issue" popup — description reuses this same form's
+      // Problem/Reason (already describing what's wrong), and severity
+      // defaults to Medium since this form has no better signal for it.
       if (moduleKey === 'maintenance' && payload.issue_report_id === '__new_issue__') {
         const { data: newIssue } = await api.post('/issues', {
           vehicle_id: payload.vehicle_id,
           issue_type: payload.new_issue_type,
-          issue_description: payload.new_issue_description,
-          severity_level: payload.new_issue_severity,
+          issue_description: payload.problem_reason,
+          severity_level: 'Medium',
         });
         finalPayload = {
           ...payload,
           issue_report_id: newIssue.issue_report_id,
           new_issue_type: undefined,
-          new_issue_description: undefined,
-          new_issue_severity: undefined,
+          __new_issue_group__: undefined,
         };
       }
 
@@ -1037,27 +1131,54 @@ function Workspace() {
   const visibleRows = useMemo(() => {
     let result = rawRows;
 
-    if (filterCategory) {
+    if (filterCategory.length) {
       result = result.filter((row) => {
         const vehicleObj = row.vehicle || (activeModule === 'vehicles' ? row : null);
         if (!vehicleObj) return false;
-        return String(vehicleObj.category_id) === String(filterCategory);
+        return filterCategory.includes(String(vehicleObj.category_id));
       });
     }
 
-    if (filterCapacity) {
+    if (filterCapacity.length) {
       result = result.filter((row) => {
         const vehicleObj = row.vehicle || (activeModule === 'vehicles' ? row : null);
         if (!vehicleObj) return false;
-        return vehicleObj.capacity === filterCapacity;
+        return filterCapacity.includes(vehicleObj.capacity);
       });
     }
 
-    if (activeModule === 'vehicles' && !filterStatus) {
+    // Location/Domain filters — shared by Vehicle Management and any module
+    // whose rows carry the same fields (Vehicle Location's own current
+    // location; Vehicle Types' own domain).
+    if ((activeModule === 'vehicles' || activeModule === 'locations') && filterLocation.length) {
+      result = result.filter((row) => filterLocation.includes(row.current_location));
+    }
+    if (activeModule === 'schedules' && filterLocation.length) {
+      result = result.filter((row) => filterLocation.includes(row.service_location));
+    }
+    if (activeModule === 'vehicles' && filterDomain.length) {
+      result = result.filter((row) => filterDomain.includes(row.category?.domain));
+    }
+    if (activeModule === 'categories' && filterDomain.length) {
+      result = result.filter((row) => filterDomain.includes(row.domain));
+    }
+
+    // Ready to Respond — a real dropdown, independent of the Status filter
+    // above and the stat-card quick toggles (which write pseudo-values into
+    // filterStatus instead). Retired vehicles stay excluded from both
+    // buckets, matching vehicleStats' own count.
+    if (activeModule === 'vehicles' && filterReadiness.length) {
+      result = result.filter((row) => {
+        if (row.readiness_state === 'retired') return false;
+        return filterReadiness.includes(row.readiness_state === 'ready' ? 'Ready' : 'Not Ready');
+      });
+    }
+
+    if (activeModule === 'vehicles' && !filterStatus.length) {
       result = result.filter((row) => row.status !== 'Inactive');
     }
 
-    if (activeModule === 'schedules' && !filterStatus) {
+    if (activeModule === 'schedules' && !filterStatus.length) {
       // Recurring schedules auto-regenerate every time one is completed
       // (Workflow 15), so Completed rows pile up indefinitely otherwise —
       // default view stays to just what's actually upcoming/actionable.
@@ -1065,67 +1186,130 @@ function Workspace() {
       result = result.filter((row) => row.status === 'Scheduled');
     }
 
-    if (activeModule === 'schedules' && filterStatus === 'MyAssigned') {
+    if (activeModule === 'schedules' && filterStatus.includes('MyAssigned')) {
       result = result.filter((row) => row.status === 'Scheduled' && String(row.assigned_to) === String(user.id));
-    } else if (activeModule === 'schedules' && filterStatus === 'AwaitingVerification') {
+    } else if (activeModule === 'schedules' && filterStatus.includes('AwaitingVerification')) {
       result = result.filter((row) => (
         row.status === 'Completed' && row.resulting_maintenance && row.resulting_maintenance.progress_status !== 'Completed'
       ));
     } else if (activeModule === 'ticketInspections') {
       result = result.filter((row) => (
-        filterStatus === 'Inspected' ? row.status !== 'Open' : row.status === 'Open'
+        filterStatus.includes('Inspected') ? row.status !== 'Open' : row.status === 'Open'
       ));
     } else if (activeModule === 'ticketWorkOrders') {
       result = result.filter((row) => (
-        filterStatus === 'Submitted' ? row.status !== 'Under Repair' : row.status === 'Under Repair'
+        filterStatus.includes('Submitted') ? row.status !== 'Under Repair' : row.status === 'Under Repair'
       ));
     } else if (activeModule === 'ticketVerifications') {
       result = result.filter((row) => (
-        filterStatus === 'Verified' ? row.status !== 'For Inspection' : row.status === 'For Inspection'
+        filterStatus.includes('Verified') ? row.status !== 'For Inspection' : row.status === 'For Inspection'
       ));
-    } else if (activeModule === 'vehicles' && (filterStatus === 'ReadyToRespond' || filterStatus === 'NotReady')) {
+    } else if (activeModule === 'vehicles' && (filterStatus.includes('ReadyToRespond') || filterStatus.includes('NotReady'))) {
       // Retired vehicles are excluded from both buckets up in vehicleStats —
       // match that here too, or "Not Ready" would list units the card's own
       // count didn't include.
       result = result.filter((row) => row.readiness_state !== 'retired').filter((row) => (
-        filterStatus === 'ReadyToRespond' ? row.readiness_state === 'ready' : row.readiness_state !== 'ready'
+        filterStatus.includes('ReadyToRespond') ? row.readiness_state === 'ready' : row.readiness_state !== 'ready'
       ));
-    } else if (filterStatus && activeModule === 'users') {
-      result = result.filter((row) => row.role === filterStatus);
-    } else if (filterStatus) {
+    } else if (filterStatus.length && activeModule === 'users') {
+      result = result.filter((row) => filterStatus.includes(row.role));
+    } else if (filterStatus.length && activeModule === 'locations') {
+      // Location records nest the vehicle status under `.vehicle`, not on
+      // the row itself (the row IS a location snapshot, not a vehicle).
+      result = result.filter((row) => filterStatus.includes(row.vehicle?.status));
+    } else if (filterStatus.length) {
       result = result.filter((row) => {
         const statusVal = row.status ?? row.progress_status ?? row.final_status;
-        return statusVal === filterStatus;
+        return filterStatus.includes(statusVal);
       });
     }
 
-    if (filterPriority) {
+    if (filterPriority.length) {
       result = result.filter((row) => {
         if (activeModule === 'vehicles') {
-          return row.condition === filterPriority;
+          return filterPriority.includes(row.condition);
         }
         if (activeModule === 'issues') {
-          return row.severity_level === filterPriority;
+          return filterPriority.includes(row.severity_level);
         }
         if (activeModule === 'maintenance') {
-          return row.maintenance_personnel?.name === filterPriority;
+          return filterPriority.includes(row.maintenance_personnel?.name);
         }
-        return row.priority === filterPriority;
+        // Verification queue reuses the Priority slot as a Mechanic filter —
+        // the sub-issue's assigned mechanic, not a priority level.
+        if (activeModule === 'ticketVerifications') {
+          return filterPriority.includes(row.assigned_mechanic?.name);
+        }
+        // Work Order queue reuses it as a Maintenance Type filter.
+        if (activeModule === 'ticketWorkOrders') {
+          return filterPriority.includes(row.maintenance_type);
+        }
+        return filterPriority.includes(row.priority);
       });
+    }
+
+    // Maintenance Schedule's own "Assigned To" filter — a dedicated
+    // dimension since Schedules doesn't otherwise use the Priority slot.
+    if (activeModule === 'schedules' && filterAssignedTo.length) {
+      result = result.filter((row) => filterAssignedTo.includes(row.assigned_to_user?.name));
+    }
+
+    if (activeModule === 'issues' && filterIssueType.length) {
+      result = result.filter((row) => filterIssueType.includes(row.issue_type));
+    }
+
+    if (activeModule === 'maintenance') {
+      if (filterMaintType.length) {
+        result = result.filter((row) => filterMaintType.includes(row.maintenance_type));
+      }
+      if (filterSource.length) {
+        result = result.filter((row) => filterSource.includes(row.source));
+      }
+    }
+
+    if (activeModule === 'users' && filterActive.length) {
+      result = result.filter((row) => filterActive.includes(row.is_active ? 'Active' : 'Inactive'));
+    }
+
+    if (activeModule === 'ticketVerifications' && filterVerdict.length) {
+      result = result.filter((row) => filterVerdict.includes(row.verification_verdict));
+    }
+
+    // Date range — same two fields, applied to whichever date column is
+    // meaningful for the active module.
+    if (filterDateStart || filterDateEnd) {
+      const dateField = activeModule === 'maintenance' ? 'date_started'
+        : activeModule === 'tickets' ? 'created_at'
+        : activeModule === 'issues' ? 'created_at'
+        : null;
+      if (dateField) {
+        result = result.filter((row) => {
+          const raw = row[dateField];
+          if (!raw) return false;
+          const rowDate = raw.substring(0, 10);
+          if (filterDateStart && rowDate < filterDateStart) return false;
+          if (filterDateEnd && rowDate > filterDateEnd) return false;
+          return true;
+        });
+      }
     }
 
     if (activeModule === 'conditions') {
-      if (filterCategory) {
+      if (filterCategory.length) {
         result = result.filter((row) => {
           const catId = row.vehicle?.category_id;
-          return catId && String(catId) === String(filterCategory);
+          return catId && filterCategory.includes(String(catId));
         });
       }
 
-      if (filterStatus) {
+      if (filterStatus.length) {
         result = result.filter((row) => {
-          return row.condition_result === filterStatus;
+          return filterStatus.includes(row.condition_result);
         });
+      }
+
+      if (filterCheckedBy.length) {
+        result = result.filter((row) => filterCheckedBy.includes(row.checked_by?.name));
       }
 
       if (condFilterStartDate) {
@@ -1228,7 +1412,7 @@ function Workspace() {
     }
 
     return result;
-  }, [rawRows, searchQuery, filterCategory, filterCapacity, filterStatus, filterPriority, activeModule, condFilterStartDate, condFilterEndDate, archiveStart, archiveEnd, archiveStatusFilter]);
+  }, [rawRows, searchQuery, filterCategory, filterCapacity, filterLocation, filterDomain, filterStatus, filterPriority, filterReadiness, filterIssueType, filterMaintType, filterSource, filterActive, filterAssignedTo, filterVerdict, filterCheckedBy, filterDateStart, filterDateEnd, activeModule, condFilterStartDate, condFilterEndDate, archiveStart, archiveEnd, archiveStatusFilter]);
 
   // Status breakdown for the Vehicle Management stat cards — counted from the
   // full unfiltered fetch so the cards stay accurate regardless of the active
@@ -1373,9 +1557,12 @@ function Workspace() {
   // without logging out and back in. import.meta.env.DEV is compile-time, so
   // this entire block (and its UI below) is stripped from a production build;
   // the backend also 404s the endpoint outside local/testing.
+  //
+  // Deliberately reuses the map boundary selector's own Province/Barangay
+  // dropdowns below (mapProvinceId/mapBarangayId) instead of adding its own
+  // — one barangay picker driving two things is simpler than two pickers
+  // sitting side by side doing almost the same job.
   const [impersonateCandidates, setImpersonateCandidates] = useState([]);
-  // Default the selection to the currently logged-in account, so the dropdown
-  // shows who you are now and the button reads as active (not faded).
   const [impersonateId, setImpersonateId] = useState(user?.id ?? '');
   useEffect(() => {
     if (!import.meta.env.DEV) return;
@@ -1385,6 +1572,17 @@ function Workspace() {
     // full page reload, since this effect would otherwise only ever run once
     // on mount.
   }, [records.users]);
+  // {key, label, users[]} per barangay — key matches mapBarangayId's value
+  // so the same dropdown selection resolves which staff list to show here.
+  const impersonateGroups = useMemo(() => {
+    const groups = {};
+    impersonateCandidates.forEach((u) => {
+      const key = String(u.barangay_id ?? '');
+      const label = u.province_name && u.barangay_name ? `${u.province_name} — ${u.barangay_name}` : 'Unassigned';
+      (groups[key] ??= { label, users: [] }).users.push(u);
+    });
+    return Object.entries(groups).map(([key, g]) => ({ key, ...g }));
+  }, [impersonateCandidates]);
   const doImpersonate = async () => {
     if (!impersonateId) return;
     try {
@@ -1410,6 +1608,42 @@ function Workspace() {
   const [mapBarangays, setMapBarangays] = useState([]);
   const [mapBarangayId, setMapBarangayId] = useState('');
   const [mapBoundaryOverride, setMapBoundaryOverride] = useState(null);
+
+  // DEV-only: the same two dropdowns also drive Impersonate below, so a
+  // barangay with registered staff but no boundary polygon (anything other
+  // than Paknaan today) still needs to show up here, not just barangays
+  // the map can actually draw. Merged in, never replacing the boundary-
+  // sourced list — production keeps working with zero impersonation data.
+  const provinceOptions = useMemo(() => {
+    const byId = new Map(mapProvinces.map((p) => [String(p.id), p]));
+    impersonateCandidates.forEach((u) => {
+      if (u.province_id && !byId.has(String(u.province_id))) {
+        byId.set(String(u.province_id), { id: u.province_id, name: u.province_name });
+      }
+    });
+    return Array.from(byId.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [mapProvinces, impersonateCandidates]);
+  const barangayOptions = useMemo(() => {
+    const byId = new Map(mapBarangays.map((b) => [String(b.id), b]));
+    impersonateCandidates.forEach((u) => {
+      if (u.barangay_id && String(u.province_id) === String(mapProvinceId) && !byId.has(String(u.barangay_id))) {
+        byId.set(String(u.barangay_id), { id: u.barangay_id, name: u.barangay_name });
+      }
+    });
+    return Array.from(byId.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [mapBarangays, impersonateCandidates, mapProvinceId]);
+  // Keeps the Impersonate staff dropdown valid for whichever barangay is
+  // currently selected above — re-runs whenever the barangay changes or the
+  // candidate list itself first loads.
+  const impersonateGroupUsers = impersonateGroups.find((g) => g.key === String(mapBarangayId))?.users ?? [];
+  useEffect(() => {
+    const stillValid = impersonateGroupUsers.some((u) => String(u.id) === String(impersonateId));
+    if (!stillValid) setImpersonateId(impersonateGroupUsers[0]?.id ?? '');
+    // impersonateGroupUsers is a derived array (new reference every render);
+    // keying off mapBarangayId/impersonateCandidates instead avoids re-running
+    // this on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapBarangayId, impersonateCandidates]);
 
   // Fetches one barangay's boundary and sets it as the map override.
   const selectBarangayBoundary = useCallback(async (barangayId) => {
@@ -1482,14 +1716,6 @@ function Workspace() {
     selectBarangayBoundary(barangayId);
   };
 
-  // "Reset" returns to the system's home barangay (Paknaan), not a blank
-  // selection — that's the map's true default state, not an empty one.
-  const resetMapBoundary = () => {
-    const paknaan = mapBarangays.find((b) => b.name === 'Paknaan');
-    setMapBarangayId(paknaan ? String(paknaan.id) : '');
-    selectBarangayBoundary(paknaan?.id);
-  };
-  const isDefaultMapBoundary = mapBarangays.find((b) => String(b.id) === mapBarangayId)?.name === 'Paknaan';
 
   return (
     <FormNoticeContext.Provider value={notice}>
@@ -1515,34 +1741,29 @@ function Workspace() {
               onChange={handleMapProvinceChange}
               value={mapProvinceId}
             >
-              {mapProvinces.map((province) => (
+              {provinceOptions.map((province) => (
                 <option key={province.id} value={province.id}>{province.name}</option>
               ))}
             </select>
             <select
               aria-label="Map boundary barangay"
-              disabled={mapBarangays.length === 0}
+              disabled={barangayOptions.length === 0}
               onChange={handleMapBarangayChange}
               value={mapBarangayId}
             >
-              {mapBarangays.length > 0 ? (
-                mapBarangays.map((barangay) => (
+              {barangayOptions.length > 0 ? (
+                barangayOptions.map((barangay) => (
                   <option key={barangay.id} value={barangay.id}>{barangay.name}</option>
                 ))
               ) : (
                 <option value="">No registered barangay</option>
               )}
             </select>
-            {mapBarangayId && !isDefaultMapBoundary && (
-              <button type="button" onClick={resetMapBoundary} title="Reset to default Paknaan boundary">
-                Reset
-              </button>
-            )}
           </div>
-          {import.meta.env.DEV && impersonateCandidates.length > 0 && (
-            <div className="dev-impersonate" title="Dev only — switch account without logging out. Not present in production.">
+          {import.meta.env.DEV && impersonateGroupUsers.length > 0 && (
+            <div className="dev-impersonate" title="Dev only — switch account without logging out. Not present in production. Staff list follows the barangay picked above.">
               <select value={impersonateId} onChange={(e) => setImpersonateId(e.target.value)} aria-label="Impersonate account">
-                {impersonateCandidates.map((u) => (
+                {impersonateGroupUsers.map((u) => (
                   <option key={u.id} value={u.id} disabled={!u.is_active}>
                     {u.name} · {u.role}{u.is_active ? '' : ' (inactive)'}
                   </option>
@@ -1752,8 +1973,10 @@ function Workspace() {
           </div>
         ) : notice && (
           <div className={`toast-notice ${notice.type}`} role="alert">
-            <Icon name={notice.type === 'success' ? 'checkCircle' : 'alert'} size={16} />
-            <span>{notice.text}</span>
+            <div className="toast-notice-body">
+              <Icon name={notice.type === 'success' ? 'checkCircle' : 'alert'} size={16} />
+              <span>{notice.text}</span>
+            </div>
             {notice.openTickets?.length ? (
               <div className="toast-notice-ticket-links">
                 {notice.openTickets.map((t) => (
@@ -1807,7 +2030,6 @@ function Workspace() {
               canCheckReadiness={hasRole(user, 'Admin') || hasRole(user, 'Custodian')}
               setNotice={setNotice}
               onSaved={refreshCurrent}
-              onViewTicket={openTicketProfile}
               onRequestConfirmation={setConfirmDialog}
             />
           ) : ticketProfileId ? (
@@ -1888,8 +2110,8 @@ function Workspace() {
               description="Directly log external, historical, or third-party vehicle maintenance records and expenses without running the 5-phase ticket workflow."
               onBack={() => { setPrefilledMaintenanceData(null); returnToModule('maintenance'); }}
               fields={(vals) => maintenanceFields(lookups, user.role, vals)}
-              initialValues={editMaintenanceId ? withRepairType((records.maintenance ?? []).find((m) => String(m.maintenance_id) === String(editMaintenanceId))) : (prefilledMaintenanceData ?? EMPTY_OBJ)}
-              onSubmit={(payload) => submitFormPage('maintenance', editMaintenanceId ? { maintenance_id: editMaintenanceId } : null, applyRepairType(payload))}
+              initialValues={editMaintenanceId ? withPerformedBy(withRepairType((records.maintenance ?? []).find((m) => String(m.maintenance_id) === String(editMaintenanceId)))) : (prefilledMaintenanceData ?? EMPTY_OBJ)}
+              onSubmit={(payload) => submitFormPage('maintenance', editMaintenanceId ? { maintenance_id: editMaintenanceId } : null, applyPerformedBy(applyRepairType(payload)))}
               submitLabel={editMaintenanceId ? 'Update Maintenance' : 'Add Maintenance'}
               contextVehicles={lookups.vehicles}
               hubs={allHubs}
@@ -1912,19 +2134,20 @@ function Workspace() {
               initialValues={editUserInitialValues}
               onSubmit={(payload) => submitFormPage('users', editUserId ? { id: editUserId } : null, payload)}
               submitLabel={editUserId ? 'Update User' : 'Add User'}
+              wrapperClassName="user-form-grid"
             />
           ) : logRepairsTicketId ? (
             <LogRepairsPage
               ticket={flattenSubIssueRows(records.ticketWorkOrders).find((r) => String(r.ticket_id) === String(logRepairsTicketId) && String(r.sub_issue_id) === String(logRepairsSubIssueId))}
               onBack={() => returnToModule('ticketWorkOrders')}
-              onSubmit={(subIssueRow, payload) => ticketAction(`/tickets/${subIssueRow.ticket_id}/sub-issues/${subIssueRow.sub_issue_id}/log-repairs`, payload, 'Repair logs submitted. Sent for Custodian verification.').then(() => returnToModule('ticketWorkOrders'))}
+              onSubmit={(subIssueRow, payload) => ticketAction(`/tickets/${subIssueRow.ticket_id}/sub-issues/${subIssueRow.sub_issue_id}/log-repairs`, payload, 'Repair logs submitted. Sent for Custodian verification.').then((ok) => { if (ok) returnToModule('ticketWorkOrders'); })}
             />
           ) : inspectTicketId ? (
             <InspectTicketPage
               ticket={(records.ticketInspections ?? []).find((t) => String(t.ticket_id) === String(inspectTicketId))}
               ticketLookups={ticketLookups}
               onBack={() => returnToModule('ticketInspections')}
-              onSubmit={(ticket, payload) => ticketAction(`/tickets/${ticket.ticket_id}/inspect`, payload, 'Inspection submitted successfully.').then(() => returnToModule('ticketInspections'))}
+              onSubmit={(ticket, payload) => ticketAction(`/tickets/${ticket.ticket_id}/inspect`, payload, 'Inspection submitted successfully.').then((ok) => { if (ok) returnToModule('ticketInspections'); })}
             />
           ) : (loading ? <ModuleLoader /> : renderModule())}
         </div>
@@ -1938,6 +2161,37 @@ function Workspace() {
       onConfirm={handleConfirmDialog}
     />
     {userInfoTarget && <UserInfoModal user={userInfoTarget} onClose={() => setUserInfoTarget(null)} />}
+    <FormModal open={!!approvalTarget} title={`Approve ${approvalTarget?.name ?? ''}`} onClose={() => setApprovalTarget(null)}>
+      {approvalTarget && (
+        <SmartForm
+          fields={[
+            {
+              label: 'Role',
+              name: 'role',
+              options: ['Custodian', 'Maintenance Personnel', 'Admin'],
+              required: true,
+              type: 'select',
+              hint: `${approvalTarget.name} requested "${approvalTarget.role}" at signup — confirm it or pick a different role before activating their account.`,
+            },
+          ]}
+          initialValues={{ role: approvalTarget.role }}
+          onCancel={() => setApprovalTarget(null)}
+          onSubmit={async (payload) => {
+            setNotice(null);
+            try {
+              await api.put(`/users/${approvalTarget.id}/activate`, { role: payload.role });
+              setNotice({ type: 'success', text: 'User activated.' });
+              setApprovalTarget(null);
+              await refreshCurrent();
+            } catch (error) {
+              showError(error, setNotice);
+            }
+          }}
+          submitLabel="Activate"
+          title=""
+        />
+      )}
+    </FormModal>
     </RowActionsContext.Provider>
     </FormNoticeContext.Provider>
   );
@@ -1970,6 +2224,35 @@ function Workspace() {
               onFilterChange={setFilterStatus}
             />
           }
+          filterBar={
+            <FilterBar
+              categories={lookups.categories}
+              vehicles={lookups.vehicles}
+              filterCategory={filterCategory}
+              setFilterCategory={setFilterCategory}
+              filterCapacity={filterCapacity}
+              setFilterCapacity={setFilterCapacity}
+              filterStatus={filterStatus}
+              setFilterStatus={setFilterStatus}
+              filterPriority={filterPriority}
+              setFilterPriority={setFilterPriority}
+              statusOptions={lookups.vehicle_statuses}
+              priorityOptions={lookups.condition_results}
+              priorityLabel="Condition"
+              showAdvanced
+              filterLocation={filterLocation}
+              setFilterLocation={setFilterLocation}
+              filterDomain={filterDomain}
+              setFilterDomain={setFilterDomain}
+              extraFilters={[{
+                key: 'readiness',
+                label: 'Ready to Respond',
+                options: ['Ready', 'Not Ready'],
+                selected: filterReadiness,
+                setSelected: setFilterReadiness,
+              }]}
+            />
+          }
         >
           <div className="panel-header-bar">
             <h3>All Vehicles <span className="count-badge">{visibleRows.length}</span></h3>
@@ -1982,21 +2265,6 @@ function Workspace() {
               onExport={() => exportRowsToCsv('vehicles.csv', VEHICLE_EXPORT_COLUMNS, visibleRows)}
             />
           </div>
-          <FilterBar
-            categories={lookups.categories}
-            vehicles={lookups.vehicles}
-            filterCategory={filterCategory}
-            setFilterCategory={setFilterCategory}
-            filterCapacity={filterCapacity}
-            setFilterCapacity={setFilterCapacity}
-            filterStatus={filterStatus}
-            setFilterStatus={setFilterStatus}
-            filterPriority={filterPriority}
-            setFilterPriority={setFilterPriority}
-            statusOptions={lookups.vehicle_statuses}
-            priorityOptions={lookups.condition_results}
-            priorityLabel="Condition"
-          />
           <PaginatedTable columns={vehicleColumns(user.role, (row) => openVehicleProfile(row, 'edit'), deleteRecord, restoreRecord, filterStatus, openTicketProfile)} rows={visibleRows} onRowClick={openVehicleProfile} emptyMessage="No vehicles here yet — click the + button to register one." />
         </ModulePanel>
       );
@@ -2004,7 +2272,25 @@ function Workspace() {
 
     if (activeModule === 'categories') {
       return (
-        <ModulePanel description="Maintain standard vehicle type choices used across dropdowns.">
+        <ModulePanel
+          description="Maintain standard vehicle type choices used across dropdowns."
+          filterBar={
+            <div className="filter-bar-container">
+              <div className="filter-label"><span>Filters:</span></div>
+              <MultiSelectDropdown
+                placeholder="All Domains (Land/Water)"
+                options={['Land', 'Water']}
+                selected={filterDomain}
+                onChange={setFilterDomain}
+              />
+              {filterDomain.length > 0 && (
+                <button type="button" className="filter-clear-btn" onClick={() => setFilterDomain([])}>
+                  Clear Filters
+                </button>
+              )}
+            </div>
+          }
+        >
           <div className="panel-header-bar">
             <h3>Vehicle Types <span className="count-badge">{visibleRows.length}</span></h3>
             <LocalSearchInput
@@ -2034,7 +2320,49 @@ function Workspace() {
               onFilterChange={setFilterStatus}
             />
           }
+          filterBar={
+            <div className="filter-bar-container">
+              <div className="filter-label"><span>Filters:</span></div>
+              <MultiSelectDropdown
+                placeholder="All Roles"
+                options={['Admin', 'Custodian', 'Maintenance Personnel']}
+                selected={filterStatus}
+                onChange={setFilterStatus}
+              />
+              <MultiSelectDropdown
+                placeholder="All Statuses"
+                options={['Active', 'Inactive']}
+                selected={filterActive}
+                onChange={setFilterActive}
+              />
+              {(filterStatus.length > 0 || filterActive.length > 0) && (
+                <button
+                  type="button"
+                  className="filter-clear-btn"
+                  onClick={() => { setFilterStatus([]); setFilterActive([]); }}
+                >
+                  Clear Filters
+                </button>
+              )}
+            </div>
+          }
         >
+          {hasRole(user, 'Admin') && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '12px 14px', marginBottom: 14, border: '1px solid var(--border-subtle, #e2e8f0)', borderRadius: 8 }}>
+              <div>
+                <strong style={{ display: 'block', fontSize: '0.8rem' }}>Staff Registration Code</strong>
+                <span className="muted" style={{ fontSize: '0.78rem' }}>
+                  Share this with real staff — they need it to register. Regenerating it locks out anyone who only has the old one.
+                </span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+                <code style={{ fontSize: '0.95rem', fontWeight: 700, padding: '6px 12px', background: 'var(--surface-2, #f8fafc)', borderRadius: 6 }}>
+                  {registrationCode ?? '…'}
+                </code>
+                <button className="ghost-button" type="button" onClick={regenerateRegistrationCode}>Regenerate</button>
+              </div>
+            </div>
+          )}
           <div className="panel-header-bar">
             <h3>Users <span className="count-badge">{visibleRows.length}</span></h3>
             <LocalSearchInput
@@ -2102,6 +2430,30 @@ function Workspace() {
 
             {locationsTab === 'records' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <div className="filter-bar-container">
+                  <div className="filter-label"><span>Filters:</span></div>
+                  <MultiSelectDropdown
+                    placeholder="All Statuses"
+                    options={lookups.vehicle_statuses ?? []}
+                    selected={filterStatus}
+                    onChange={setFilterStatus}
+                  />
+                  <MultiSelectDropdown
+                    placeholder="All Locations"
+                    options={[...new Set((lookups.vehicles ?? []).map((v) => v.current_location).filter(Boolean))]}
+                    selected={filterLocation}
+                    onChange={setFilterLocation}
+                  />
+                  {(filterStatus.length > 0 || filterLocation.length > 0) && (
+                    <button
+                      type="button"
+                      className="filter-clear-btn"
+                      onClick={() => { setFilterStatus([]); setFilterLocation([]); }}
+                    >
+                      Clear Filters
+                    </button>
+                  )}
+                </div>
                 <div className="panel-header-bar">
                   <h3>Location Records <span className="count-badge">{locationRows.length}</span></h3>
                   <LocalSearchInput
@@ -2113,10 +2465,11 @@ function Workspace() {
                   />
                 </div>
                 <div style={{ overflowX: 'auto' }}>
-                  <DataTable
+                  <PaginatedTable
                     columns={locationTableColumns}
                     rows={locationRows}
                     onRowClick={(row) => row.vehicle && openVehicleProfile(row.vehicle)}
+                    emptyMessage="No location records yet."
                   />
                 </div>
                 {editTarget !== null && (
@@ -2172,32 +2525,37 @@ function Workspace() {
               </div>
               
               {/* Category Dropdown */}
-              <select
-                className="filter-select"
-                value={condDraft.category}
-                onChange={(e) => setCondDraft((d) => ({ ...d, category: e.target.value }))}
-              >
-                <option value="">All Categories</option>
-                {(lookups.categories ?? []).map((cat) => (
-                  <option key={cat.category_id} value={cat.category_id}>
-                    {cat.category_name}
-                  </option>
-                ))}
-              </select>
+              <MultiSelectDropdown
+                placeholder="All Categories"
+                options={(lookups.categories ?? []).map((cat) => ({ value: String(cat.category_id), label: cat.category_name }))}
+                selected={condDraft.category}
+                onChange={(vals) => setCondDraft((d) => ({ ...d, category: vals }))}
+              />
 
               {/* Condition Dropdown */}
-              <select
-                className="filter-select"
-                value={condDraft.status}
-                onChange={(e) => setCondDraft((d) => ({ ...d, status: e.target.value }))}
-              >
-                <option value="">All Conditions</option>
-                {['Good', 'Needs Inspection', 'Needs Repair', 'Damaged'].map((cond) => (
-                  <option key={cond} value={cond}>
-                    {cond}
-                  </option>
-                ))}
-              </select>
+              <MultiSelectDropdown
+                placeholder="All Conditions"
+                options={['Good', 'Needs Inspection', 'Needs Repair', 'Damaged']}
+                selected={condDraft.status}
+                onChange={(vals) => setCondDraft((d) => ({ ...d, status: vals }))}
+              />
+
+              {/* Capacity Dropdown */}
+              <MultiSelectDropdown
+                placeholder="All Capacities"
+                options={[...new Set((lookups.vehicles ?? []).map((v) => v.capacity).filter(Boolean))]}
+                selected={condDraft.capacity}
+                onChange={(vals) => setCondDraft((d) => ({ ...d, capacity: vals }))}
+              />
+
+              {/* Checked By Dropdown — derived from who's actually logged a
+                  check, not a fixed lookup. */}
+              <MultiSelectDropdown
+                placeholder="All Checked By"
+                options={[...new Set((records.conditions ?? []).map((r) => r.checked_by?.name).filter(Boolean))]}
+                selected={condDraft.checkedBy}
+                onChange={(vals) => setCondDraft((d) => ({ ...d, checkedBy: vals }))}
+              />
 
               {/* From Date */}
               <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
@@ -2228,14 +2586,18 @@ function Workspace() {
                 type="button"
                 className="filter-apply-btn"
                 disabled={
-                  condDraft.category === filterCategory
-                  && condDraft.status === filterStatus
+                  sameSelection(condDraft.category, filterCategory)
+                  && sameSelection(condDraft.status, filterStatus)
+                  && sameSelection(condDraft.capacity, filterCapacity)
+                  && sameSelection(condDraft.checkedBy, filterCheckedBy)
                   && condDraft.start === condFilterStartDate
                   && condDraft.end === condFilterEndDate
                 }
                 onClick={() => {
                   setFilterCategory(condDraft.category);
                   setFilterStatus(condDraft.status);
+                  setFilterCapacity(condDraft.capacity);
+                  setFilterCheckedBy(condDraft.checkedBy);
                   setCondFilterStartDate(condDraft.start);
                   setCondFilterEndDate(condDraft.end);
                 }}
@@ -2244,17 +2606,21 @@ function Workspace() {
               </button>
 
               {/* Clear Filters */}
-              {(filterCategory || filterStatus || condFilterStartDate || condFilterEndDate
-                || condDraft.category || condDraft.status || condDraft.start || condDraft.end) && (
+              {(filterCategory.length || filterStatus.length || filterCapacity.length || filterCheckedBy.length
+                || condFilterStartDate || condFilterEndDate
+                || condDraft.category.length || condDraft.status.length || condDraft.capacity.length || condDraft.checkedBy.length
+                || condDraft.start || condDraft.end) && (
                 <button
                   type="button"
                   className="filter-clear-btn"
                   onClick={() => {
-                    setFilterCategory('');
-                    setFilterStatus('');
+                    setFilterCategory([]);
+                    setFilterStatus([]);
+                    setFilterCapacity([]);
+                    setFilterCheckedBy([]);
                     setCondFilterStartDate('');
                     setCondFilterEndDate('');
-                    setCondDraft({ category: '', status: '', start: '', end: '' });
+                    setCondDraft({ category: [], status: [], capacity: [], checkedBy: [], start: '', end: '' });
                   }}
                 >
                   Clear Filters
@@ -2288,14 +2654,49 @@ function Workspace() {
         <ModulePanel
           description={issueDescription(user.role)}
           statCards={
-            <ModuleStatCards
-              totalLabel="Total Issues"
-              total={issueStats.total}
-              cards={ISSUE_STAT_CARDS}
-              counts={issueStats}
-              activeFilter={filterStatus}
-              onFilterChange={setFilterStatus}
-            />
+            <div className="issue-summary-grid">
+              <div className="issue-summary-stats">
+                <ModuleStatCards
+                  totalLabel="Total Issues"
+                  total={issueStats.total}
+                  cards={ISSUE_STAT_CARDS}
+                  counts={issueStats}
+                  activeFilter={filterStatus}
+                  onFilterChange={setFilterStatus}
+                />
+              </div>
+              <section className="panel module-filter-panel issue-summary-filters">
+                <FilterBar
+                  categories={lookups.categories}
+                  vehicles={lookups.vehicles}
+                  filterCategory={filterCategory}
+                  setFilterCategory={setFilterCategory}
+                  filterCapacity={filterCapacity}
+                  setFilterCapacity={setFilterCapacity}
+                  filterStatus={filterStatus}
+                  setFilterStatus={setFilterStatus}
+                  filterPriority={filterPriority}
+                  setFilterPriority={setFilterPriority}
+                  statusOptions={lookups.issue_statuses}
+                  priorityOptions={lookups.severity_levels}
+                  priorityLabel="Severity"
+                  extraFilters={[{
+                    key: 'issueType',
+                    label: 'Issue Types',
+                    options: lookups.issue_types ?? [],
+                    selected: filterIssueType,
+                    setSelected: setFilterIssueType,
+                  }]}
+                  dateRange={{
+                    start: filterDateStart,
+                    setStart: setFilterDateStart,
+                    end: filterDateEnd,
+                    setEnd: setFilterDateEnd,
+                  }}
+                />
+              </section>
+              <LatestIssueCard issues={records.issues ?? []} onRowClick={(row) => row.vehicle && openVehicleProfile(row.vehicle)} />
+            </div>
           }
         >
           <div className="panel-header-bar">
@@ -2308,21 +2709,6 @@ function Workspace() {
               addLabel="Report Issue"
             />
           </div>
-          <FilterBar
-            categories={lookups.categories}
-            vehicles={lookups.vehicles}
-            filterCategory={filterCategory}
-            setFilterCategory={setFilterCategory}
-            filterCapacity={filterCapacity}
-            setFilterCapacity={setFilterCapacity}
-            filterStatus={filterStatus}
-            setFilterStatus={setFilterStatus}
-            filterPriority={filterPriority}
-            setFilterPriority={setFilterPriority}
-            statusOptions={lookups.issue_statuses}
-            priorityOptions={lookups.severity_levels}
-            priorityLabel="Severity"
-          />
           <PaginatedTable
             columns={issueColumns(user.role, (row) => navigate(`${roleRoutes[user.role]}/issues/${row.issue_report_id}/edit`), handleCreateTicketFromIssue, setUserInfoTarget, (row) => navigate(`${roleRoutes[user.role]}/issues/${row.issue_report_id}`), deleteRecord)}
             emptyMessage="No issues reported — the fleet has no open problems right now."
@@ -2347,6 +2733,46 @@ function Workspace() {
               onFilterChange={setFilterStatus}
             />
           }
+          filterBar={
+            <FilterBar
+              categories={lookups.categories}
+              vehicles={lookups.vehicles}
+              filterCategory={filterCategory}
+              setFilterCategory={setFilterCategory}
+              filterCapacity={filterCapacity}
+              setFilterCapacity={setFilterCapacity}
+              filterStatus={filterStatus}
+              setFilterStatus={setFilterStatus}
+              statusOptions={lookups.maintenance_statuses}
+              statusLabel="Progress"
+              filterPriority={filterPriority}
+              setFilterPriority={setFilterPriority}
+              priorityOptions={(lookups.maintenance_personnel ?? []).map((p) => p.name)}
+              priorityLabel="Mechanic"
+              extraFilters={[
+                {
+                  key: 'maintType',
+                  label: 'Maintenance Types',
+                  options: lookups.maintenance_types ?? [],
+                  selected: filterMaintType,
+                  setSelected: setFilterMaintType,
+                },
+                {
+                  key: 'source',
+                  label: 'Sources',
+                  options: ['Scheduled Maintenance', 'External Shop', 'From Issue Report', 'Field Repair'],
+                  selected: filterSource,
+                  setSelected: setFilterSource,
+                },
+              ]}
+              dateRange={{
+                start: filterDateStart,
+                setStart: setFilterDateStart,
+                end: filterDateEnd,
+                setEnd: setFilterDateEnd,
+              }}
+            />
+          }
         >
           <div className="panel-header-bar">
             <h3>Maintenance Records <span className="count-badge">{visibleRows.length}</span></h3>
@@ -2356,27 +2782,11 @@ function Workspace() {
                 value={searchQuery}
                 onChange={setSearchQuery}
                 placeholder="Search maintenance..."
-                onAdd={(hasRole(user, 'Admin') || hasRole(user, 'Maintenance Personnel')) ? () => navigate(`${roleRoutes[user.role]}/maintenance/new`) : undefined}
+                onAdd={(hasRole(user, 'Admin') || hasRole(user, 'Maintenance Personnel') || hasRole(user, 'Custodian')) ? () => navigate(`${roleRoutes[user.role]}/maintenance/new`) : undefined}
                 addLabel="Add Maintenance"
               />
             </div>
           </div>
-          <FilterBar
-            categories={lookups.categories}
-            vehicles={lookups.vehicles}
-            filterCategory={filterCategory}
-            setFilterCategory={setFilterCategory}
-            filterCapacity={filterCapacity}
-            setFilterCapacity={setFilterCapacity}
-            filterStatus={filterStatus}
-            setFilterStatus={setFilterStatus}
-            statusOptions={lookups.maintenance_statuses}
-            statusLabel="Progress"
-            filterPriority={filterPriority}
-            setFilterPriority={setFilterPriority}
-            priorityOptions={(lookups.maintenance_personnel ?? []).map((p) => p.name)}
-            priorityLabel="Mechanic"
-          />
           {maintenanceViewMode === 'card' ? (
             <PaginatedCardGrid
               items={visibleRows}
@@ -2417,7 +2827,7 @@ function Workspace() {
               onRowClick={(row) => row.vehicle && openVehicleProfile(row.vehicle)}
             />
           </ModulePanel>
-          <FormModal open={!!editTarget} title={`Verify Maintenance #${editTarget?.maintenance_id}`} onClose={() => setEditTarget(null)} confirmClose>
+          <FormModal open={!!editTarget} title={`Verify Maintenance #${editTarget?.maintenance_id}`} onClose={() => setEditTarget(null)}>
             <SmartForm
               fields={verificationFields}
               key={editTarget?.maintenance_id}
@@ -2483,6 +2893,27 @@ function Workspace() {
               onFilterChange={setFilterStatus}
             />
           }
+          filterBar={
+            <FilterBar
+              categories={lookups.categories}
+              vehicles={lookups.vehicles}
+              filterCategory={filterCategory}
+              setFilterCategory={setFilterCategory}
+              filterCapacity={filterCapacity}
+              setFilterCapacity={setFilterCapacity}
+              filterPriority={filterAssignedTo}
+              setFilterPriority={setFilterAssignedTo}
+              priorityOptions={(lookups.maintenance_personnel ?? []).map((p) => p.name)}
+              priorityLabel="Mechanic"
+              extraFilters={[{
+                key: 'serviceLocation',
+                label: 'Locations',
+                options: [...new Set((records.schedules ?? []).map((r) => r.service_location).filter(Boolean))],
+                selected: filterLocation,
+                setSelected: setFilterLocation,
+              }]}
+            />
+          }
         >
           <div className="panel-header-bar">
             <h3>Maintenance Schedules <span className="count-badge">{visibleRows.length}</span></h3>
@@ -2524,7 +2955,7 @@ function Workspace() {
             />
           )}
 
-          <FormModal open={!!completeScheduleTarget} title={`Mark Done — ${completeScheduleTarget?.maintenance_type ?? ''}`} onClose={() => setCompleteScheduleTarget(null)} confirmClose>
+          <FormModal open={!!completeScheduleTarget} title={`Mark Done — ${completeScheduleTarget?.maintenance_type ?? ''}`} onClose={() => setCompleteScheduleTarget(null)}>
             {completeScheduleTarget && (
               <>
                 <p className="muted" style={{ marginBottom: 12, fontSize: '0.85rem' }}>
@@ -2540,7 +2971,7 @@ function Workspace() {
                     // Admin keeps the picker since they can complete an
                     // unassigned schedule on someone's behalf.
                     ...(hasRole(user, 'Admin')
-                      ? [{ label: 'Performed By', name: 'maintenance_personnel_id', options: options(lookups.maintenance_personnel, 'id', 'name'), type: 'select' }]
+                      ? [{ label: 'Performed By', name: 'maintenance_personnel_id', options: options(lookups.maintenance_performers, 'id', 'name'), type: 'select' }]
                       : []),
                     { label: 'Cost (optional)', name: 'maintenance_cost', type: 'number' },
                     // Sometimes a scheduled job turns out to need a
@@ -2671,6 +3102,10 @@ function Workspace() {
           setFilterStatus={setFilterStatus}
           filterPriority={filterPriority}
           setFilterPriority={setFilterPriority}
+          filterDateStart={filterDateStart}
+          setFilterDateStart={setFilterDateStart}
+          filterDateEnd={filterDateEnd}
+          setFilterDateEnd={setFilterDateEnd}
         />
       );
     }
@@ -2737,8 +3172,9 @@ function Workspace() {
         archiveDraft.end !== archiveEnd ||
         archiveDraft.status !== archiveStatusFilter;
 
-      const hasActiveFilter = archiveStart || archiveEnd || archiveStatusFilter ||
-        archiveDraft.start || archiveDraft.end || archiveDraft.status || archiveDraft.quick;
+      const hasActiveFilter = Boolean(archiveStart || archiveEnd || archiveStatusFilter ||
+        archiveDraft.start || archiveDraft.end || archiveDraft.status || archiveDraft.quick ||
+        filterCategory.length || filterCapacity.length);
 
       // A Closed ticket is permanently locked — no reopen action, ever (a
       // recurring problem opens a brand-new ticket instead, see Workflow 10).
@@ -2806,6 +3242,22 @@ function Workspace() {
 
           {/* ── Archive Date Filter Bar ─────────────────────────────── */}
           <div className="filter-bar-container" style={{ flexWrap: 'wrap', gap: '8px 12px', alignItems: 'center' }}>
+            <div className="filter-label"><span>Vehicle:</span></div>
+            <MultiSelectDropdown
+              placeholder="All Categories"
+              options={(lookups.categories ?? []).map((c) => ({ value: String(c.category_id), label: c.category_name }))}
+              selected={filterCategory}
+              onChange={setFilterCategory}
+            />
+            <MultiSelectDropdown
+              placeholder="All Capacities"
+              options={[...new Set((lookups.vehicles ?? []).map((v) => v.capacity).filter(Boolean))]}
+              selected={filterCapacity}
+              onChange={setFilterCapacity}
+            />
+
+            <div style={{ width: 1, height: 22, background: 'var(--border, #334155)', flexShrink: 0 }} />
+
             <div className="filter-label"><span>DATE FILTER:</span></div>
 
             {/* Quick relative filters — dropdown */}
@@ -2897,6 +3349,8 @@ function Workspace() {
                   setArchiveStart('');
                   setArchiveEnd('');
                   setArchiveStatusFilter('');
+                  setFilterCategory([]);
+                  setFilterCapacity([]);
                 }}
               >
                 Clear
@@ -2944,6 +3398,9 @@ function Workspace() {
           setFilterCategory={setFilterCategory}
           filterCapacity={filterCapacity}
           setFilterCapacity={setFilterCapacity}
+          filterPriority={filterPriority}
+          setFilterPriority={setFilterPriority}
+          priorityOptions={ticketLookups.priorities}
           onViewVehicle={openVehicleProfile}
           stats={inspectionStats}
           activeFilter={filterStatus}
@@ -2968,6 +3425,11 @@ function Workspace() {
           setFilterCategory={setFilterCategory}
           filterCapacity={filterCapacity}
           setFilterCapacity={setFilterCapacity}
+          filterPriority={filterPriority}
+          setFilterPriority={setFilterPriority}
+          mechanicOptions={(lookups.maintenance_personnel ?? []).map((p) => p.name)}
+          filterVerdict={filterVerdict}
+          setFilterVerdict={setFilterVerdict}
           onViewVehicle={openVehicleProfile}
           stats={verificationStats}
           activeFilter={filterStatus}
@@ -2988,6 +3450,9 @@ function Workspace() {
           setFilterCategory={setFilterCategory}
           filterCapacity={filterCapacity}
           setFilterCapacity={setFilterCapacity}
+          filterPriority={filterPriority}
+          setFilterPriority={setFilterPriority}
+          maintTypeOptions={lookups.maintenance_types}
           onViewVehicle={openVehicleProfile}
           searchQuery={searchQuery}
           setSearchQuery={setSearchQuery}
@@ -3029,7 +3494,7 @@ const ACTION_QUEUE_META = {
   schedule_overdue:        { icon: 'wrench',      color: '#b91c1c', route: null },
 };
 
-const READINESS_STATE_LABEL = { stale: 'Check stale', not_ready: 'Not ready', unchecked: 'Never checked' };
+const READINESS_STATE_LABEL = { stale: 'Readiness check', not_ready: 'Not ready', unchecked: 'Never checked' };
 
 function ActionQueueRow({ item, basePath, onNavigate, onGoToSchedules }) {
   const meta = ACTION_QUEUE_META[item.type] ?? ACTION_QUEUE_META.issue_pending;
@@ -3114,6 +3579,94 @@ function DashboardListModal({ title, tag, onClose, children }) {
   );
 }
 
+// Shared row for both the Emergency Readiness modal and the compact
+// "Readiness by Vehicle Type" dashboard panel — a status dot + fill bar so
+// which categories are covered is readable at a glance, not just from text.
+function ReadinessRow({ r }) {
+  const verifiedReady = typeof r.verified_ready === 'number' ? r.verified_ready : r.ready;
+  const unverified = r.ready - verifiedReady;
+  const state = verifiedReady > 0 ? 'ready' : r.ready > 0 ? 'unverified' : 'none';
+  const pct = r.total > 0 ? Math.max(4, Math.round((verifiedReady / r.total) * 100)) : 0;
+
+  return (
+    <div className={`emergency-readiness-row is-${state}`}>
+      <span className={`emergency-readiness-row-dot is-${state}`} />
+      <div className="emergency-readiness-row-main">
+        <span className="emergency-readiness-row-name">{r.category}</span>
+        <span className="emergency-readiness-row-detail">
+          {r.ready} available
+          {unverified > 0 && <> · <span className="emergency-readiness-row-unverified">{unverified} unverified</span></>}
+        </span>
+      </div>
+      <div className="emergency-readiness-row-stat">
+        <span className={`emergency-readiness-row-tag${verifiedReady > 0 ? ' is-ready' : ''}`}>
+          {verifiedReady}/{r.total} READY
+        </span>
+        <span className="emergency-readiness-row-bar">
+          <span className={`emergency-readiness-row-bar-fill is-${state}`} style={{ width: `${pct}%` }} />
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function clampPercent(value) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function DashboardMicroMetric({ icon, label, value, tone = 'neutral' }) {
+  return (
+    <div className={`dashboard-micro-metric is-${tone}`}>
+      <span><Icon name={icon} size={15} /></span>
+      <div>
+        <small>{label}</small>
+        <strong>{value}</strong>
+      </div>
+    </div>
+  );
+}
+
+function DashboardSignalCard({ icon, label, value, detail, tone = 'neutral', meter = 0, onClick }) {
+  const content = (
+    <>
+      <div className="dashboard-signal-card-head">
+        <span className="dashboard-signal-card-icon"><Icon name={icon} size={16} /></span>
+        <span>{label}</span>
+        {onClick && <Icon name="chevronRight" size={14} className="dashboard-signal-card-chevron" />}
+      </div>
+      <strong>{value}</strong>
+      <p>{detail}</p>
+      <span className="dashboard-signal-meter" aria-hidden="true">
+        <span style={{ width: `${clampPercent(meter)}%` }} />
+      </span>
+    </>
+  );
+
+  if (onClick) {
+    return (
+      <button type="button" className={`dashboard-signal-card is-${tone}`} onClick={onClick}>
+        {content}
+      </button>
+    );
+  }
+
+  return <article className={`dashboard-signal-card is-${tone}`}>{content}</article>;
+}
+
+function DashboardStatusStrip({ rows }) {
+  return (
+    <div className="dashboard-status-strip">
+      {rows.map((row) => (
+        <div key={row.label} style={{ '--strip-color': row.color }}>
+          <span>{row.label}</span>
+          <strong>{row.value}</strong>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedules }) {
   const [weather, setWeather] = useState(null);
   const [greeting, setGreeting] = useState(() => buildLocalGreeting(user?.name));
@@ -3192,13 +3745,12 @@ function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedu
   const metricValue = (label) => dashboardMetricValue(data.metrics, label);
   const totalVehicles = metricValue('Total Vehicles');
   const availableVehicles = metricValue('Available Vehicles');
-  const maintenanceVehicles = metricValue('Vehicles Under Maintenance');
+  const underMaintenanceVehicles = metricValue('Vehicles Under Maintenance');
   const inactiveVehicles = metricValue('Inactive Vehicles');
   const reportedIssues = metricValue('Reported Issues');
   const upcomingMaintenance = metricValue('Upcoming Maintenance');
   const overdueMaintenanceCount = metricValue('Overdue Maintenance');
   const maintenanceExpenses = data.metrics.find((metric) => metric.label === 'Total Maintenance Expenses')?.value ?? '0';
-  const availabilityRate = totalVehicles ? Math.round((availableVehicles / totalVehicles) * 100) : 0;
 
   // Re-group raw location rows into the same hubs the map shows, so the
   // "Vehicles by Location" chart always matches the map's pins.
@@ -3231,22 +3783,232 @@ function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedu
   // on their dashboard instead of only living in the shared schedule table.
   const myScheduledWork = data.my_scheduled_work ?? [];
 
-  const fleetStatus = [
-    { label: 'Available', value: availableVehicles, color: '#36c66d' },
-    { label: 'Under Maintenance', value: maintenanceVehicles, color: '#ff7a1a' },
-    { label: 'Inactive', value: inactiveVehicles, color: '#ff5c5c' },
-  ];
+  // Fleet health (Good/Needs Inspection/Needs Repair/Damaged) — a different
+  // signal than Available/Under Maintenance/Inactive, which already have
+  // their own KPI tiles just below this card, so this donut wouldn't just
+  // be re-drawing the same three numbers. Colors match the same condition
+  // badges used everywhere else (Condition Monitoring's stat cards, etc).
+  const vehicleCondition = (data.vehicles_by_condition ?? []).map((row) => ({
+    label: row.label,
+    value: row.value,
+    color: CONDITION_STAT_CARDS.find((c) => c.key === row.label)?.color ?? '#94a3b8',
+  }));
+  const goodConditionCount = vehicleCondition.find((c) => c.label === 'Good')?.value ?? 0;
+  const goodConditionRate = totalVehicles ? Math.round((goodConditionCount / totalVehicles) * 100) : 0;
 
-  const operationsQueue = [
-    { label: 'Issues', value: reportedIssues, color: '#ff5c5c' },
-    { label: 'Upcoming', value: upcomingMaintenance, color: '#ffba4a' },
-    { label: 'Ready', value: availableVehicles, color: '#36c66d' },
+  const operationalTotal = fleetSummary?.operational_total ?? totalVehicles;
+  const verifiedReady = fleetSummary?.verified_ready ?? Math.max(0, availableVehicles - readinessWatch.length);
+  const readinessRate = operationalTotal ? clampPercent((verifiedReady / operationalTotal) * 100) : 0;
+  const availabilityRate = totalVehicles ? clampPercent((availableVehicles / totalVehicles) * 100) : 0;
+  const atRiskCount = noCoverage.length + readinessWatch.length + fragility.length + forecastOut.length + preventiveWatch.length + overdueMaintenanceCount;
+  const riskPenalty = Math.min(35, (noCoverage.length * 10) + (overdueMaintenanceCount * 6) + (criticalActionCount * 5) + (readinessWatch.length * 3) + (reportedIssues * 2));
+  const opsScore = clampPercent((readinessRate * 0.42) + (goodConditionRate * 0.28) + (availabilityRate * 0.3) - riskPenalty);
+  const opsTone = opsScore >= 75 ? 'ok' : opsScore >= 45 ? 'warn' : 'alert';
+  const maintenanceLoad = underMaintenanceVehicles + upcomingMaintenance + overdueMaintenanceCount;
+  const statusSegments = [
+    { label: 'Available', value: availableVehicles, color: '#16a34a' },
+    { label: 'In shop', value: underMaintenanceVehicles, color: '#d97706' },
+    { label: 'Inactive', value: inactiveVehicles, color: '#64748b' },
   ];
+  const operationsQueue = [
+    { label: 'Issues', value: reportedIssues, color: '#ef4444' },
+    { label: 'Upcoming', value: upcomingMaintenance, color: '#f59e0b' },
+    { label: 'Overdue', value: overdueMaintenanceCount, color: '#dc2626' },
+    { label: 'Ready', value: availableVehicles, color: '#22c55e' },
+  ];
+  const topFailurePattern = failurePatterns[0];
+  const visibleReadiness = readiness.slice(0, 5);
+  const visibleLocationRows = locationsByHub.slice(0, 4);
+  const visibleTypeRows = (data.vehicles_by_type ?? []).slice(0, 5);
+  const isAdminDashboard = hasRole(user, 'Admin');
+  const isMaintenanceDashboard = hasRole(user, 'Maintenance Personnel') && !isAdminDashboard;
+  const primaryActionCount = isAdminDashboard
+    ? actionQueue.length
+    : isMaintenanceDashboard
+      ? myScheduledWork.length
+      : reportedIssues;
+  const primaryActionLabel = isAdminDashboard
+    ? (actionQueue[0]?.label ?? 'No urgent action')
+    : isMaintenanceDashboard
+      ? (myScheduledWork[0]?.maintenance_type ?? 'Nothing assigned')
+      : (reportedIssues > 0 ? 'Open reports need follow-up' : 'No open reported issues');
+  const primaryActionTitle = isAdminDashboard ? 'Action Queue' : isMaintenanceDashboard ? 'My Work' : 'My Reports';
+  const primaryActionIcon = isMaintenanceDashboard ? 'wrench' : reportedIssues > 0 ? 'alert' : 'checkCircle';
   const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
   const timeStr = now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
 
   return (
-    <div className="dashboard-grid">
+    <div className="dashboard-grid dashboard-grid-smart">
+      <section className={`dashboard-command-center full-span is-${opsTone}`}>
+        <div className="dashboard-command-copy">
+          <span className="dashboard-command-role">{greetingRole}</span>
+          <TextType
+            key={greeting}
+            as="h2"
+            text={[greeting]}
+            typingSpeed={150}
+            pauseDuration={1500}
+            loop={false}
+            showCursor={true}
+            cursorCharacter="|"
+          />
+          <p>{dateStr || 'Today'}</p>
+          <div className="dashboard-command-pills">
+            <span>{totalVehicles} fleet units</span>
+            <span>{locationsByHub.length} active sites</span>
+            <span>{data.vehicles_by_type?.length ?? 0} vehicle types</span>
+          </div>
+        </div>
+
+        <div className="dashboard-hologram-core" style={{ '--score': `${opsScore}%`, '--readiness': `${readinessRate}%` }}>
+          <span className="dashboard-hologram-scan" />
+          <span className="dashboard-hologram-orbit orbit-one" />
+          <span className="dashboard-hologram-orbit orbit-two" />
+          <div className="dashboard-hologram-inner">
+            <span>Ops Score</span>
+            <strong>{opsScore}</strong>
+            <small>{verifiedReady}/{operationalTotal} verified ready</small>
+          </div>
+        </div>
+
+        <div className="dashboard-command-side">
+          <div className="dashboard-live-chips">
+            <div>
+              <span>Local time</span>
+              <strong>{timeStr}</strong>
+            </div>
+            {weather && (
+              <div>
+                <span>Mandaue City, Cebu</span>
+                <strong><span className="dashboard-weather-mark">{weather.icon}</span>{weather.temp}C</strong>
+                <small>{weather.desc} / {weather.humidity}% humidity</small>
+              </div>
+            )}
+          </div>
+          <div className="dashboard-command-mini-grid">
+            <DashboardMicroMetric icon="vehicle" label="Available" value={availableVehicles} tone="ok" />
+            <DashboardMicroMetric icon="wrench" label="In Shop" value={underMaintenanceVehicles} tone="warn" />
+            <DashboardMicroMetric icon="alert" label="Issues" value={reportedIssues} tone={reportedIssues > 0 ? 'alert' : 'ok'} />
+            <DashboardMicroMetric icon="calendar" label="Overdue" value={overdueMaintenanceCount} tone={overdueMaintenanceCount > 0 ? 'alert' : 'neutral'} />
+          </div>
+        </div>
+      </section>
+
+      <section className="dashboard-signal-grid full-span" aria-label="Dashboard signals">
+        <DashboardSignalCard
+          icon={primaryActionIcon}
+          label={primaryActionTitle}
+          value={primaryActionCount === 0 ? 'Clear' : primaryActionCount}
+          detail={primaryActionLabel}
+          tone={criticalActionCount > 0 ? 'alert' : primaryActionCount > 0 ? 'warn' : 'ok'}
+          meter={primaryActionCount > 0 ? Math.min(100, primaryActionCount * 18) : 100}
+          onClick={isAdminDashboard ? () => setOpenDashboardModal('actionQueue') : undefined}
+        />
+        <DashboardSignalCard
+          icon="checkCircle"
+          label="Emergency Coverage"
+          value={operationalTotal ? `${verifiedReady}/${operationalTotal}` : '0/0'}
+          detail={noCoverage.length > 0 ? `No coverage: ${noCoverage.map((r) => r.category).join(', ')}` : `${readinessRate}% verified ready`}
+          tone={noCoverage.length > 0 ? 'alert' : readinessRate >= 75 ? 'ok' : 'warn'}
+          meter={readinessRate}
+          onClick={readiness.length > 0 ? () => setOpenDashboardModal('emergencyReadiness') : undefined}
+        />
+        <DashboardSignalCard
+          icon="flag"
+          label="Risk Watch"
+          value={atRiskCount === 0 ? 'Stable' : atRiskCount}
+          detail={fragility.length > 0 ? `${fragility.length} no-backup categories` : `${readinessWatch.length} available but unverified`}
+          tone={atRiskCount > 0 ? 'alert' : 'ok'}
+          meter={atRiskCount > 0 ? Math.min(100, atRiskCount * 12) : 100}
+          onClick={atRiskCount > 0 ? () => setOpenDashboardModal('riskWatch') : undefined}
+        />
+        <DashboardSignalCard
+          icon="calendar"
+          label="Maintenance Load"
+          value={maintenanceLoad}
+          detail={`${underMaintenanceVehicles} in shop / ${upcomingMaintenance} upcoming / ${overdueMaintenanceCount} overdue`}
+          tone={overdueMaintenanceCount > 0 ? 'alert' : maintenanceLoad > 0 ? 'warn' : 'ok'}
+          meter={totalVehicles ? Math.min(100, (maintenanceLoad / Math.max(totalVehicles, 1)) * 100) : 0}
+          onClick={onGoToSchedules}
+        />
+      </section>
+
+      <section className="dashboard-intelligence-grid full-span">
+        <article className="dashboard-smart-panel dashboard-readiness-matrix">
+          <div className="dashboard-smart-panel-head">
+            <div>
+              <span>Response Matrix</span>
+              <h3>Readiness by Vehicle Type</h3>
+            </div>
+            <strong>{readinessRate}%</strong>
+          </div>
+          {readiness.length === 0 ? (
+            <p className="empty-state">No vehicle types to show yet.</p>
+          ) : (
+            <div className="dashboard-readiness-compact-list">
+              {visibleReadiness.map((r) => <ReadinessRow key={r.category} r={r} />)}
+            </div>
+          )}
+          {readiness.length > visibleReadiness.length && (
+            <button type="button" className="dashboard-inline-action" onClick={() => setOpenDashboardModal('emergencyReadiness')}>
+              View all {readiness.length} types
+            </button>
+          )}
+        </article>
+
+        <article className="dashboard-smart-panel dashboard-condition-matrix">
+          <div className="dashboard-smart-panel-head">
+            <div>
+              <span>Fleet Health</span>
+              <h3>Condition and Status</h3>
+            </div>
+            <strong>{goodConditionRate}%</strong>
+          </div>
+          <div className="dashboard-condition-core">
+            <div className="dashboard-condition-donut">
+              <DonutChart centerLabel={totalVehicles} centerSubLabel="Vehicles" segments={vehicleCondition} />
+            </div>
+            <ChartLegend rows={vehicleCondition} />
+          </div>
+          <DashboardStatusStrip rows={statusSegments} />
+        </article>
+
+        <article className="dashboard-smart-panel dashboard-operations-matrix">
+          <div className="dashboard-smart-panel-head">
+            <div>
+              <span>Operations Pulse</span>
+              <h3>Workload Pressure</h3>
+            </div>
+            <strong>{maintenanceExpenses}</strong>
+          </div>
+          <ColumnChart rows={operationsQueue} />
+          <p className="dashboard-panel-note">
+            {topFailurePattern
+              ? `${topFailurePattern.type} leads the last 12 months with ${topFailurePattern.count} case${topFailurePattern.count === 1 ? '' : 's'}.`
+              : 'No recurring failure pattern logged yet.'}
+          </p>
+        </article>
+
+        <article className="dashboard-smart-panel dashboard-distribution-matrix">
+          <div className="dashboard-smart-panel-head">
+            <div>
+              <span>Fleet Distribution</span>
+              <h3>Sites and Types</h3>
+            </div>
+            <strong>{totalVehicles}</strong>
+          </div>
+          <div className="dashboard-dual-bars">
+            <div>
+              <h4>Sites</h4>
+              <HorizontalBarChart rows={visibleLocationRows} />
+            </div>
+            <div>
+              <h4>Types</h4>
+              <HorizontalBarChart rows={visibleTypeRows} />
+            </div>
+          </div>
+        </article>
+      </section>
       {/* SECTION 1: Welcome Header — compressed, and paired with Fleet
           Status instead of stretching full-width alone at the top. */}
       <div className="dashboard-banner dashboard-banner-compact col-span-7">
@@ -3285,50 +4047,71 @@ function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedu
 
       <section className="panel col-span-5 dashboard-fleet-status-panel">
         <div className="panel-header-bar">
-          <h3>Fleet Status</h3>
-          <span className="area-chart-tag">{availabilityRate}% available</span>
+          <h3>Fleet Condition</h3>
+          <span className="area-chart-tag">{goodConditionRate}% in good condition</span>
         </div>
         <div className="fleet-status-compact">
           <div className="donut-chart-small">
-            <DonutChart centerLabel={totalVehicles} centerSubLabel="Vehicles" segments={fleetStatus} />
+            <DonutChart centerLabel={totalVehicles} centerSubLabel="Vehicles" segments={vehicleCondition} />
           </div>
-          <ChartLegend rows={fleetStatus} />
+          <div className="fleet-status-legend-col">
+            {/* Verified-ready deliberately lives only in the Action Center's
+                Emergency Readiness card below — it was previously repeated
+                here, in an alert tile, in a quick card, and twice more in the
+                Readiness section, so the same 0/7 read five times on one page. */}
+            <ChartLegend rows={vehicleCondition} />
+          </div>
         </div>
       </section>
 
-      {/* Its own card row directly under the banner + Fleet Status row —
-          not squeezed inside the banner — so these two "act now" numbers
-          stand on equal footing with every other card on the page instead
-          of being a footnote. */}
+      {/* SECTION 2 — Action Center: what needs a decision right now, placed
+          directly under the banner instead of below eight KPI tiles, since
+          "what do I do" outranks "what is currently true". This absorbs the
+          old Critical Action / Emergency Ready alert strip, which showed
+          these same two numbers one row higher in a different card style. */}
       {hasRole(user, 'Admin') && (
-        <div className="dashboard-crucial-alerts col-span-7">
-          <article className={`dashboard-alert-card${criticalActionCount > 0 ? ' is-blinking' : ''}`}>
-            <span className="dashboard-alert-card-icon"><Icon name="alert" size={18} /></span>
-            <div className="dashboard-alert-card-body">
-              <span>Critical Action{criticalActionCount === 1 ? '' : 's'}</span>
-              <strong>{criticalActionCount}</strong>
-            </div>
-          </article>
-          {fleetSummary && (
-            <article className={`dashboard-alert-card${fleetSummary.verified_ready < fleetSummary.operational_total ? ' is-blinking' : ''}`}>
-              <span className="dashboard-alert-card-icon"><Icon name="checkCircle" size={18} /></span>
-              <div className="dashboard-alert-card-body">
-                <span>Emergency Ready</span>
-                <strong>{fleetSummary.verified_ready}/{fleetSummary.operational_total}</strong>
-              </div>
-            </article>
+        <div className="dashboard-quick-cards full-span">
+          <DashboardQuickCard
+            icon="alert"
+            title="Action Queue"
+            stat={actionQueue.length === 0 ? 'All clear' : `${actionQueue.length} need${actionQueue.length === 1 ? 's' : ''} you`}
+            tone={criticalActionCount > 0 ? 'alert' : actionQueue.length > 0 ? 'warn' : 'ok'}
+            preview={criticalActionCount > 0
+              ? `${criticalActionCount} critical · ${actionQueue[0]?.label ?? ''}`
+              : actionQueue[0]?.label}
+            onClick={() => setOpenDashboardModal('actionQueue')}
+          />
+          {readiness.length > 0 && (
+            <DashboardQuickCard
+              icon="checkCircle"
+              title="Emergency Readiness"
+              stat={fleetSummary ? `${fleetSummary.verified_ready}/${fleetSummary.operational_total} ready` : '—'}
+              tone={fleetSummary?.coverage_alert ? 'alert' : fleetSummary && fleetSummary.verified_ready < fleetSummary.operational_total ? 'warn' : 'ok'}
+              preview={noCoverage.length > 0
+                ? `No coverage: ${noCoverage.map((r) => r.category).join(', ')}`
+                : `Across ${readiness.length} vehicle type${readiness.length === 1 ? '' : 's'}`}
+              onClick={() => setOpenDashboardModal('emergencyReadiness')}
+            />
+          )}
+          {(fragility.length > 0 || readinessWatch.length > 0 || forecastOut.length > 0 || preventiveWatch.length > 0 || overdueSchedules.length > 0) && (
+            <DashboardQuickCard
+              icon="alert"
+              title="Risk & Readiness Watch"
+              stat={fragility.length > 0 ? `${fragility.length} single point${fragility.length === 1 ? '' : 's'} of failure` : `${readinessWatch.length} unverified`}
+              tone={fragility.length > 0 ? 'alert' : 'warn'}
+              preview={forecastOut.length > 0 ? `${forecastOut.length} vehicle${forecastOut.length === 1 ? '' : 's'} in the shop` : undefined}
+              onClick={() => setOpenDashboardModal('riskWatch')}
+            />
           )}
         </div>
       )}
 
-      {/* SECTION 2: Top Executive KPI Metrics Summary. Two tiers instead of
-          one row of 8 equally-weighted cards: the 5 headline fleet counts
-          get full-size cards, while the 3 "watch" counts (issues/upcoming/
-          overdue) — already actionable in Action Queue / Fleet Readiness &
-          Risks below — get a slim secondary row instead of competing for
-          the same visual weight. */}
+      {/* SECTION 3 — Fleet KPIs. Every headline number in one consistent tile
+          style, including the three "watch" counts (issues / upcoming /
+          overdue) that used to sit right below in a third, slimmer card style
+          for no reason other than to de-emphasise them. */}
       <section className="metric-grid dashboard-headline-grid full-span">
-        {data.metrics.filter((metric) => !DASHBOARD_HEADLINE_HIDDEN_LABELS.has(metric.label)).map((metric) => {
+        {data.metrics.map((metric) => {
           const style = DASHBOARD_METRIC_STYLES[metric.label] ?? DASHBOARD_METRIC_STYLE_DEFAULT;
 
           return (
@@ -3347,62 +4130,6 @@ function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedu
           );
         })}
       </section>
-
-      <section className="dashboard-mini-stats full-span">
-        <div className="dashboard-mini-stat">
-          <span className="dashboard-mini-stat-dot" style={{ background: reportedIssues > 0 ? '#dc2626' : '#94a3b8' }} />
-          <span className="dashboard-mini-stat-label">Reported issues</span>
-          <strong>{reportedIssues}</strong>
-        </div>
-        <div className="dashboard-mini-stat">
-          <span className="dashboard-mini-stat-dot" style={{ background: '#2563eb' }} />
-          <span className="dashboard-mini-stat-label">Upcoming maintenance</span>
-          <strong>{upcomingMaintenance}</strong>
-        </div>
-        <div className="dashboard-mini-stat">
-          <span className="dashboard-mini-stat-dot" style={{ background: overdueMaintenanceCount > 0 ? '#d97706' : '#94a3b8' }} />
-          <span className="dashboard-mini-stat-label">Overdue maintenance</span>
-          <strong>{overdueMaintenanceCount}</strong>
-        </div>
-      </section>
-
-      {/* SECTION 3: Quick-glance cards — Action Queue, Emergency Readiness,
-          and Risk & Readiness Watch each collapse to one number instead of
-          a permanent full-height list; tapping opens the full list in a
-          popup, and clicking an item inside still navigates straight to
-          its page. */}
-      {hasRole(user, 'Admin') && (
-        <div className="dashboard-quick-cards full-span">
-          <DashboardQuickCard
-            icon="alert"
-            title="Action Queue"
-            stat={actionQueue.length === 0 ? 'All clear' : `${actionQueue.length} need${actionQueue.length === 1 ? 's' : ''} you`}
-            tone={actionQueue.length > 0 ? 'alert' : 'ok'}
-            preview={actionQueue[0]?.label}
-            onClick={() => setOpenDashboardModal('actionQueue')}
-          />
-          {readiness.length > 0 && (
-            <DashboardQuickCard
-              icon="checkCircle"
-              title="Emergency Readiness"
-              stat={fleetSummary ? `${fleetSummary.verified_ready}/${fleetSummary.operational_total} ready` : '—'}
-              tone={fleetSummary?.coverage_alert ? 'alert' : 'ok'}
-              preview={noCoverage.length > 0 ? `No coverage: ${noCoverage.map((r) => r.category).join(', ')}` : undefined}
-              onClick={() => setOpenDashboardModal('emergencyReadiness')}
-            />
-          )}
-          {(fragility.length > 0 || readinessWatch.length > 0 || forecastOut.length > 0 || preventiveWatch.length > 0 || overdueSchedules.length > 0) && (
-            <DashboardQuickCard
-              icon="alert"
-              title="Risk & Readiness Watch"
-              stat={fragility.length > 0 ? `${fragility.length} single point${fragility.length === 1 ? '' : 's'} of failure` : `${readinessWatch.length} unverified`}
-              tone={fragility.length > 0 ? 'alert' : 'ok'}
-              preview={forecastOut.length > 0 ? `${forecastOut.length} vehicle${forecastOut.length === 1 ? '' : 's'} in the shop` : undefined}
-              onClick={() => setOpenDashboardModal('riskWatch')}
-            />
-          )}
-        </div>
-      )}
 
       {hasRole(user, 'Maintenance Personnel') && (
         <section className="panel col-span-7 action-queue-panel">
@@ -3457,21 +4184,7 @@ function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedu
           onClose={() => setOpenDashboardModal(null)}
         >
           <div className="emergency-readiness-rows">
-            {readiness.map((r) => {
-              const verifiedReady = typeof r.verified_ready === 'number' ? r.verified_ready : r.ready;
-              const unverified = r.ready - verifiedReady;
-              return (
-                <div key={r.category} className="emergency-readiness-row">
-                  <span className="emergency-readiness-row-name">{r.category}</span>
-                  <span className="emergency-readiness-row-detail">
-                    {r.ready} available{unverified > 0 ? ` · ${unverified} unverified` : ''}
-                  </span>
-                  <span className={`emergency-readiness-row-tag${verifiedReady > 0 ? ' is-ready' : ''}`}>
-                    {verifiedReady}/{r.total} READY
-                  </span>
-                </div>
-              );
-            })}
+            {readiness.map((r) => <ReadinessRow key={r.category} r={r} />)}
           </div>
           {fragility.length > 0 && fragility.length === readiness.length && (
             <p className="emergency-readiness-note">
@@ -3496,6 +4209,7 @@ function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedu
                 <h4>No backup if it goes down</h4>
                 {fragility.map((f) => (
                   <div key={f.category} className={`risk-watch-item${f.critical ? ' is-critical' : ''}`}>
+                    <span className={`risk-watch-item-dot${f.critical ? ' is-critical' : ''}`} />
                     Only 1 {f.category}
                   </div>
                 ))}
@@ -3508,16 +4222,19 @@ function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedu
                   <button
                     key={r.vehicle_id}
                     type="button"
-                    className="risk-watch-item risk-watch-item-clickable"
+                    className={`risk-watch-item risk-watch-item-clickable${r.state === 'not_ready' ? ' is-critical' : ''}`}
                     onClick={() => { setOpenDashboardModal(null); onNavigate(`${basePath}/vehicles/${r.vehicle_id}`); }}
                   >
-                    <span className="risk-watch-item-top">
-                      <span className="risk-watch-item-title">{r.vehicle_name}</span>
-                      <span className={`risk-watch-tag${r.state === 'not_ready' ? ' is-critical' : ''}`}>
-                        {(READINESS_STATE_LABEL[r.state] ?? r.state).toUpperCase()}
+                    <span className={`risk-watch-item-dot${r.state === 'not_ready' ? ' is-critical' : ''}`} />
+                    <div className="risk-watch-item-body">
+                      <span className="risk-watch-item-top">
+                        <span className="risk-watch-item-title">{r.vehicle_name}</span>
+                        <span className={`risk-watch-tag${r.state === 'not_ready' ? ' is-critical' : ''}`}>
+                          {(READINESS_STATE_LABEL[r.state] ?? r.state).toUpperCase()}
+                        </span>
                       </span>
-                    </span>
-                    <span className="risk-watch-item-sub">{r.category ?? '—'}</span>
+                      <span className="risk-watch-item-sub">{r.category ?? '—'}</span>
+                    </div>
                   </button>
                 ))}
               </div>
@@ -3549,10 +4266,35 @@ function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedu
         </DashboardListModal>
       )}
 
-      {/* SECTION 5: What's Breaking Most (or Operations Queue) + Vehicles
-          by Location, paired 6/6. */}
+      {/* SECTION 4 — Can we respond, and why do vehicles keep going down?
+          Readiness used to be a full-width band with a half-empty right
+          side; pairing it with the failure-cause chart fills the row and
+          puts the cause right next to the consequence. */}
+      <section className="panel col-span-7">
+        <div className="panel-header-bar">
+          <h3><Icon name="checkCircle" size={16} /> Readiness by Vehicle Type</h3>
+          {fleetSummary && (
+            <span className="area-chart-tag">
+              {fleetSummary.verified_ready} of {fleetSummary.operational_total} verified ready
+            </span>
+          )}
+        </div>
+        {readiness.length === 0 ? (
+          <p className="empty-state">No vehicle types to show yet.</p>
+        ) : (
+          <div className="emergency-readiness-rows">
+            {readiness.map((r) => <ReadinessRow key={r.category} r={r} />)}
+          </div>
+        )}
+        {noCoverage.length > 0 && (
+          <p className="emergency-readiness-alert">
+            <Icon name="alert" size={13} /> No coverage: {noCoverage.map((r) => r.category).join(', ')}
+          </p>
+        )}
+      </section>
+
       {showBreakingMost ? (
-        <section className="panel col-span-6">
+        <section className="panel col-span-5">
           <div className="panel-header-bar">
             <h3><Icon name="wrench" size={16} /> What's Breaking Most</h3>
             <span className="area-chart-tag">Last 12 months</span>
@@ -3563,7 +4305,7 @@ function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedu
           </div>
         </section>
       ) : (
-        <section className="panel col-span-6">
+        <section className="panel col-span-5">
           <div className="panel-header-bar">
             <h3>Operations Queue</h3>
             <span className="area-chart-tag">{maintenanceExpenses}</span>
@@ -3578,9 +4320,12 @@ function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedu
         </section>
       )}
 
+      {/* SECTION 5 — Fleet composition: where the vehicles are, and what
+          kinds exist. Two halves of one question, so they share a row
+          instead of stacking as two more full-width bands. */}
       <section className="panel col-span-6">
         <div className="panel-header-bar">
-          <h3>Vehicles by Location</h3>
+          <h3><Icon name="pin" size={16} /> Vehicles by Location</h3>
           <span className="area-chart-tag">{locationsByHub.length} sites</span>
         </div>
         <div className="dashboard-panel-chart-body">
@@ -3588,51 +4333,9 @@ function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedu
         </div>
       </section>
 
-      {/* SECTION 6: Readiness by Vehicle Type — full width. Which emergency
-          vehicle categories can respond right now, not just a raw count of
-          database activity. Reuses the same per-category readiness data
-          already computed for the Emergency Readiness quick card. */}
-      <section className="panel col-span-12">
+      <section className="panel col-span-6">
         <div className="panel-header-bar">
-          <h3>Readiness by Vehicle Type</h3>
-          {fleetSummary && (
-            <span className="area-chart-tag">
-              {fleetSummary.verified_ready} of {fleetSummary.operational_total} verified ready
-            </span>
-          )}
-        </div>
-        {readiness.length === 0 ? (
-          <p className="empty-state">No vehicle types to show yet.</p>
-        ) : (
-          <div className="emergency-readiness-rows">
-            {readiness.map((r) => {
-              const verifiedReady = typeof r.verified_ready === 'number' ? r.verified_ready : r.ready;
-              const unverified = r.ready - verifiedReady;
-              return (
-                <div key={r.category} className="emergency-readiness-row">
-                  <span className="emergency-readiness-row-name">{r.category}</span>
-                  <span className="emergency-readiness-row-detail">
-                    {r.ready} available{unverified > 0 ? ` · ${unverified} unverified` : ''}
-                  </span>
-                  <span className={`emergency-readiness-row-tag${verifiedReady > 0 ? ' is-ready' : ''}`}>
-                    {verifiedReady}/{r.total} READY
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        )}
-        {noCoverage.length > 0 && (
-          <p className="emergency-readiness-alert">
-            <Icon name="alert" size={13} /> No coverage: {noCoverage.map((r) => r.category).join(', ')}
-          </p>
-        )}
-      </section>
-
-      {/* SECTION 7: Vehicles by Type — full width. */}
-      <section className="panel col-span-12">
-        <div className="panel-header-bar">
-          <h3>Vehicles by Type</h3>
+          <h3><Icon name="vehicle" size={16} /> Vehicles by Type</h3>
           <span className="area-chart-tag">{data.vehicles_by_type?.length ?? 0} types</span>
         </div>
         <div className="dashboard-panel-chart-body">
@@ -3920,11 +4623,16 @@ function DismissibleHint() {
   return null;
 }
 
-function ModulePanel({ children, description, statCards }) {
+function ModulePanel({ children, description, statCards, filterBar }) {
   return (
     <div className="module-grid">
       <DismissibleHint description={description} />
       {statCards}
+      {filterBar && (
+        <section className="panel module-filter-panel">
+          {filterBar}
+        </section>
+      )}
       <section className="panel">
         {children}
       </section>
@@ -3933,30 +4641,17 @@ function ModulePanel({ children, description, statCards }) {
 }
 
 /** Generic modal wrapper that hosts a SmartForm popup. */
-function FormModal({ open, title, onClose, children, confirmClose = false, wide = false }) {
+function FormModal({ open, title, onClose, children, wide = false }) {
   const notice = useContext(FormNoticeContext);
-  const [confirming, setConfirming] = useState(false);
-
-  useEffect(() => {
-    if (!open) setConfirming(false);
-  }, [open]);
 
   if (!open) return null;
 
-  const requestClose = () => {
-    if (confirmClose) {
-      setConfirming(true);
-    } else {
-      onClose();
-    }
-  };
-
   return createPortal(
-    <div className="modal-overlay" onClick={requestClose}>
+    <div className="modal-overlay" onClick={onClose}>
       <div className={`modal-box${wide ? ' modal-box-wide' : ''}`} onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h3>{title}</h3>
-          <button className="modal-close-btn" onClick={requestClose} type="button" aria-label="Close"><Icon name="close" size={18} /></button>
+          <button className="modal-close-btn" onClick={onClose} type="button" aria-label="Close"><Icon name="close" size={18} /></button>
         </div>
         {notice && notice.type === 'error' && (
           <div className="notice error" style={{ margin: '12px 28px 0', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', textAlign: 'center', flexDirection: 'column' }}>
@@ -3965,26 +4660,6 @@ function FormModal({ open, title, onClose, children, confirmClose = false, wide 
           </div>
         )}
         <div className="modal-body">{children}</div>
-
-        {confirming && (
-          <div className="modal-confirm-overlay" onClick={() => setConfirming(false)}>
-            <div className="modal-confirm-box" onClick={(e) => e.stopPropagation()} role="alertdialog" aria-modal="true">
-              <div className="modal-confirm-icon" aria-hidden="true">
-                <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
-                  <line x1="12" y1="9" x2="12" y2="13" />
-                  <line x1="12" y1="17" x2="12.01" y2="17" />
-                </svg>
-              </div>
-              <h4>Discard and exit?</h4>
-              <p>Anything you entered in this form will be lost.</p>
-              <div className="modal-confirm-actions">
-                <button className="ghost-button" type="button" onClick={() => setConfirming(false)}>Keep editing</button>
-                <button className="modal-confirm-exit" type="button" onClick={() => { setConfirming(false); onClose(); }}>Exit without saving</button>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     </div>,
     document.body
@@ -4170,7 +4845,7 @@ function IssueViewPage({ issueId, allIssues = [], allHubs = [], role, onCreateTi
         {role === 'Admin' && (
           <div style={{ display: 'flex', gap: 8 }}>
             {onCreateTicketFromIssue && (
-              <button className="btn-confirm-action" type="button" onClick={() => onCreateTicketFromIssue(issue)}><Icon name="ticket" size={14} /> Create Ticket</button>
+              <button className="ghost-button btn-confirm-action" type="button" onClick={() => onCreateTicketFromIssue(issue)}><Icon name="ticket" size={14} /> Create Ticket</button>
             )}
             {/* Receipt-backed fast close (#5): for a problem that's going to
                 (or already did) get fixed by an outside shop instead of
@@ -4178,7 +4853,7 @@ function IssueViewPage({ issueId, allIssues = [], allHubs = [], role, onCreateTi
                 already linked. */}
             {onSendToExternalShop && (
               <button
-                className="btn-edit-action"
+                className="ghost-button btn-edit-action"
                 type="button"
                 onClick={() => onSendToExternalShop({
                   vehicle_id: issue.vehicle_id,
@@ -4624,7 +5299,7 @@ function groupFields(fields) {
   return groups;
 }
 
-function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, onSubmit, submitLabel, title, onValuesChange }) {
+function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, cancelLabel = 'Cancel', onSubmit, submitLabel, title, onValuesChange }) {
   const [values, setValues] = useState(() => valuesFromFields(fields, initialValues));
   const [submitting, setSubmitting] = useState(false);
   // Per-field show/hide toggle for password inputs — keyed by field name so
@@ -4709,8 +5384,12 @@ function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, onSubmit, subm
         const renderField = (field) => {
         const quantity = field.type === 'quantity' ? splitQuantityValue(values[field.name], field.units) : null;
         return (
-        <label key={field.name} style={field.fullWidth ? { gridColumn: '1 / -1' } : undefined}>
-          <span>{field.label}</span>
+        <Fragment key={field.name}>
+        <label
+          className={field.compactFile ? 'file-inline' : undefined}
+          style={field.fullWidth ? { gridColumn: '1 / -1' } : undefined}
+        >
+          <span>{field.label}{field.required ? <span className="required-asterisk"> *</span> : null}</span>
           {field.type === 'quantity' ? (
             <div className="quantity-field">
               <input
@@ -4740,6 +5419,7 @@ function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, onSubmit, subm
             <textarea
               name={field.name}
               onChange={handleChange}
+              placeholder={field.placeholder}
               required={field.required}
               rows={field.rows ?? 3}
               value={values[field.name] ?? ''}
@@ -4769,6 +5449,35 @@ function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, onSubmit, subm
                 setValues(next);
                 onValuesChange?.(next);
               }}
+            />
+          ) : null}
+          {field.type === 'creatable-select' ? (
+            <CreatableSelect
+              value={values[field.name] ?? ''}
+              onChange={(v) => {
+                const next = { ...values, [field.name]: v };
+                setValues(next);
+                onValuesChange?.(next);
+              }}
+              options={field.options ?? []}
+              required={field.required}
+              newItemLabel={field.newItemLabel}
+              catalogEndpoint={field.catalogEndpoint}
+              idField={field.idField}
+              nameField={field.nameField}
+              valueIsId={field.valueIsId}
+              extraFields={field.extraFields}
+            />
+          ) : null}
+          {field.type === 'new-issue-modal' ? (
+            <NewIssueModalField
+              value={{ new_issue_type: values.new_issue_type }}
+              onChange={(patch) => {
+                const next = { ...values, ...patch };
+                setValues(next);
+                onValuesChange?.(next);
+              }}
+              issueTypeOptions={field.issueTypeOptions ?? []}
             />
           ) : null}
           {field.type === 'checkboxes' ? (
@@ -4842,8 +5551,8 @@ function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, onSubmit, subm
                         return merged;
                       })}
                       disabled={rows.length === 1}
-                      title="Remove issue"
-                      aria-label="Remove issue"
+                      title={`Remove ${field.removeLabel ?? 'issue'}`}
+                      aria-label={`Remove ${field.removeLabel ?? 'issue'}`}
                       style={{ padding: '8px 12px' }}
                     >
                       <Icon name="close" size={14} />
@@ -4887,7 +5596,7 @@ function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, onSubmit, subm
               </button>
             </div>
           ) : null}
-          {!['textarea', 'select', 'quantity', 'checkboxes', 'select-or-other', 'list', 'password'].includes(field.type) ? (
+          {!['textarea', 'select', 'quantity', 'checkboxes', 'select-or-other', 'creatable-select', 'list', 'password', 'file'].includes(field.type) ? (
             <input
               accept={field.accept}
               autoComplete="off"
@@ -4898,18 +5607,80 @@ function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, onSubmit, subm
               required={field.required}
               title={field.title}
               type={field.type}
-              value={field.type === 'file' ? undefined : values[field.name] ?? ''}
+              value={values[field.name] ?? ''}
             />
           ) : null}
-          {field.type === 'file' && isFile(values[field.name]) && values[field.name].type.startsWith('image/') ? (
-            <img
-              alt={`${field.label} preview`}
-              className="file-preview"
-              src={URL.createObjectURL(values[field.name])}
-            />
+          {field.type === 'file' ? (
+            <div className={`photo-box${isFile(values[field.name]) || field.existingUrl ? ' has-file' : ''}`}>
+              <input
+                accept={field.accept}
+                className="photo-box-input"
+                id={`photo-box-input-${field.name}`}
+                name={field.name}
+                onChange={handleChange}
+                required={field.required}
+                type="file"
+              />
+              <label className="photo-box-add-btn" htmlFor={`photo-box-input-${field.name}`}>
+                <Icon name="plus" size={10} />
+                {isFile(values[field.name]) || field.existingUrl ? 'Change Image' : 'Add Image'}
+              </label>
+              {isFile(values[field.name]) ? (
+                <button
+                  type="button"
+                  className="photo-box-remove"
+                  onClick={() => {
+                    const next = { ...values, [field.name]: null };
+                    setValues(next);
+                    onValuesChange?.(next);
+                  }}
+                  title="Remove image"
+                  aria-label="Remove image"
+                >
+                  <Icon name="trash" size={13} />
+                </button>
+              ) : null}
+              {isFile(values[field.name]) ? (
+                values[field.name].type.startsWith('image/') ? (
+                  <img alt={field.label} className="photo-box-fill" src={URL.createObjectURL(values[field.name])} />
+                ) : (
+                  <div className="photo-box-file">
+                    <Icon name="clipboard" size={28} />
+                    <span>{values[field.name].name}</span>
+                  </div>
+                )
+              ) : field.existingUrl ? (
+                // Not a freshly-picked File — the vehicle's already-saved photo,
+                // shown so editing doesn't look like it wiped out the photo that
+                // was there all along. No remove button here: the backend only
+                // ever replaces photo_url when a new file is uploaded, it has no
+                // "clear the photo" path, so offering removal would be a lie.
+                <img alt={field.label} className="photo-box-fill" src={resolvePhotoUrl(field.existingUrl)} />
+              ) : (
+                <div className="photo-box-empty">
+                  <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="3" y="4" width="18" height="15" rx="2" />
+                    <circle cx="9" cy="10" r="1.8" />
+                    <path d="M4.5 17.5 9 13l3 3 4-4.5 3.5 4" />
+                  </svg>
+                  <span>No image available</span>
+                </div>
+              )}
+            </div>
+          ) : null}
+          {field.inlineExtra ? (
+            <div className="field-extra field-extra-inline">
+              {typeof field.inlineExtra === 'function' ? field.inlineExtra(values) : field.inlineExtra}
+            </div>
           ) : null}
           {field.hint ? <small className="field-hint">{field.hint}</small> : null}
         </label>
+        {field.extra ? (
+          <div className="field-extra" style={{ gridColumn: field.extraGridColumn ?? '1 / -1' }}>
+            {typeof field.extra === 'function' ? field.extra(values) : field.extra}
+          </div>
+        ) : null}
+        </Fragment>
         );
         };
 
@@ -4925,7 +5696,7 @@ function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, onSubmit, subm
         );
       })()}
       <div className="form-actions">
-        {onCancel ? <button className="ghost-button btn-exit-action" onClick={onCancel} type="button">Cancel</button> : null}
+        {onCancel ? <button className="ghost-button" onClick={onCancel} type="button">{cancelLabel}</button> : null}
         <button className="primary-button" type="submit">{submitLabel}</button>
       </div>
     </form>
@@ -5039,6 +5810,7 @@ const emptyLookups = {
   categories: [],
   vehicles: [],
   maintenance_personnel: [],
+  maintenance_performers: [],
   issue_reports: [],
   issue_types: [],
   maintenance_types: [],
@@ -5077,6 +5849,12 @@ function userFields(isEditing, liveValues = EMPTY_OBJ) {
     { label: 'Email', name: 'email', required: true, type: 'text', placeholder: 'name@barangay.gov' },
     { label: 'Phone', name: 'phone', type: 'tel', pattern: '[0-9]{10}', placeholder: '09XXXXXXXXX', title: 'Phone must be exactly 10 digits' },
     { label: 'Address', name: 'address', type: 'text' },
+    // Deliberately paired side by side, in this order, both NOT full-width:
+    // the grid's dense auto-flow (App.css .form-grid-2col .smart-form)
+    // only backfills gaps when one exists — keeping every field here a
+    // plain single-column item, in strict declared order, means each row
+    // fills left-then-right with no gaps for later fields to jump into
+    // (which is what previously stranded Confirm Password alone).
     { label: 'Roles (a person can hold more than one — the first is their primary)', name: 'roles', options: ['Admin', 'Custodian', 'Maintenance Personnel'], required: true, type: 'checkboxes' },
     { label: 'Profile Photo', name: 'photo', accept: 'image/*', type: 'file' },
     {
@@ -5115,6 +5893,17 @@ function capacityUnits(domain) {
   return domain === 'Water' ? ['L', 'gal', 'm³', 'pax'] : ['kg', 'tons', 'L', 'pax'];
 }
 
+// Same underlying column (plate_number) either way — a boat has no LTO
+// plate, so the label/placeholder/validation just read right for whichever
+// domain the vehicle actually is.
+function plateFieldLabel(domain) {
+  return domain === 'Water' ? 'Registration / Hull No.' : 'Plate Number';
+}
+
+function vehicleIconName(domain) {
+  return domain === 'Water' ? 'boat' : 'vehicle';
+}
+
 function vehicleDomainFields(domain) {
   return domain === 'Water'
     ? [
@@ -5131,6 +5920,12 @@ const VEHICLE_WIZARD_STEP_ICONS = ['clipboard', 'wrench', 'pin'];
 function NewVehiclePage({ onBack, lookups, allHubs, onSubmit }) {
   const [step, setStep] = useState(1);
   const [wizardData, setWizardData] = useState(EMPTY_OBJ);
+  // Live-tracks the in-progress Category pick within step 1 (before it's
+  // merged into wizardData on "Next") so the Vehicle Type options can
+  // filter immediately, without resetting anything else the user has
+  // already typed on this step. Re-synced from wizardData wherever `step`
+  // actually changes (see setStep call sites below), not via an effect.
+  const [domainFilter, setDomainFilter] = useState(wizardData.vehicle_domain ?? '');
 
   const domain = lookups.categories.find(
     (c) => String(c.category_id) === String(wizardData.category_id)
@@ -5138,17 +5933,37 @@ function NewVehiclePage({ onBack, lookups, allHubs, onSubmit }) {
 
   const hubOptions = allHubs.map((hub) => ({ value: hub.name, label: hub.name }));
 
+  // Derived from the actual vehicle types on file, not hardcoded — so a
+  // newly added domain (beyond today's Land/Water) just works here too.
+  const domainOptions = [...new Set(lookups.categories.map((c) => c.domain).filter(Boolean))].sort();
+
   const stepFields = {
     1: [
       { label: 'Vehicle Name', name: 'vehicle_name', required: true, type: 'text' },
+      domainFilter === 'Water'
+        ? {
+            label: plateFieldLabel('Water'), name: 'plate_number', required: true, type: 'text',
+            placeholder: 'e.g. HULL-2024-001', uppercase: true,
+          }
+        : {
+            label: plateFieldLabel('Land'), name: 'plate_number', required: true, type: 'text',
+            // NOTE: browsers compile `pattern` with the strict `v` flag, where `\s`
+            // inside a character class is invalid — use a literal space instead.
+            placeholder: 'e.g. ABC 1234', pattern: '^[A-Za-z]{2,6}[ \\-]?\\d{2,6}[A-Za-z]?$',
+            title: 'Enter a valid plate number, e.g. ABC 1234 or ABC-1234', uppercase: true,
+          },
+      { label: 'Category', name: 'vehicle_domain', options: domainOptions, required: true, type: 'select' },
       {
-        label: 'Plate Number', name: 'plate_number', required: true, type: 'text',
-        // NOTE: browsers compile `pattern` with the strict `v` flag, where `\s`
-        // inside a character class is invalid — use a literal space instead.
-        placeholder: 'e.g. ABC 1234', pattern: '^[A-Za-z]{2,6}[ \\-]?\\d{2,6}[A-Za-z]?$',
-        title: 'Enter a valid plate number, e.g. ABC 1234 or ABC-1234', uppercase: true,
+        label: 'Vehicle Type',
+        name: 'category_id',
+        options: options(
+          lookups.categories.filter((c) => c.domain === domainFilter),
+          'category_id',
+          'category_name',
+        ),
+        required: true,
+        type: 'select',
       },
-      { label: 'Vehicle Type', name: 'category_id', options: options(lookups.categories, 'category_id', 'category_name'), required: true, type: 'select' },
     ],
     2: [
       { label: 'Brand', name: 'brand', required: true, type: 'text' },
@@ -5159,13 +5974,36 @@ function NewVehiclePage({ onBack, lookups, allHubs, onSubmit }) {
       ...vehicleDomainFields(domain),
     ],
     3: [
-      { label: 'Vehicle Photo', name: 'photo', accept: 'image/*', type: 'file' },
-      { label: 'Current Location', name: 'current_location', options: hubOptions, required: true, type: 'select' },
-      { label: 'Remarks', name: 'remarks', type: 'textarea' },
+      { label: 'Vehicle Photo', name: 'photo', accept: 'image/*', type: 'file', compactFile: true },
+      {
+        label: 'Current Location', name: 'current_location', options: hubOptions, required: true, type: 'select',
+        // Shows exactly where the hub is as soon as one is picked, instead
+        // of leaving the location as just a name in a dropdown. Rendered
+        // inline (inside this field's own cell, right under the select)
+        // rather than as a separate full-width row, so it sits directly
+        // beneath the dropdown and top-aligns with the photo box beside it
+        // instead of leaving a gap where a taller sibling row would go.
+        inlineExtra: (vals) => {
+          const hub = allHubs.find((h) => h.name === vals.current_location);
+          return hub ? (
+            <div className="veh-map-wrap" style={{ height: 220 }}>
+              <VehicleLocationMap lat={hub.lat} lng={hub.lng} label={hub.name} />
+            </div>
+          ) : null;
+        },
+      },
     ],
   };
 
   const isLastStep = step === 3;
+
+  // Also used by the wizard-step-pill "go back" clicks below, so
+  // domainFilter always reflects whatever step 1 last had, whichever way
+  // the user navigates back to it.
+  const goToStep = (n) => {
+    setDomainFilter(wizardData.vehicle_domain ?? '');
+    setStep(n);
+  };
 
   const handleStepSubmit = async (values) => {
     const merged = { ...wizardData, ...values };
@@ -5179,9 +6017,6 @@ function NewVehiclePage({ onBack, lookups, allHubs, onSubmit }) {
 
   return (
     <ModulePanel description="Register a new vehicle in the fleet — complete all three steps to add it.">
-      <div className="vehicle-profile-header">
-        <h3 className="ticket-detail-title" style={{ margin: 0 }}>Add Vehicle — Step {step} of 3</h3>
-      </div>
       <div className="wizard-steps" role="list" aria-label="Add vehicle steps">
         {VEHICLE_WIZARD_STEP_LABELS.map((label, i) => {
           const n = i + 1;
@@ -5193,7 +6028,7 @@ function NewVehiclePage({ onBack, lookups, allHubs, onSubmit }) {
                 type="button"
                 className="wizard-step-pill is-done"
                 role="listitem"
-                onClick={() => setStep(n)}
+                onClick={() => goToStep(n)}
                 title={`Go back to ${label}`}
               >
                 <Icon name="checkCircle" size={16} />
@@ -5209,13 +6044,15 @@ function NewVehiclePage({ onBack, lookups, allHubs, onSubmit }) {
           );
         })}
       </div>
-      <div className="form-grid-2col">
+      <div className={`form-grid-2col${step === 3 ? ' wizard-photo-location-grid' : ''}`}>
         <SmartForm
           fields={stepFields[step]}
           initialValues={wizardData}
           key={step}
-          onCancel={onBack}
+          cancelLabel={step === 1 ? 'Cancel' : 'Back'}
+          onCancel={step === 1 ? onBack : () => goToStep(step - 1)}
           onSubmit={handleStepSubmit}
+          onValuesChange={(vals) => setDomainFilter(vals.vehicle_domain ?? '')}
           submitLabel={isLastStep ? 'Add Vehicle' : 'Next'}
           title=""
         />
@@ -5344,7 +6181,7 @@ function FormPage({ description, onBack, fields, initialValues, onSubmit, submit
   // sitting in a separate persistent side panel throughout.
   const vehicleInfoCard = vehicle ? (
     <section className="veh-card">
-      <div className="veh-card-head"><Icon name="vehicle" size={16} /><h4>Selected Vehicle</h4></div>
+      <div className="veh-card-head"><Icon name={vehicleIconName(vehicle.category?.domain)} size={16} /><h4>Selected Vehicle</h4></div>
       {vehicle.photo_url && (
         <div className="form-context-photo">
           <img src={resolvePhotoUrl(vehicle.photo_url)} alt={vehicle.vehicle_name} />
@@ -5352,7 +6189,7 @@ function FormPage({ description, onBack, fields, initialValues, onSubmit, submit
       )}
       <dl className="veh-kv">
         <div><dt>Vehicle</dt><dd>{vehicle.vehicle_name}</dd></div>
-        <div><dt>Plate Number</dt><dd>{vehicle.plate_number}</dd></div>
+        <div><dt>{plateFieldLabel(vehicle.category?.domain)}</dt><dd>{vehicle.plate_number}</dd></div>
         <div><dt>Type</dt><dd>{vehicle.category?.category_name ?? 'Unassigned'}</dd></div>
         <div><dt>Brand / Model</dt><dd>{`${vehicle.brand ?? '-'} ${vehicle.model ?? ''}`.trim() || '-'}</dd></div>
         <div><dt>Status</dt><dd><StatusBadge value={vehicle.status} /></dd></div>
@@ -5449,14 +6286,18 @@ function FormPage({ description, onBack, fields, initialValues, onSubmit, submit
   );
 }
 
-function vehicleFields(lookups, allHubs = [], domain = 'Land') {
+function vehicleFields(lookups, allHubs = [], domain = 'Land', existingPhotoUrl = null) {
   const hubOptions = allHubs.map((hub) => ({ value: hub.name, label: hub.name }));
 
   return [
     { label: 'Vehicle Name', name: 'vehicle_name', required: true, type: 'text' },
-    { label: 'Plate Number', name: 'plate_number', required: true, type: 'text' },
-    { label: 'Vehicle Photo', name: 'photo', accept: 'image/*', type: 'file' },
-    { label: 'Vehicle Type', name: 'category_id', options: options(lookups.categories, 'category_id', 'category_name'), required: true, type: 'select' },
+    { label: plateFieldLabel(domain), name: 'plate_number', required: true, type: 'text' },
+    { label: 'Vehicle Photo', name: 'photo', accept: 'image/*', type: 'file', existingUrl: existingPhotoUrl },
+    {
+      label: 'Vehicle Type', name: 'category_id', options: lookups.categories ?? [], required: true, type: 'creatable-select',
+      newItemLabel: 'vehicle type', catalogEndpoint: '/categories', idField: 'category_id', nameField: 'category_name', valueIsId: true,
+      extraFields: [{ name: 'domain', label: 'Domain', options: ['Land', 'Water'], required: true, default: domain }],
+    },
     { label: 'Brand', name: 'brand', required: true, type: 'text' },
     { label: 'Model', name: 'model', required: true, type: 'text' },
     { label: 'Year Model', name: 'year_model', required: true, type: 'number' },
@@ -5466,9 +6307,22 @@ function vehicleFields(lookups, allHubs = [], domain = 'Land') {
     { label: 'Acquisition Cost (optional)', name: 'acquisition_cost', type: 'number', placeholder: 'e.g. 850000' },
     { label: 'Vehicle Color', name: 'vehicle_color', required: true, type: 'text' },
     ...vehicleDomainFields(domain),
-    { label: 'Current Location', name: 'current_location', options: hubOptions, required: true, type: 'select' },
-    { label: 'Estimated Return Date', name: 'estimated_return_date', type: 'date' },
-    { label: 'Remarks', name: 'remarks', type: 'textarea' },
+    {
+      label: 'Current Location', name: 'current_location', options: hubOptions, required: true, type: 'select',
+      // Full-width (not inline in the select's own half-column) — this map
+      // needs real width to read as a map, not a cramped strip. Reflects
+      // whatever is currently picked, not just what the vehicle loaded
+      // with — re-looks-up the hub from the live form value on every
+      // change, so switching the dropdown always re-populates it.
+      extra: (vals) => {
+        const hub = allHubs.find((h) => h.name === vals.current_location);
+        return hub ? (
+          <div className="veh-map-wrap" style={{ height: 320 }}>
+            <VehicleLocationMap lat={hub.lat} lng={hub.lng} label={hub.name} />
+          </div>
+        ) : null;
+      },
+    },
   ];
 }
 
@@ -5498,7 +6352,7 @@ function conditionFields(lookups) {
 function issueFields(lookups, editTarget, role) {
   if (editTarget?.issue_report_id && role === 'Custodian') {
     return [
-      { label: 'Issue Type', name: 'issue_type', options: lookups.issue_types, required: true, type: 'select' },
+      { label: 'Issue Type', name: 'issue_type', options: lookups.issue_types, required: true, type: 'creatable-select', newItemLabel: 'issue type', catalogEndpoint: '/fault-categories' },
       // A list, not one paragraph — each row becomes its own line-item, so
       // when this report is later converted into a Pre-Diagnosed ticket,
       // every distinct problem lands as its own sub-issue instead of the
@@ -5520,7 +6374,7 @@ function issueFields(lookups, editTarget, role) {
 
   return [
     { label: 'Vehicle', name: 'vehicle_id', options: vehicleOptions(lookups), required: true, type: 'select' },
-    { label: 'Issue Type', name: 'issue_type', options: lookups.issue_types, required: true, type: 'select' },
+    { label: 'Issue Type', name: 'issue_type', options: lookups.issue_types, required: true, type: 'creatable-select', newItemLabel: 'issue type', catalogEndpoint: '/fault-categories' },
     { label: 'Issue Description', name: 'issue_description', required: true, type: 'textarea' },
     { label: 'Severity Level', name: 'severity_level', options: lookups.severity_levels, required: true, type: 'select' },
     { label: 'Reported On Behalf Of (driver, optional)', name: 'reported_on_behalf_of', placeholder: 'e.g. Driver Mang Tonio', type: 'text' },
@@ -5554,6 +6408,27 @@ function applyRepairType(payload) {
   return { ...rest, is_external: 0, source_vehicle_id: null };
 }
 
+// "Performed By" (Admin-only, select-or-other) shares one field name for two
+// mutually-exclusive backend facts: a registered user's id, or a free-text
+// name for someone outside the system entirely (a volunteer, an outside
+// helper). withPerformedBy seeds the field from whichever the existing
+// record actually has (for editing); applyPerformedBy sorts a submitted
+// value back into the right one of the two real columns — a plain numeric
+// string is treated as a picked user id, anything else as typed "Other"
+// text. See FleetController::storeMaintenanceRecord.
+function withPerformedBy(record) {
+  if (!record) return EMPTY_OBJ;
+  return { ...record, maintenance_personnel_id: record.maintenance_personnel_id ?? record.performed_by_other ?? '' };
+}
+
+function applyPerformedBy(payload) {
+  if (!('maintenance_personnel_id' in payload)) return payload;
+  const raw = payload.maintenance_personnel_id;
+  const isOther = raw !== '' && raw != null && !/^\d+$/.test(String(raw));
+  if (isOther) return { ...payload, maintenance_personnel_id: null, performed_by_other: raw };
+  return { ...payload, performed_by_other: null };
+}
+
 function maintenanceFields(lookups, role, liveValues = EMPTY_OBJ) {
   const fields = [
     // Leads the form instead of trailing after Parts/Materials Used — it's
@@ -5572,18 +6447,26 @@ function maintenanceFields(lookups, role, liveValues = EMPTY_OBJ) {
       group: 'Repair Details',
       options: [
         { value: 'in_house', label: 'In-House Repair' },
-        { value: 'cannibalized', label: 'In-House — Used a Cannibalized Part' },
+        { value: 'cannibalized', label: 'Used Cannibalized Part' },
         { value: 'external', label: 'Sent to External Shop' },
       ],
     },
     { label: 'Vehicle', name: 'vehicle_id', options: vehicleOptions(lookups), required: true, type: 'select', group: 'Vehicle & Issue' },
     { label: 'Related Issue Report', name: 'issue_report_id', options: issueOptions(), type: 'select', group: 'Vehicle & Issue' },
-    { label: 'Maintenance Type', name: 'maintenance_type', options: lookups.maintenance_types, required: true, type: 'select', group: 'Vehicle & Issue' },
+    { label: 'Maintenance Type', name: 'maintenance_type', options: lookups.maintenance_types, required: true, type: 'creatable-select', newItemLabel: 'maintenance type', catalogEndpoint: '/maintenance-types', group: 'Vehicle & Issue' },
     { label: 'Problem / Reason', name: 'problem_reason', required: true, type: 'textarea', group: 'Work Log' },
     { label: 'Date Started', name: 'date_started', type: 'date', group: 'Schedule & Personnel' },
     { label: 'Date Completed', name: 'date_completed', type: 'date', group: 'Schedule & Personnel' },
     { label: 'Action Taken', name: 'action_taken', type: 'textarea', group: 'Work Log' },
-    { label: 'Parts / Materials Used', name: 'parts_used', type: 'textarea', group: 'Work Log' },
+    {
+      label: 'Parts / Materials Used',
+      name: 'parts_used',
+      type: 'list',
+      group: 'Work Log',
+      placeholder: 'e.g. Brake pads',
+      addLabel: 'Add Another Part',
+      removeLabel: 'part',
+    },
     { label: 'Maintenance Cost (PHP)', name: 'maintenance_cost', type: 'number', min: 0, placeholder: 'e.g. 1500', group: 'Cost & Completion' },
     // Proof-of-completion fast close: what actually justifies skipping
     // Custodian verification is that something REAL is attached — a receipt
@@ -5608,12 +6491,15 @@ function maintenanceFields(lookups, role, liveValues = EMPTY_OBJ) {
 
   if (role === 'Admin') {
     fields.splice(fields.findIndex((f) => f.name === 'action_taken'), 0, {
-      label: 'Maintenance Personnel',
+      label: 'Performed By',
       name: 'maintenance_personnel_id',
-      options: options(lookups.maintenance_personnel, 'id', 'name'),
+      options: options(lookups.maintenance_performers, 'id', 'name'),
       required: true,
-      type: 'select',
+      type: 'select-or-other',
+      otherLabel: 'Other (not in system)',
+      otherPlaceholder: 'e.g. a volunteer or outside helper\'s name',
       group: 'Schedule & Personnel',
+      hint: 'Whoever actually did the repair — not necessarily Maintenance Personnel; a Custodian or Admin who fixed it themselves belongs here too. Not registered in the system at all? Pick Other and type their name.',
     });
   }
 
@@ -5643,14 +6529,23 @@ function maintenanceFields(lookups, role, liveValues = EMPTY_OBJ) {
   }
 
   // No matching Issue Report yet (e.g. a mechanic self-filing a field repair
-  // with nothing on file) — let them create one inline instead of leaving
-  // this module and losing their in-progress record.
+  // with nothing on file) — let them create one instead of leaving this
+  // module and losing their in-progress record. Picking "+ Add New Issue…"
+  // pops the modal open immediately and only asks for Issue Type — the new
+  // report's description/severity come from this same form's Problem/Reason
+  // and a default (see submitFormPage), not asked for a second time.
   if (liveValues?.issue_report_id === NEW_ISSUE_OPTION.value) {
     const issueReportIndex = fields.findIndex((f) => f.name === 'issue_report_id');
     fields.splice(issueReportIndex + 1, 0,
-      { label: 'New Issue Type', name: 'new_issue_type', options: lookups.issue_types, required: true, type: 'select', group: 'Vehicle & Issue' },
-      { label: 'New Issue Description', name: 'new_issue_description', required: true, type: 'textarea', group: 'Vehicle & Issue' },
-      { label: 'New Issue Severity', name: 'new_issue_severity', options: lookups.severity_levels, required: true, type: 'select', group: 'Vehicle & Issue' },
+      {
+        label: 'New Issue Type',
+        name: '__new_issue_group__',
+        required: true,
+        type: 'new-issue-modal',
+        issueTypeOptions: lookups.issue_types,
+        fullWidth: true,
+        group: 'Vehicle & Issue',
+      },
     );
   }
 
@@ -5674,7 +6569,7 @@ function scheduleFields(lookups, allHubs = [], isEdit = false) {
 
   return [
     { label: 'Vehicle', name: 'vehicle_id', options: vehicleOptions(lookups), required: true, type: 'select' },
-    { label: 'Maintenance Type', name: 'maintenance_type', options: lookups.maintenance_types, required: true, type: 'select' },
+    { label: 'Maintenance Type', name: 'maintenance_type', options: lookups.maintenance_types, required: true, type: 'creatable-select', newItemLabel: 'maintenance type', catalogEndpoint: '/maintenance-types' },
     { label: 'Scheduled Date', name: 'scheduled_date', required: true, type: 'date' },
     { label: 'Scheduled Time', name: 'scheduled_time', type: 'time' },
     // Recurring PM: completing this schedule auto-creates the next at the chosen
@@ -5840,17 +6735,6 @@ const DASHBOARD_METRIC_STYLES = {
   'Vehicles Needing Attention': { icon: 'wrench', bg: '#fef3c7', color: '#d97706' },
 };
 const DASHBOARD_METRIC_STYLE_DEFAULT = { icon: 'grid', bg: '#dbeafe', color: '#2563eb' };
-// Kept out of the headline KPI row specifically because each is already
-// visible elsewhere on the dashboard (see the comment at that row) — not
-// because the underlying data is gone.
-// Kept out of the headline KPI row because each has its own slim secondary
-// row/panel already (see the dashboard-mini-stats row and the Action Queue /
-// Fleet Readiness & Risks panels) — not because the data disappears.
-const DASHBOARD_HEADLINE_HIDDEN_LABELS = new Set([
-  'Reported Issues',
-  'Upcoming Maintenance',
-  'Overdue Maintenance',
-]);
 
 // NOTE: no "In Use" card — the status exists in the DB enum but this system
 // tracks availability only (no dispatch flow ever sets a vehicle to In Use).
@@ -5944,36 +6828,43 @@ const USER_STAT_CARDS = [
 function ModuleStatCards({ totalLabel = 'Total', total, cards, counts, activeFilter, onFilterChange }) {
   return (
     <section className="metric-grid" aria-label="Status summary" style={{ marginBottom: '16px' }}>
-      <article className="metric-card metric-card-iconic">
-        <span className="metric-card-icon is-total">
+      <article className="metric-card metric-card-iconic metric-card-solid" style={{ background: '#2563eb' }}>
+        <span className="metric-card-icon" style={{ background: 'rgba(255, 255, 255, 0.22)', color: '#ffffff' }}>
           <Icon name="grid" size={18} />
         </span>
         <div className="metric-card-body">
-          <span>{totalLabel}</span>
-          <strong>{total}</strong>
+          <span style={{ color: 'rgba(255, 255, 255, 0.85)' }}>{totalLabel}</span>
+          <strong style={{ color: '#ffffff' }}>{total}</strong>
         </div>
       </article>
-      {cards.map(({ key, label, icon, bg, color }) => {
-        const isActive = activeFilter === key;
+      {cards.map(({ key, label, icon, color }) => {
+        // activeFilter is a plain string in some modules (a dedicated
+        // single-purpose bucket filter) and an array in others (the shared
+        // filter state now that FilterBar's dropdowns are multi-select) —
+        // support both without forcing every caller to convert.
+        const isMulti = Array.isArray(activeFilter);
+        const isActive = isMulti ? (activeFilter.length === 1 && activeFilter[0] === key) : activeFilter === key;
         return (
           <button
             key={key}
             type="button"
-            className="metric-card metric-card-iconic"
+            className={`metric-card metric-card-iconic metric-card-solid stat-filter-card${isActive ? ' is-active' : ''}`}
             style={{
               cursor: 'pointer',
-              borderColor: isActive ? color : undefined,
-              boxShadow: isActive ? `0 0 0 2px ${color}59` : undefined,
+              background: color,
+              boxShadow: isActive
+                ? `0 0 0 3px #ffffff, 0 0 0 5px ${color}, 0 10px 24px 2px color-mix(in srgb, ${color} 55%, transparent)`
+                : undefined,
             }}
-            onClick={() => onFilterChange(isActive ? '' : key)}
+            onClick={() => onFilterChange(isActive ? (isMulti ? [] : '') : (isMulti ? [key] : key))}
             title={`Filter: ${label}`}
           >
-            <span className="metric-card-icon" style={{ background: bg, color }}>
+            <span className="metric-card-icon" style={{ background: 'rgba(255, 255, 255, 0.22)', color: '#ffffff' }}>
               <Icon name={icon} size={18} />
             </span>
             <div className="metric-card-body">
-              <span>{label}</span>
-              <strong>{counts[key] ?? 0}</strong>
+              <span style={{ color: 'rgba(255, 255, 255, 0.85)' }}>{label}</span>
+              <strong style={{ color: '#ffffff' }}>{counts[key] ?? 0}</strong>
             </div>
           </button>
         );
@@ -6039,7 +6930,7 @@ function vehicleColumns(role, onEdit, deleteRecord, restoreRecord, filterStatus,
     },
   ];
 
-  if (filterStatus === 'Inactive') {
+  if (filterStatus?.includes?.('Inactive')) {
     columns.push(
       { label: 'Archived At', render: (row) => <DateBadge value={row.archived_at} /> },
       { label: 'Archived By', render: (row) => <UserAvatarName user={row.archived_by} fallback="—" /> },
@@ -6214,6 +7105,72 @@ function conditionColumns(role, onEdit, deleteRecord, onCreateTicketFromConditio
   return columns;
 }
 
+// "X ago" — coarse, single-unit relative time (seconds up to years), the
+// same granularity a typical activity-feed timestamp uses.
+function timeAgo(value) {
+  if (!value) return '';
+  const then = new Date(value).getTime();
+  if (Number.isNaN(then)) return '';
+  const seconds = Math.max(0, Math.floor((Date.now() - then) / 1000));
+  const units = [
+    ['year', 31536000],
+    ['month', 2592000],
+    ['week', 604800],
+    ['day', 86400],
+    ['hour', 3600],
+    ['minute', 60],
+  ];
+  for (const [unit, secondsInUnit] of units) {
+    const count = Math.floor(seconds / secondsInUnit);
+    if (count >= 1) return `${count} ${unit}${count > 1 ? 's' : ''} ago`;
+  }
+  return 'Just now';
+}
+
+// Quick-glance companion to the stat row — a scrollable activity timeline of
+// the newest reports (vehicle, issue, reporter), so "what's come in
+// recently" doesn't require scrolling the full table below. Sourced from the
+// unfiltered list, so a search/filter on the main table doesn't empty it out.
+function LatestIssueCard({ issues = [], onRowClick }) {
+  const sorted = useMemo(
+    () => [...issues].sort((a, b) => (b.issue_report_id ?? 0) - (a.issue_report_id ?? 0)),
+    [issues]
+  );
+
+  return (
+    <aside className="panel latest-issue-card latest-issue-timeline">
+      <div className="latest-issue-card-head">
+        <span className="latest-issue-card-label">Latest Reports</span>
+        <span className="count-badge">{issues.length}</span>
+      </div>
+      <div className="latest-issue-timeline-list">
+        {sorted.length === 0 ? (
+          <p className="muted">No issues reported yet.</p>
+        ) : (
+          sorted.map((row) => (
+            <button
+              key={row.issue_report_id}
+              type="button"
+              className="latest-issue-timeline-item"
+              onClick={() => onRowClick?.(row)}
+            >
+              <span className="latest-issue-timeline-dot" />
+              <span className="latest-issue-timeline-icon"><Icon name="mail" size={16} /></span>
+              <span className="latest-issue-timeline-body">
+                <strong>{row.vehicle?.vehicle_name ?? 'Unknown vehicle'}</strong>
+                <span className="muted">
+                  {row.issue_type ?? 'Unspecified issue'} reported by {row.reported_by?.name ?? 'Unknown reporter'}.
+                </span>
+              </span>
+              <span className="latest-issue-timeline-time">{timeAgo(row.created_at)}</span>
+            </button>
+          ))
+        )}
+      </div>
+    </aside>
+  );
+}
+
 function issueColumns(role, onEdit, onCreateTicketFromIssue, setUserInfoTarget, onView, deleteRecord) {
   const columns = [
     { label: 'ID', width: '5%', render: (row) => row.issue_report_id },
@@ -6317,7 +7274,7 @@ function maintenanceColumns(role, setEditTarget, updateRecord, onViewRecord) {
     },
     { label: 'Source', width: '9%', render: (row) => <StatusBadge value={row.source} /> },
     { label: 'Problem / Reason', width: '14%', className: 'cell-text', render: (row) => <ExpandableText text={row.problem_reason} /> },
-    { label: 'Personnel', width: '10%', render: (row) => <UserAvatarName user={row.maintenance_personnel} /> },
+    { label: 'Personnel', width: '10%', render: (row) => <UserAvatarName user={row.maintenance_personnel} fallback={row.performed_by_other ?? '-'} /> },
     { label: 'Progress', width: '8%', render: (row) => <StatusBadge value={row.progress_status} /> },
     { label: 'Verification', width: '8%', render: (row) => row.verification_result ? <StatusBadge value={row.verification_result} /> : '-' },
     { label: 'Date Started', width: '5%', render: (row) => <DateBadge value={row.date_started} /> },
@@ -6434,7 +7391,7 @@ function MaintenanceRecordCard({ record, onClick }) {
       <div className="ticket-card-bottom">
         {record.verification_result
           ? <StatusBadge value={record.verification_result} />
-          : <span className="muted" style={{ fontSize: '0.72rem' }}>{record.maintenance_personnel?.name ?? '—'}</span>}
+          : <span className="muted" style={{ fontSize: '0.72rem' }}>{record.maintenance_personnel?.name ?? record.performed_by_other ?? '—'}</span>}
         <span className="ticket-card-date">{formatDate(record.date_completed ?? record.date_started)}</span>
       </div>
     </div>
@@ -6528,7 +7485,7 @@ function MaintenanceRecordDetail({ record, onConfirm, onReopen, onDecisionClose,
           </div>
           <div>
             <span className="muted" style={{ fontSize: '0.74rem', display: 'block' }}>Personnel</span>
-            <UserAvatarName user={record.maintenance_personnel} />
+            <UserAvatarName user={record.maintenance_personnel} fallback={record.performed_by_other ?? '-'} />
           </div>
           <div>
             <span className="muted" style={{ fontSize: '0.74rem', display: 'block' }}>Date Started / Completed</span>
@@ -6670,7 +7627,7 @@ function maintenanceStatusColumns(setEditTarget) {
     { label: 'Source', render: (row) => <StatusBadge value={row.source} /> },
     { label: 'Problem / Reason', className: 'cell-text', render: (row) => <ExpandableText text={row.problem_reason} /> },
     { label: 'Action Taken', className: 'cell-text', render: (row) => <ExpandableText text={row.action_taken} /> },
-    { label: 'Personnel', render: (row) => <UserAvatarName user={row.maintenance_personnel} /> },
+    { label: 'Personnel', render: (row) => <UserAvatarName user={row.maintenance_personnel} fallback={row.performed_by_other ?? '-'} /> },
     { label: 'Progress', render: (row) => <StatusBadge value={row.progress_status} /> },
     { label: 'Action', render: (row) => <button className="btn-edit-action icon-btn" onClick={() => setEditTarget(row)} type="button" title="Verify" aria-label="Verify"><Icon name="checkCircle" size={14} /></button> },
   ];
@@ -6882,7 +7839,7 @@ const maintenanceHistoryColumns = [
   { label: 'Problem / Reason', className: 'cell-text', render: (row) => <ExpandableText text={row.problem_reason} /> },
   { label: 'Action Taken', className: 'cell-text', render: (row) => <ExpandableText text={row.action_taken} /> },
   { label: 'Parts Used', render: (row) => <PartsTags value={row.parts_used} /> },
-  { label: 'Personnel', render: (row) => row.maintenance_personnel?.name ?? '-' },
+  { label: 'Personnel', render: (row) => row.maintenance_personnel?.name ?? row.performed_by_other ?? '-' },
   { label: 'Completed', render: (row) => <DateBadge value={row.date_completed ?? row.updated_at} /> },
   { label: 'Time', render: (row) => formatTime(row.date_completed ?? row.updated_at) },
 ];
@@ -7297,15 +8254,13 @@ async function sendPayload(method, path, payload) {
     });
     if (method !== 'post') {
       formData.append('_method', method.toUpperCase());
-      await api.post(path, formData);
-      return;
+      return api.post(path, formData);
     }
 
-    await api.post(path, formData);
-    return;
+    return api.post(path, formData);
   }
 
-  await api[method](path, cleanPayload(payload));
+  return api[method](path, cleanPayload(payload));
 }
 
 function cleanPayload(payload) {
@@ -7774,10 +8729,11 @@ function WorkTrackerModule({ tickets, user, categories = [], vehicles = [], onVi
   const [activeFilter, setActiveFilter] = useState('');
   const [search, setSearch] = useState('');
   // FilterBar (draft/apply) state — Category + Capacity + Status + My Role.
-  const [filterCategory, setFilterCategory] = useState('');
-  const [filterCapacity, setFilterCapacity] = useState('');
-  const [filterStatus, setFilterStatus] = useState('');
-  const [filterRole, setFilterRole] = useState('');
+  const [filterCategory, setFilterCategory] = useState([]);
+  const [filterCapacity, setFilterCapacity] = useState([]);
+  const [filterStatus, setFilterStatus] = useState([]);
+  const [filterRole, setFilterRole] = useState([]);
+  const [filterOutcome, setFilterOutcome] = useState([]);
   // Card clicked open in the detail popup — a modal instead of an inline
   // expand so a ticket with many sub-issues doesn't push the whole grid down.
   const [modalGroup, setModalGroup] = useState(null);
@@ -7812,12 +8768,15 @@ function WorkTrackerModule({ tickets, user, categories = [], vehicles = [], onVi
   const visibleRows = useMemo(() => {
     let result = allRows;
     if (activeFilter) result = result.filter((row) => workTrackerBucket(row) === activeFilter);
-    if (filterCategory) result = result.filter((row) => String(row.vehicle?.category_id) === String(filterCategory));
-    if (filterCapacity) result = result.filter((row) => row.vehicle?.capacity === filterCapacity);
-    if (filterStatus) result = result.filter((row) => row.status === filterStatus);
-    if (filterRole) {
-      result = result.filter((row) => (filterRole === 'Mechanic' ? row.isMechanic : row.isVerifier));
+    if (filterCategory.length) result = result.filter((row) => filterCategory.includes(String(row.vehicle?.category_id)));
+    if (filterCapacity.length) result = result.filter((row) => filterCapacity.includes(row.vehicle?.capacity));
+    if (filterStatus.length) result = result.filter((row) => filterStatus.includes(row.status));
+    if (filterRole.length) {
+      result = result.filter((row) => (
+        (filterRole.includes('Mechanic') && row.isMechanic) || (filterRole.includes('Custodian') && row.isVerifier)
+      ));
     }
+    if (filterOutcome.length) result = result.filter((row) => filterOutcome.includes(workTrackerOutcome(row).label));
     const q = search.trim().toLowerCase();
     if (q) {
       result = result.filter((row) => (
@@ -7828,7 +8787,7 @@ function WorkTrackerModule({ tickets, user, categories = [], vehicles = [], onVi
       ));
     }
     return result;
-  }, [allRows, activeFilter, filterCategory, filterCapacity, filterStatus, filterRole, search]);
+  }, [allRows, activeFilter, filterCategory, filterCapacity, filterStatus, filterRole, filterOutcome, search]);
 
   const groupedTickets = useMemo(() => groupWorkTrackerByTicket(visibleRows), [visibleRows]);
 
@@ -7849,6 +8808,30 @@ function WorkTrackerModule({ tickets, user, categories = [], vehicles = [], onVi
         activeFilter={activeFilter}
         onFilterChange={setActiveFilter}
       />
+      <section className="panel module-filter-panel">
+        <FilterBar
+          categories={categories}
+          vehicles={vehicles}
+          filterCategory={filterCategory}
+          setFilterCategory={setFilterCategory}
+          filterCapacity={filterCapacity}
+          setFilterCapacity={setFilterCapacity}
+          filterStatus={filterStatus}
+          setFilterStatus={setFilterStatus}
+          filterPriority={filterRole}
+          setFilterPriority={setFilterRole}
+          statusOptions={['Open', 'Under Repair', 'For Inspection', 'For Confirmation', 'Done', 'Deferred']}
+          priorityOptions={(hasRole(user, 'Custodian') && hasRole(user, 'Maintenance Personnel')) ? ['Mechanic', 'Custodian'] : []}
+          priorityLabel="Role"
+          extraFilters={[{
+            key: 'outcome',
+            label: 'Outcomes',
+            options: ['Confirmed — Done', 'Reopened by Admin', 'Approved — awaiting Admin', 'Rejected — redo repair', 'Awaiting your verification', 'In repair', 'Deferred', 'Awaiting assignment'],
+            selected: filterOutcome,
+            setSelected: setFilterOutcome,
+          }]}
+        />
+      </section>
       <section className="panel">
         <div className="panel-header-bar">
           <h3>Work Tracker <span className="count-badge">{visibleRows.length}</span></h3>
@@ -7872,21 +8855,6 @@ function WorkTrackerModule({ tickets, user, categories = [], vehicles = [], onVi
           Every vehicle you've worked on and where it stands now — so you can see the outcome of your work
           without hunting for the ticket. Items needing your action are pinned to the top.
         </p>
-        <FilterBar
-          categories={categories}
-          vehicles={vehicles}
-          filterCategory={filterCategory}
-          setFilterCategory={setFilterCategory}
-          filterCapacity={filterCapacity}
-          setFilterCapacity={setFilterCapacity}
-          filterStatus={filterStatus}
-          setFilterStatus={setFilterStatus}
-          filterPriority={filterRole}
-          setFilterPriority={setFilterRole}
-          statusOptions={['Open', 'Under Repair', 'For Inspection', 'For Confirmation', 'Done', 'Deferred']}
-          priorityOptions={(hasRole(user, 'Custodian') && hasRole(user, 'Maintenance Personnel')) ? ['Mechanic', 'Custodian'] : []}
-          priorityLabel="Role"
-        />
         <div style={{ height: '16px' }} />
         <div className="work-tracker-grid">
           {groupedTickets.length === 0 ? (
@@ -7971,7 +8939,7 @@ function WorkTrackerModule({ tickets, user, categories = [], vehicles = [], onVi
 function mechanicAssignFields(lookups) {
   return [
     { label: 'Assign Mechanic', name: 'assigned_mechanic_id', options: (lookups.maintenance_personnel ?? []).map((m) => ({ value: m.id, label: m.name })), required: true, type: 'select' },
-    { label: 'Maintenance Type', name: 'maintenance_type', options: lookups.maintenance_types ?? [], required: true, type: 'select' },
+    { label: 'Maintenance Type', name: 'maintenance_type', options: lookups.maintenance_types ?? [], required: true, type: 'creatable-select', newItemLabel: 'maintenance type', catalogEndpoint: '/maintenance-types' },
     { label: 'Work Order Notes', name: 'work_order_notes', type: 'textarea', rows: 2 },
   ];
 }
@@ -8201,6 +9169,35 @@ function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, on
   const canClose = ticket.status === 'Active' && allResolved;
   const canDecisionClose = ticket.status === 'Active' && hasUnresolved;
   const isAdmin = role === 'Admin';
+  const resolvedCount = subIssues.filter((s) => isResolvedStatus(s.status)).length;
+  const unresolvedCount = Math.max(0, progress.total - resolvedCount);
+  const pendingMechanicCount = subIssues.filter((s) => s.status === 'Open').length;
+  const inRepairCount = subIssues.filter((s) => s.status === 'Under Repair').length;
+  const awaitingVerificationCount = subIssues.filter((s) => s.status === 'For Inspection').length;
+  const awaitingConfirmationCount = subIssues.filter((s) => s.status === 'For Confirmation').length;
+  const ticketCost = subIssues.reduce((sum, s) => sum + (Number(s.maintenance_cost) || 0), 0);
+  const resolvedPercent = progress.total > 0
+    ? Math.round((resolvedCount / progress.total) * 100)
+    : ticket.status === 'Closed' ? 100 : 0;
+  const nextSignal = (() => {
+    if (ticket.status === 'Cancelled') return { tone: 'alert', label: 'Ticket cancelled', detail: 'Restore it only if work needs to resume.' };
+    if (ticket.status === 'Closed') return { tone: 'ok', label: 'Closed', detail: 'All recorded work is complete.' };
+    if (canClose) return { tone: 'ok', label: 'Ready to close', detail: 'Return the vehicle once the final close is recorded.' };
+    if (canDecisionClose) return { tone: 'warn', label: 'Decision needed', detail: `${unresolvedCount} unresolved item${unresolvedCount === 1 ? '' : 's'} must be finished, deferred, or decision-closed.` };
+    if (ticket.status === 'Open') return { tone: 'active', label: 'Inspection first', detail: ticket.assigned_custodian?.name ? `${ticket.assigned_custodian.name} owns the inspection step.` : 'Assign and complete the custodian inspection.' };
+    if (pendingMechanicCount > 0) return { tone: 'warn', label: 'Dispatch mechanic', detail: `${pendingMechanicCount} sub-issue${pendingMechanicCount === 1 ? '' : 's'} still need assignment.` };
+    if (inRepairCount > 0) return { tone: 'active', label: 'Repair in progress', detail: `${inRepairCount} work order${inRepairCount === 1 ? '' : 's'} waiting for repair logs.` };
+    if (awaitingVerificationCount > 0) return { tone: 'active', label: 'Verify repair', detail: `${awaitingVerificationCount} item${awaitingVerificationCount === 1 ? '' : 's'} awaiting custodian verification.` };
+    if (awaitingConfirmationCount > 0) return { tone: 'active', label: 'Confirm outcome', detail: `${awaitingConfirmationCount} repair${awaitingConfirmationCount === 1 ? '' : 's'} awaiting final admin verdict.` };
+    return { tone: 'active', label: 'Work in motion', detail: 'Follow the active handoff shown in the repair board.' };
+  })();
+  const processStats = [
+    { icon: 'list', label: 'Sub-issues', value: progress.total },
+    { icon: 'checkCircle', label: 'Resolved', value: resolvedCount },
+    { icon: 'wrench', label: 'In repair', value: inRepairCount },
+    { icon: 'flag', label: 'Confirm', value: awaitingConfirmationCount },
+    { icon: 'clipboard', label: 'Cost', value: ticketCost ? `PHP ${ticketCost.toLocaleString('en-US', { minimumFractionDigits: 2 })}` : 'PHP 0.00' },
+  ];
 
   // Adding a sub-issue requires firsthand contact with the vehicle — the
   // assigned Custodian, or a mechanic currently working one of its
@@ -8226,118 +9223,134 @@ function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, on
     });
   };
 
+  const requestCancel = () => {
+    onRequestConfirmation({
+      title: 'Cancel Ticket',
+      message: `Are you sure you want to cancel Ticket #${ticket.ticket_id}? Work on it stops here — it can be uncancelled later if needed.`,
+      confirmLabel: 'Cancel Ticket',
+      variant: 'primary',
+      onConfirm: () => onCancel(ticket),
+    });
+  };
+
   const panel = (
       <div className={`ticket-detail-panel${asPage ? ' is-page' : ''}`} onClick={asPage ? undefined : (e) => e.stopPropagation()}>
-        <div className="ticket-detail-header">
-          <div>
-            <span className="ticket-detail-id">Ticket #{ticket.ticket_id}</span>
+        <section className={`ticket-process-hero is-${nextSignal.tone}`}>
+          <div className="ticket-process-hero-main">
+            <div className="ticket-process-kicker">
+              <span>Ticket #{ticket.ticket_id}</span>
+              {typeof daysOpen === 'number' && (
+                <span>{daysOpen === 0 ? 'Opened today' : `${daysOpen} day${daysOpen === 1 ? '' : 's'} open`}</span>
+              )}
+            </div>
             <h3 className="ticket-detail-title">{ticket.ticket_title}</h3>
-            {/* Tier 1 — real status chips only: the ticket's state, its
-                priority, and any genuine warnings (aging / recurring). Routine
-                facts (age, created date, progress) drop to the quiet metadata
-                line below so nothing competes with the two states that matter. */}
             <div className="ticket-detail-meta">
               <TicketStatusBadge value={ticket.status} size="large" />
               <TicketStatusBadge value={ticket.priority} />
+              <TicketStageBadge ticket={ticket} variant="pill" />
               {isAging && (
-                <span className="status-badge ticket-cancelled" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }} title="This ticket has been open a long time — resolve or close it.">
-                  <Icon name="alert" size={12} /> Aging — open {daysOpen} days
+                <span className="status-badge ticket-cancelled" title="This ticket has been open a long time; resolve or close it.">
+                  <Icon name="alert" size={12} /> Aging: {daysOpen} days
                 </span>
               )}
               {ticket.recurrence_count > 0 && (
-                <span className="status-badge rework-warning" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }} title="This Main Issue was already fixed on this vehicle recently — a recurring failure.">
-                  <Icon name="undo" size={12} /> Recurring — {ticket.recurrence_count + 1}
+                <span className="status-badge rework-warning" title="This Main Issue was already fixed on this vehicle recently; a recurring failure.">
+                  <Icon name="undo" size={12} /> Recurring: {ticket.recurrence_count + 1}
                   {['st', 'nd', 'rd'][ticket.recurrence_count] ?? 'th'} time
                 </span>
               )}
             </div>
-
-            {/* Tier 2 — quiet reference metadata: no pills, muted text with dot
-                separators, read as a caption under the status chips. */}
             <div className="ticket-detail-subline">
-              {typeof daysOpen === 'number' && !isAging && (
-                <span><Icon name="calendar" size={12} /> {daysOpen === 0 ? 'Opened today' : `Opened ${daysOpen} day${daysOpen === 1 ? '' : 's'} ago`}</span>
-              )}
               {ticket.created_at && (
                 <span><Icon name="clipboard" size={12} /> Created {formatDate(ticket.created_at)}</span>
               )}
               {progress.total > 0 && (
-                <span className={progress.done === progress.total ? 'is-complete' : undefined}>
-                  <Icon name="checkCircle" size={12} /> {progress.done} of {progress.total} done{progress.deferred > 0 ? ` · ${progress.deferred} deferred` : ''}
+                <span className={resolvedCount === progress.total ? 'is-complete' : undefined}>
+                  <Icon name="checkCircle" size={12} /> {resolvedCount} of {progress.total} resolved{progress.deferred > 0 ? ` / ${progress.deferred} deferred` : ''}
                 </span>
               )}
+              {ticket.vehicle?.vehicle_name && (
+                <span><Icon name="vehicle" size={12} /> {ticket.vehicle.vehicle_name}</span>
+              )}
+            </div>
+            <p className="ticket-process-description">{ticket.ticket_description || 'No description provided.'}</p>
+          </div>
+
+          <div className="ticket-process-meter" style={{ '--ticket-progress': `${resolvedPercent}%` }}>
+            <div className="ticket-process-meter-core">
+              <span>Resolved</span>
+              <strong>{resolvedPercent}%</strong>
+              <small>{resolvedCount}/{progress.total || 0} items</small>
             </div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-            {/* Ticket-wide "what's needed next" — the same badge used on the
-                ticket cards, reused here rather than promoting one
-                sub-issue's own note (below) to this spot. With more than one
-                sub-issue, each can be at a different stage, so only a
-                ticket-level summary generalizes; a single sub-issue's note
-                wouldn't. */}
-            <TicketStageBadge ticket={ticket} />
-            {/* As a full page, the breadcrumb above already says "back to
-                Maintenance Tickets" and the sidebar is always one click away —
-                a redundant arrow here just duplicates that. Only the modal
-                variant (opened over another page) needs its own close button. */}
+
+          <div className="ticket-process-next-card">
             {asPage ? null : (
-              <button className="icon-btn" onClick={onClose} type="button" title="Close" aria-label="Close"><Icon name="close" size={18} /></button>
+              <button className="icon-btn ticket-process-close" onClick={onClose} type="button" title="Close" aria-label="Close"><Icon name="close" size={18} /></button>
             )}
+            <span className="ticket-process-next-label">Next best action</span>
+            <strong>{nextSignal.label}</strong>
+            <p>{nextSignal.detail}</p>
+            <div className="ticket-process-stat-grid">
+              {processStats.map((stat) => (
+                <div key={stat.label} className="ticket-process-stat">
+                  <Icon name={stat.icon} size={14} />
+                  <span>{stat.label}</span>
+                  <strong>{stat.value}</strong>
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
+        </section>
 
         {ticket.status === 'Cancelled' ? (
-          <p className="notice danger" style={{ margin: '12px 20px', display: 'flex', alignItems: 'center', gap: 8 }}><Icon name="alert" size={15} /> This ticket was cancelled.</p>
+          <p className="notice danger ticket-process-cancelled"><Icon name="alert" size={15} /> This ticket was cancelled.</p>
         ) : (
-          <div className="ticket-progress-tracker" role="list" aria-label="Ticket progress">
+          <div className="ticket-process-flow" role="list" aria-label="Ticket progress">
             {phaseOrder.map((s, i) => {
               const current = phaseOrder.indexOf(ticket.status);
               const state = i < current ? 'done' : i === current ? 'active' : 'upcoming';
+              const hint = {
+                Open: 'Custodian inspection',
+                Active: 'Repair, verify, confirm',
+                Closed: 'Return or archive',
+              }[s];
               return (
-                <div key={s} className={`ticket-progress-step is-${state}`} role="listitem">
-                  <span className="ticket-progress-marker">
-                    {state === 'done' ? (
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round">
-                        <polyline points="20 6 9 17 4 12" />
-                      </svg>
-                    ) : (
-                      <span className="ticket-progress-dot" />
-                    )}
+                <div key={s} className={`ticket-process-flow-step is-${state}`} role="listitem">
+                  <span className="ticket-process-flow-marker" style={state === 'active' ? { background: PHASE_STEP_COLORS[s], borderColor: PHASE_STEP_COLORS[s] } : undefined}>
+                    {state === 'done' ? <Icon name="checkCircle" size={15} /> : <Icon name={PHASE_STEP_ICONS[s]} size={15} />}
                   </span>
-                  <span className="ticket-progress-label">
-                    <Icon
-                      name={PHASE_STEP_ICONS[s]}
-                      size={13}
-                      style={state !== 'upcoming' ? { color: PHASE_STEP_COLORS[s] } : undefined}
-                    />
-                    {s}
-                  </span>
-                  <span className="ticket-progress-stage">Stage {i + 1}</span>
+                  <span className="ticket-process-flow-label" style={state !== 'upcoming' ? { color: PHASE_STEP_COLORS[s] } : undefined}>{s}</span>
+                  <small>{hint}</small>
                 </div>
               );
             })}
           </div>
         )}
-
         <div className="ticket-detail-body ticket-detail-body-columns">
           <div className="ticket-detail-col-left">
             <section className="ticket-section">
               <h4><Icon name="vehicle" size={14} /> Overview</h4>
-              <div className="ticket-detail-vehicle-layout" style={{ marginBottom: 6, padding: 8, gap: 10 }}>
-                {ticket.vehicle?.photo_url && (
-                  <div className="ticket-detail-vehicle-photo" style={{ width: 44, height: 44 }}>
-                    <img src={resolvePhotoUrl(ticket.vehicle.photo_url)} alt={ticket.vehicle.vehicle_name} />
-                  </div>
+              <div className="ticket-preview-card" style={{ marginBottom: 10 }}>
+                {ticket.vehicle?.photo_url ? (
+                  <img className="ticket-preview-photo" style={{ width: 120, height: 120 }} src={resolvePhotoUrl(ticket.vehicle.photo_url)} alt={ticket.vehicle.vehicle_name} />
+                ) : (
+                  <span className="ticket-preview-photo ticket-preview-photo-empty" style={{ width: 120, height: 120 }}><Icon name="vehicle" size={40} /></span>
                 )}
-                <div className="ticket-detail-vehicle-info">
-                  <p style={{ margin: '0 0 4px' }}><strong style={{ color: '#2563eb' }}>{ticket.vehicle?.vehicle_name}</strong> <span className="muted">({ticket.vehicle?.plate_number})</span></p>
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                <div className="ticket-preview-body">
+                  <strong>{ticket.vehicle?.vehicle_name}</strong>
+                  <span>{ticket.vehicle?.plate_number} &middot; {ticket.vehicle?.category?.category_name ?? 'Unclassified'}</span>
+                  <span className="muted">{[ticket.vehicle?.brand, ticket.vehicle?.model].filter(Boolean).join(' ') || '—'} &middot; {ticket.vehicle?.current_location ?? 'No location on file'}</span>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
                     <StatusBadge value={ticket.vehicle?.status} />
                     <StatusBadge value={ticket.vehicle?.condition} />
                   </div>
                 </div>
               </div>
-              <p className="muted" style={{ margin: 0, fontSize: '0.82rem' }}>{ticket.ticket_description}</p>
+              <div className="ticket-detail-description-box">
+                <span className="ticket-detail-label">Description</span>
+                <ExpandableText text={ticket.ticket_description} className="muted" lines={3} />
+              </div>
             </section>
 
             {ticket.assigned_custodian_id && (
@@ -8401,7 +9414,7 @@ function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, on
                       />
                     </div>
                   ) : (
-                    <button className="btn-edit-action" style={{ marginTop: 10 }} type="button" onClick={() => setReassigningCustodian(true)}>
+                    <button className="ghost-button btn-reassign-custodian" style={{ marginTop: 10 }} type="button" onClick={() => setReassigningCustodian(true)}>
                       <Icon name="undo" size={14} /> Reassign Custodian
                     </button>
                   )
@@ -8577,7 +9590,7 @@ function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, on
                           vehicle already linked. */}
                       {isAdmin && onSendToExternalShop && si.deferred_issue_report_id && (
                         <button
-                          className="btn-edit-action"
+                          className="ghost-button btn-edit-action"
                           type="button"
                           style={{ marginTop: 8 }}
                           onClick={() => onSendToExternalShop({
@@ -8624,7 +9637,7 @@ function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, on
                         />
                       </div>
                     ) : (
-                      <button className="btn-edit-action" style={{ marginTop: 10 }} type="button" onClick={() => setAssigningId(si.sub_issue_id)}>Assign Mechanic</button>
+                      <button className="primary-button" style={{ marginTop: 10 }} type="button" onClick={() => setAssigningId(si.sub_issue_id)}>Assign Mechanic</button>
                     )
                   )}
 
@@ -8661,7 +9674,7 @@ function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, on
                         />
                       </div>
                     ) : (
-                      <button className="btn-edit-action" style={{ marginTop: 10 }} type="button" onClick={() => setEditingDoneId(si.sub_issue_id)}>
+                      <button className="ghost-button btn-edit-action" style={{ marginTop: 10 }} type="button" onClick={() => setEditingDoneId(si.sub_issue_id)}>
                         <Icon name="undo" size={14} /> Unconfirm
                       </button>
                     )
@@ -8686,7 +9699,7 @@ function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, on
                         />
                       </div>
                     ) : (
-                      <button className="btn-edit-action" style={{ marginTop: 10 }} type="button" onClick={() => { setReassigningId(si.sub_issue_id); setDeferringId(null); setConfirmingId(null); }}>
+                      <button className="ghost-button btn-edit-action" style={{ marginTop: 10 }} type="button" onClick={() => { setReassigningId(si.sub_issue_id); setDeferringId(null); setConfirmingId(null); }}>
                         <Icon name="undo" size={14} /> Reassign Mechanic
                       </button>
                     )
@@ -8701,8 +9714,9 @@ function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, on
                   {isAdmin && ticket.status === 'Active' && !isResolvedStatus(si.status) && si.status !== 'For Confirmation' && deferringId !== si.sub_issue_id && (
                     <button
                       type="button"
+                      className="ghost-button btn-defer-action"
                       onClick={() => { setDeferringId(si.sub_issue_id); setAssigningId(null); setConfirmingId(null); }}
-                      style={{ marginTop: 10, marginLeft: 8, background: 'none', border: '1px solid #f59e0b', color: '#b45309', borderRadius: 8, padding: '6px 12px', fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5 }}
+                      style={{ marginTop: 10, marginLeft: 8, gap: 6 }}
                     >
                       <Icon name="alert" size={13} /> Defer (can't finish now)
                     </button>
@@ -8716,7 +9730,7 @@ function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, on
                   <div className="ticket-inline-form">
                     <SmartForm
                       fields={[
-                        { label: 'Category', name: 'maintenance_type', options: lookups.maintenance_types ?? [], type: 'select' },
+                        { label: 'Category', name: 'maintenance_type', options: lookups.maintenance_types ?? [], type: 'creatable-select', newItemLabel: 'maintenance type', catalogEndpoint: '/maintenance-types' },
                         { label: 'Sub-Issue Title', name: 'title', required: true, type: 'text' },
                       ]}
                       key="add-sub-issue"
@@ -8731,6 +9745,9 @@ function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, on
                 )
               )}
             </section>
+          )}
+          {ticket.status === 'Open' && (
+            <p className="empty-state">No sub-issues yet — they'll show up here once the assigned Custodian inspects the vehicle and confirms what's actually wrong.</p>
           )}
           </div>
         </div>
@@ -8806,7 +9823,7 @@ function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, on
             {/* Close Ticket itself now lives in the green banner above when
                 canClose is true — no need to repeat the same button here. */}
             {isAdmin && ticket.status !== 'Closed' && ticket.status !== 'Cancelled' && (
-              <button className="ghost-button" type="button" onClick={() => onCancel(ticket)}>Cancel Ticket</button>
+              <button className="ghost-button" type="button" onClick={requestCancel}>Cancel Ticket</button>
             )}
             {/* Once every sub-issue is resolved (ready to close) or the ticket
                 is already Closed, there's real work on record — Delete is only
@@ -8956,10 +9973,9 @@ function NewTicketPage({ onBack, ticketLookups, prefilledTicketData, onCreateTic
       };
       if (preDiagnosed) {
         out.sub_issues = subIssueRows.map((t) => t.trim()).filter(Boolean).map((title) => ({ title, maintenance_type: subIssueCategory || null }));
-        out.down_since = liveValues.down_since || undefined;
       }
-      await onCreateTicket(out);
-      onBack();
+      const created = await onCreateTicket(out);
+      if (created) onBack();
     } finally {
       setSubmitting(false);
     }
@@ -8969,6 +9985,8 @@ function NewTicketPage({ onBack, ticketLookups, prefilledTicketData, onCreateTic
   const custodianOptions = ticketLookups.custodians ?? [];
   const faultCategoryOptions = ticketLookups.fault_categories ?? [];
   const priorityOptions = ticketLookups.priorities ?? [];
+  const selectedVehicle = vehicleOptions.find((v) => String(v.vehicle_id) === String(liveValues.vehicle_id)) ?? null;
+  const selectedCustodian = custodianOptions.find((c) => String(c.id) === String(liveValues.assigned_custodian_id)) ?? null;
 
   return (
     <ModulePanel description="Create a new maintenance ticket and assign it to a custodian.">
@@ -9033,7 +10051,7 @@ function NewTicketPage({ onBack, ticketLookups, prefilledTicketData, onCreateTic
           full-width dropdowns — same reasoning as Inspect Ticket's own
           hand-built form. Reuses the .smart-form input/label styling so
           every field still looks consistent with the rest of the app. */}
-      <form className="smart-form ticket-create-form" onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <form className="smart-form ticket-create-form" onSubmit={handleSubmit} noValidate style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
 
         {/* Entry mode comes first, not last — it decides what the rest of
             the form even asks for, so it shouldn't be buried at the bottom. */}
@@ -9072,20 +10090,46 @@ function NewTicketPage({ onBack, ticketLookups, prefilledTicketData, onCreateTic
           <div className="veh-card-head"><Icon name="vehicle" size={16} /><h4>Vehicle & Assignment</h4></div>
           <div className="ticket-form-grid-2">
             <label>
-              <span>Vehicle</span>
+              <span>Vehicle <span className="required-asterisk">*</span></span>
               <select required value={liveValues.vehicle_id ?? ''} onChange={(e) => setField('vehicle_id', e.target.value)}>
                 <option value="">Select</option>
                 {vehicleOptions.map((v) => <option key={v.vehicle_id} value={v.vehicle_id}>{v.vehicle_name} ({v.plate_number})</option>)}
               </select>
             </label>
             <label>
-              <span>Assign to Custodian (verifies the repair later)</span>
+              <span>Assign to Custodian (verifies the repair later) <span className="required-asterisk">*</span></span>
               <select required value={liveValues.assigned_custodian_id ?? ''} onChange={(e) => setField('assigned_custodian_id', e.target.value)}>
                 <option value="">Select</option>
                 {custodianOptions.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             </label>
           </div>
+          {(selectedVehicle || selectedCustodian) && (
+            <div className="ticket-selection-preview">
+              {selectedVehicle && (
+                <div className="ticket-preview-card">
+                  {selectedVehicle.photo_url ? (
+                    <img className="ticket-preview-photo" src={resolvePhotoUrl(selectedVehicle.photo_url)} alt={selectedVehicle.vehicle_name} />
+                  ) : (
+                    <span className="ticket-preview-photo ticket-preview-photo-empty"><Icon name="vehicle" size={32} /></span>
+                  )}
+                  <div className="ticket-preview-body">
+                    <strong>{selectedVehicle.vehicle_name}</strong>
+                    <span>{selectedVehicle.plate_number} &middot; {selectedVehicle.category?.category_name ?? 'Unclassified'}</span>
+                    <span className="muted">{[selectedVehicle.brand, selectedVehicle.model].filter(Boolean).join(' ') || '—'} &middot; {selectedVehicle.current_location ?? 'No location on file'}</span>
+                  </div>
+                </div>
+              )}
+              {selectedCustodian && (
+                <div className="ticket-preview-card">
+                  <UserAvatarName user={selectedCustodian} />
+                  <div className="ticket-preview-body">
+                    <span className="muted">Custodian &middot; {selectedCustodian.email}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </section>
 
         <section className="veh-card">
@@ -9093,7 +10137,7 @@ function NewTicketPage({ onBack, ticketLookups, prefilledTicketData, onCreateTic
           <div style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 16 }}>
             <div className="ticket-form-grid-2" style={{ padding: 0 }}>
               <label style={!preDiagnosed ? { gridColumn: '1 / -1' } : undefined}>
-                <span>Ticket Title</span>
+                <span>Ticket Title <span className="required-asterisk">*</span></span>
                 <input required type="text" value={liveValues.ticket_title ?? ''} onChange={(e) => setField('ticket_title', e.target.value)} />
               </label>
               {/* Fault Category classifies the confirmed symptom — asking for
@@ -9103,19 +10147,22 @@ function NewTicketPage({ onBack, ticketLookups, prefilledTicketData, onCreateTic
               {preDiagnosed && (
                 <label>
                   <span>Fault Category</span>
-                  <select value={liveValues.fault_category ?? ''} onChange={(e) => setField('fault_category', e.target.value)}>
-                    <option value="">Select</option>
-                    {faultCategoryOptions.map((f) => <option key={f} value={f}>{f}</option>)}
-                  </select>
+                  <CreatableSelect
+                    value={liveValues.fault_category ?? ''}
+                    onChange={(v) => setField('fault_category', v)}
+                    options={faultCategoryOptions}
+                    newItemLabel="fault category"
+                    catalogEndpoint="/fault-categories"
+                  />
                 </label>
               )}
             </div>
             <label>
-              <span>Description / Details</span>
+              <span>Description / Details <span className="required-asterisk">*</span></span>
               <textarea required rows={3} value={liveValues.ticket_description ?? ''} onChange={(e) => setField('ticket_description', e.target.value)} />
             </label>
             <label style={{ maxWidth: 260 }}>
-              <span>Priority</span>
+              <span>Priority <span className="required-asterisk">*</span></span>
               <select required value={liveValues.priority ?? ''} onChange={(e) => setField('priority', e.target.value)}>
                 <option value="">Select</option>
                 {priorityOptions.map((p) => <option key={p} value={p}>{p}</option>)}
@@ -9130,50 +10177,56 @@ function NewTicketPage({ onBack, ticketLookups, prefilledTicketData, onCreateTic
             <div style={{ padding: 18 }}>
               <p className="muted" style={{ marginTop: 0, marginBottom: 14 }}>List each specific problem already found — a mechanic will be assigned to each one. All sub-issues here share one category.</p>
 
-              <label style={{ display: 'block', marginBottom: 16, maxWidth: 320 }}>
-                <span style={{ display: 'block', fontSize: '0.72rem', fontWeight: 600, color: '#64748b', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.02em' }}>Category</span>
-                <select value={subIssueCategory} onChange={(e) => setSubIssueCategory(e.target.value)} style={{ width: '100%' }}>
-                  <option value="">Select a category</option>
-                  {(ticketLookups?.maintenance_types ?? []).map((t) => <option key={t} value={t}>{t}</option>)}
-                </select>
-              </label>
-
-              {subIssueRows.map((title, index) => (
-                <div key={index} style={{ display: 'flex', gap: 8, marginBottom: 10, alignItems: 'center' }}>
-                  <span className="muted" style={{ flex: '0 0 20px', textAlign: 'right' }}>{index + 1}.</span>
-                  <input
-                    type="text"
-                    placeholder="e.g. Low coolant level"
-                    value={title}
-                    onChange={(e) => updateSubIssue(index, e.target.value)}
-                    style={{ flex: 1 }}
-                  />
-                  <button
-                    type="button"
-                    className="danger-button"
-                    onClick={() => removeSubIssueRow(index)}
-                    disabled={subIssueRows.length === 1}
-                    title="Remove sub-issue"
-                    aria-label="Remove sub-issue"
-                    style={{ padding: '8px 12px' }}
-                  >
-                    <Icon name="close" size={14} />
-                  </button>
-                </div>
-              ))}
-              <button type="button" className="ghost-button" onClick={addSubIssueRow} style={{ marginTop: 4, marginBottom: 18 }}><Icon name="clipboard" size={14} /> Add Another Sub-Issue</button>
-
               <label style={{ maxWidth: 320 }}>
-                <span>Vehicle Down Since (optional)</span>
-                <input type="datetime-local" value={liveValues.down_since ?? ''} onChange={(e) => setField('down_since', e.target.value)} />
+                <span>Category</span>
+                <CreatableSelect
+                  value={subIssueCategory}
+                  onChange={setSubIssueCategory}
+                  options={ticketLookups?.maintenance_types ?? []}
+                  placeholder="Select a category or type to add new"
+                  newItemLabel="maintenance type"
+                  catalogEndpoint="/maintenance-types"
+                />
               </label>
+
+              <div className="sub-issue-rows">
+                {subIssueRows.map((title, index) => (
+                  <div key={index} className="sub-issue-row">
+                    <span className="sub-issue-row-index">{index + 1}</span>
+                    <input
+                      type="text"
+                      placeholder="e.g. Low coolant level"
+                      value={title}
+                      onChange={(e) => updateSubIssue(index, e.target.value)}
+                    />
+                    <button
+                      type="button"
+                      className="btn-delete-action icon-btn"
+                      onClick={() => removeSubIssueRow(index)}
+                      disabled={subIssueRows.length === 1}
+                      title="Remove sub-issue"
+                      aria-label="Remove sub-issue"
+                    >
+                      <Icon name="close" size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <button type="button" className="ghost-button" onClick={addSubIssueRow}><Icon name="clipboard" size={14} /> Add Another Sub-Issue</button>
             </div>
           </section>
         )}
 
         <div className="form-actions">
-          <button className="ghost-button btn-exit-action" onClick={onBack} type="button">Cancel</button>
-          <button className="primary-button" type="submit" disabled={submitting}>{preDiagnosed ? 'Create Pre-Diagnosed Ticket' : 'Create Ticket & Assign'}</button>
+          <button className="ghost-button" onClick={onBack} type="button">Cancel</button>
+          <button className="primary-button" type="submit" disabled={submitting}>
+            {submitting ? (
+              <span className="btn-loading">
+                <Icon name="gear" size={16} className="btn-gear-spinner" filled />
+                Creating…
+              </span>
+            ) : (preDiagnosed ? 'Create Pre-Diagnosed Ticket' : 'Create Ticket & Assign')}
+          </button>
         </div>
       </form>
     </ModulePanel>
@@ -9202,7 +10255,11 @@ function TicketModule({
   filterStatus,
   setFilterStatus,
   filterPriority,
-  setFilterPriority
+  setFilterPriority,
+  filterDateStart,
+  setFilterDateStart,
+  filterDateEnd,
+  setFilterDateEnd,
 }) {
   const [ticketViewMode, setTicketViewMode] = useState(
     () => localStorage.getItem('vms_ticket_view') || 'card'
@@ -9259,6 +10316,29 @@ function TicketModule({
         activeFilter={filterStatus}
         onFilterChange={setFilterStatus}
       />
+      <section className="panel module-filter-panel">
+        <FilterBar
+          categories={categories}
+          vehicles={vehicles}
+          filterCategory={filterCategory}
+          setFilterCategory={setFilterCategory}
+          filterCapacity={filterCapacity}
+          setFilterCapacity={setFilterCapacity}
+          filterStatus={filterStatus}
+          setFilterStatus={setFilterStatus}
+          filterPriority={filterPriority}
+          setFilterPriority={setFilterPriority}
+          statusOptions={ticketLookups.ticket_statuses}
+          priorityOptions={ticketLookups.priorities}
+          priorityLabel="Priority"
+          dateRange={{
+            start: filterDateStart,
+            setStart: setFilterDateStart,
+            end: filterDateEnd,
+            setEnd: setFilterDateEnd,
+          }}
+        />
+      </section>
       <section className="panel">
         {/* Alert banners */}
         {openSubIssueCount > 0 && (
@@ -9291,28 +10371,12 @@ function TicketModule({
           </div>
         </div>
 
-        <FilterBar
-          categories={categories}
-          vehicles={vehicles}
-          filterCategory={filterCategory}
-          setFilterCategory={setFilterCategory}
-          filterCapacity={filterCapacity}
-          setFilterCapacity={setFilterCapacity}
-          filterStatus={filterStatus}
-          setFilterStatus={setFilterStatus}
-          filterPriority={filterPriority}
-          setFilterPriority={setFilterPriority}
-          statusOptions={ticketLookups.ticket_statuses}
-          priorityOptions={ticketLookups.priorities}
-          priorityLabel="Priority"
-        />
-
         <div style={{ height: '12px' }} />
 
         {tickets.length === 0
           ? <p className="empty-state">No tickets yet. Create one to begin the workflow.</p>
           : ticketViewMode === 'table'
-            ? <PaginatedTable columns={ticketTableColumns()} rows={tickets} onRowClick={onViewTicket} />
+            ? <PaginatedTable columns={ticketTableColumns(unreadByTicket)} rows={tickets} onRowClick={onViewTicket} />
             : (
               <div className="ticket-card-grid">
                 {tickets.map((t) => (
@@ -9344,7 +10408,7 @@ function readinessChecklist(vehicle) {
 
 const READINESS_BADGE = {
   ready:          { label: 'Ready to respond', bg: '#ecfdf5', color: '#065f46', border: '#a7f3d0', icon: 'checkCircle' },
-  stale:          { label: 'Check stale — re-check', bg: '#fef3c7', color: '#92400e', border: '#fde68a', icon: 'alert' },
+  stale:          { label: 'Readiness check', bg: '#fef3c7', color: '#92400e', border: '#fde68a', icon: 'alert' },
   not_ready:      { label: 'NOT ready to respond', bg: '#fee2e2', color: '#b91c1c', border: '#fecaca', icon: 'alert' },
   unchecked:      { label: 'Never checked', bg: '#f1f5f9', color: '#475569', border: '#cbd5e1', icon: 'alert' },
   in_maintenance: { label: 'In maintenance', bg: '#fff7ed', color: '#9a3412', border: '#fed7aa', icon: 'wrench' },
@@ -9449,24 +10513,350 @@ function ReadinessCheckForm({ vehicle, onCancel, onSubmit }) {
   );
 }
 
-function VehicleProfilePage({ vehicleId, lookups, allHubs, canManage = false, canCheckReadiness = false, setNotice, onSaved, onViewTicket, onRequestConfirmation }) {
+// File cabinet on a vehicle's profile page — deliberately separate from the
+// vehicle's own cover photo (shown in Vehicle Information above), so this
+// list is only ever what someone explicitly uploaded here: receipts,
+// registration papers, insurance, etc. Fetches its own data so the parent
+// profile page doesn't need to know about documents at all.
+function VehicleFiles({ vehicleId, canManage, onRequestConfirmation }) {
+  const [documents, setDocuments] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [initialFile, setInitialFile] = useState(null);
+  const [modalKey, setModalKey] = useState(0);
+
+  const load = useCallback(() => {
+    api.get(`/vehicles/${vehicleId}/documents`)
+      .then((r) => setDocuments(r.data))
+      .catch(() => setDocuments([]))
+      .finally(() => setLoading(false));
+  }, [vehicleId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const openModal = (file = null) => {
+    setInitialFile(file);
+    setModalKey((k) => k + 1);
+    setModalOpen(true);
+  };
+
+  const modal = modalOpen && (
+    <VehicleFilesModal
+      key={modalKey}
+      onClose={() => setModalOpen(false)}
+      vehicleId={vehicleId}
+      documents={documents}
+      canManage={canManage}
+      onChanged={load}
+      initialFile={initialFile}
+      onRequestConfirmation={onRequestConfirmation}
+    />
+  );
+
+  return (
+    <section className="veh-card veh-files">
+      <div className="veh-card-head veh-files-head">
+        <div className="veh-files-head-title"><Icon name="clipboard" size={16} /><h4>Files</h4></div>
+        <div className="veh-files-head-actions">
+          <button type="button" className="file-card-icon-btn" onClick={() => openModal()} title="Expand" aria-label="Expand">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
+            </svg>
+          </button>
+          {canManage && (
+            <button type="button" className="file-card-icon-btn" onClick={() => openModal()} title="Add file" aria-label="Add file">
+              <Icon name="plus" size={13} />
+            </button>
+          )}
+        </div>
+      </div>
+      <div
+        className="veh-files-body"
+        onDragOver={(e) => canManage && e.preventDefault()}
+        onDrop={(e) => {
+          if (!canManage) return;
+          e.preventDefault();
+          const file = e.dataTransfer.files?.[0];
+          if (file) openModal(file);
+        }}
+      >
+        {loading ? (
+          <p className="empty-state">Loading files…</p>
+        ) : documents.length ? (
+          <div className="veh-files-compact-list">
+            {documents.slice(0, 4).map((doc) => (
+              <a key={doc.document_id} className="veh-files-compact-row" href={resolvePhotoUrl(doc.file_url)} target="_blank" rel="noreferrer">
+                <Icon name="clipboard" size={14} />
+                <span>{doc.title}</span>
+              </a>
+            ))}
+            {documents.length > 4 && (
+              <button type="button" className="veh-files-more" onClick={() => openModal()}>+{documents.length - 4} more</button>
+            )}
+          </div>
+        ) : (
+          <div className="file-card-empty">No data</div>
+        )}
+        {canManage && (
+          <button type="button" className="file-card-dropzone veh-files-dropzone-trigger" onClick={() => openModal()}>
+            <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M7 18a4.5 4.5 0 0 1-1-8.9A5.5 5.5 0 0 1 16.7 7 4.5 4.5 0 0 1 18 18" />
+              <path d="M12 12v7" />
+              <path d="M9.5 14.5 12 12l2.5 2.5" />
+            </svg>
+            <span>Drag file here</span>
+          </button>
+        )}
+      </div>
+      {modal}
+    </section>
+  );
+}
+
+// Given a fresh `key` every time it's opened (see VehicleFiles.openModal), so
+// mounting with the right `initialFile` already pre-filled needs no
+// reset-on-open effect — a new mount already starts from the right state.
+function VehicleFilesModal({ onClose, vehicleId, documents, canManage, onChanged, initialFile, onRequestConfirmation }) {
+  const [selectedId, setSelectedId] = useState(null);
+  const [editingId, setEditingId] = useState(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [editCategory, setEditCategory] = useState('');
+  const [pendingFile, setPendingFile] = useState(initialFile ?? null);
+  const [addTitle, setAddTitle] = useState(initialFile ? initialFile.name.replace(/\.[^.]+$/, '') : '');
+  const [addCategory, setAddCategory] = useState('');
+  const [uploadPct, setUploadPct] = useState(null);
+  const [error, setError] = useState(null);
+  const fileInputRef = useRef(null);
+
+  const selected = documents.find((d) => d.document_id === selectedId);
+
+  const handlePick = (file) => {
+    setPendingFile(file);
+    setAddTitle(file.name.replace(/\.[^.]+$/, ''));
+    setError(null);
+  };
+
+  const handleUpload = async () => {
+    if (!pendingFile || !addTitle.trim()) return;
+    setUploadPct(0);
+    setError(null);
+    const formData = new FormData();
+    formData.append('file', pendingFile);
+    formData.append('title', addTitle.trim());
+    if (addCategory.trim()) formData.append('category', addCategory.trim());
+    try {
+      await api.post(`/vehicles/${vehicleId}/documents`, formData, {
+        onUploadProgress: (e) => setUploadPct(e.total ? Math.round((e.loaded * 100) / e.total) : null),
+      });
+      setPendingFile(null);
+      setAddTitle('');
+      setAddCategory('');
+      setUploadPct(null);
+      onChanged();
+    } catch (err) {
+      setError(err?.response?.data?.message ?? 'Upload failed.');
+      setUploadPct(null);
+    }
+  };
+
+  const startEdit = (doc) => {
+    setEditingId(doc.document_id);
+    setEditTitle(doc.title);
+    setEditCategory(doc.category ?? '');
+  };
+
+  const saveEdit = async () => {
+    if (!editTitle.trim()) return;
+    try {
+      await api.put(`/documents/${editingId}`, { title: editTitle.trim(), category: editCategory.trim() || null });
+      setEditingId(null);
+      onChanged();
+    } catch {
+      setError('Could not save changes.');
+    }
+  };
+
+  const doDelete = async (doc) => {
+    try {
+      await api.delete(`/documents/${doc.document_id}`);
+      if (selectedId === doc.document_id) setSelectedId(null);
+      onChanged();
+    } catch {
+      setError('Could not delete file.');
+    }
+  };
+
+  const handleDelete = (doc) => {
+    onRequestConfirmation?.({
+      title: 'Delete File',
+      message: `Delete "${doc.title}" from this vehicle's file cabinet? This cannot be undone.`,
+      confirmLabel: 'Delete',
+      onConfirm: () => doDelete(doc),
+    });
+  };
+
+  return createPortal(
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-box modal-box-wide files-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <h3>Files</h3>
+          <div className="files-modal-toolbar">
+            {canManage && (
+              <>
+                <button type="button" className="file-card-icon-btn" onClick={() => fileInputRef.current?.click()} title="Add file" aria-label="Add file">
+                  <Icon name="plus" size={14} />
+                </button>
+                <button type="button" className="file-card-icon-btn" disabled={!selected} onClick={() => selected && startEdit(selected)} title="Edit selected" aria-label="Edit selected">
+                  <Icon name="edit" size={14} />
+                </button>
+                <button type="button" className="file-card-icon-btn" disabled={!selected} onClick={() => selected && handleDelete(selected)} title="Delete selected" aria-label="Delete selected">
+                  <Icon name="trash" size={14} />
+                </button>
+              </>
+            )}
+          </div>
+          <button className="modal-close-btn" onClick={onClose} type="button" aria-label="Close"><Icon name="close" size={18} /></button>
+        </div>
+        <div className="modal-body">
+          {error && (
+            <div className="notice error" style={{ marginBottom: 12 }}>{error}</div>
+          )}
+          <div className="files-modal-table-wrap">
+            <table className="files-modal-table">
+              <thead>
+                <tr>
+                  <th></th>
+                  <th>Title</th>
+                  <th>Category</th>
+                  <th>Added By</th>
+                  <th>Date Added</th>
+                </tr>
+              </thead>
+              <tbody>
+                {documents.length === 0 ? (
+                  <tr><td colSpan={5} className="files-modal-empty">No data</td></tr>
+                ) : documents.map((doc) => (
+                  <tr key={doc.document_id} className={selectedId === doc.document_id ? 'is-selected' : ''}>
+                    <td>
+                      <input
+                        type="checkbox"
+                        checked={selectedId === doc.document_id}
+                        onChange={() => setSelectedId(selectedId === doc.document_id ? null : doc.document_id)}
+                      />
+                    </td>
+                    {editingId === doc.document_id ? (
+                      <>
+                        <td><input value={editTitle} onChange={(e) => setEditTitle(e.target.value)} /></td>
+                        <td><input value={editCategory} onChange={(e) => setEditCategory(e.target.value)} placeholder="Category" /></td>
+                        <td>{doc.added_by?.name ?? '—'}</td>
+                        <td>
+                          <QuietDate value={doc.created_at} />
+                          <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                            <button type="button" className="ghost-button" style={{ height: 28, padding: '0 10px', fontSize: '0.76rem' }} onClick={saveEdit}>Save</button>
+                            <button type="button" className="ghost-button" style={{ height: 28, padding: '0 10px', fontSize: '0.76rem' }} onClick={() => setEditingId(null)}>Cancel</button>
+                          </div>
+                        </td>
+                      </>
+                    ) : (
+                      <>
+                        <td>
+                          <a href={resolvePhotoUrl(doc.file_url)} target="_blank" rel="noreferrer" className="files-modal-title-link">
+                            <Icon name="clipboard" size={13} />{doc.title}
+                          </a>
+                        </td>
+                        <td>{doc.category || '—'}</td>
+                        <td>{doc.added_by?.name ?? '—'}</td>
+                        <td><QuietDate value={doc.created_at} /></td>
+                      </>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {canManage && (
+            <div
+              className="file-card-dropzone files-modal-dropzone"
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => {
+                e.preventDefault();
+                const file = e.dataTransfer.files?.[0];
+                if (file) handlePick(file);
+              }}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <input
+                ref={fileInputRef}
+                type="file"
+                style={{ display: 'none' }}
+                onChange={(e) => { const file = e.target.files?.[0]; if (file) handlePick(file); }}
+              />
+              <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M7 18a4.5 4.5 0 0 1-1-8.9A5.5 5.5 0 0 1 16.7 7 4.5 4.5 0 0 1 18 18" />
+                <path d="M12 12v7" />
+                <path d="M9.5 14.5 12 12l2.5 2.5" />
+              </svg>
+              <span>Drag file here</span>
+            </div>
+          )}
+
+          {pendingFile && (
+            <div className="files-modal-pending">
+              <div className="files-modal-pending-row">
+                <Icon name="clipboard" size={14} />
+                <span className="files-modal-pending-name">{uploadPct != null ? 'Uploading… ' : ''}{pendingFile.name}</span>
+                {uploadPct != null && <span className="files-modal-pending-pct">{uploadPct}%</span>}
+                <button type="button" className="ghost-button" style={{ height: 28, padding: '0 10px', fontSize: '0.76rem' }} onClick={() => { setPendingFile(null); setUploadPct(null); }}>Cancel</button>
+              </div>
+              {uploadPct != null && (
+                <div className="files-modal-progress-track"><div className="files-modal-progress-bar" style={{ width: `${uploadPct}%` }} /></div>
+              )}
+              {uploadPct == null && (
+                <div className="files-modal-pending-fields">
+                  <input placeholder="Title" value={addTitle} onChange={(e) => setAddTitle(e.target.value)} />
+                  <input placeholder="Category (optional)" value={addCategory} onChange={(e) => setAddCategory(e.target.value)} />
+                  <button type="button" className="primary-button" style={{ height: 36, padding: '0 16px', fontSize: '0.85rem' }} onClick={handleUpload} disabled={!addTitle.trim()}>Add File</button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+function VehicleProfilePage({ vehicleId, lookups, allHubs, canManage = false, canCheckReadiness = false, setNotice, onSaved, onRequestConfirmation }) {
   const location = useLocation();
   const [editing, setEditing] = useState(new URLSearchParams(location.search).get('tab') === 'edit');
   const [tabData, setTabData] = useState({});
-  const [tabLoading, setTabLoading] = useState(false);
-  const [reliability, setReliability] = useState(null);
   const [decommissioning, setDecommissioning] = useState(false);
   const [readiness, setReadiness] = useState(null);
   const [checkingReadiness, setCheckingReadiness] = useState(false);
+  const [reliability, setReliability] = useState(null);
+  // Live-tracks the Edit form's Vehicle Type select so switching a vehicle
+  // to a Water category shows Hull Material/Engine Type immediately,
+  // instead of only after saving and reloading. Reset whenever a different
+  // vehicle's edit form opens (see the effect below).
+  const [editCategoryId, setEditCategoryId] = useState(null);
 
   const vehicle = (lookups.vehicles ?? []).find((v) => String(v.vehicle_id) === String(vehicleId));
 
-  // Load every related dataset up front so the redesigned overview can show the
-  // map, analytics, documents, and history together (and the detail tabs open
-  // instantly). Each request degrades to [] so one failure never blanks the page.
+  useEffect(() => {
+    setEditCategoryId(vehicle?.category_id ?? null);
+    // Deliberately keyed off vehicle_id only, not category_id — the latter
+    // is exactly what this state tracks live while editing; including it
+    // here would reset every live change right back.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vehicle?.vehicle_id]);
+
+  // Load every related dataset up front so the overview's analytics (donut,
+  // cost-by-record) can tally maintenance/ticket/issue counts for this
+  // vehicle. Each request degrades to [] so one failure never blanks the page.
   useEffect(() => {
     let cancelled = false;
-    setTabLoading(true);
     const get = (url) => api.get(url).then((r) => r.data).catch(() => []);
     Promise.all([
       get('/maintenance-records'),
@@ -9474,26 +10864,29 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, canManage = false, ca
       get('/issues'),
     ]).then(([maintenance, tickets, issues]) => {
       if (!cancelled) setTabData({ maintenance, tickets, issues });
-    }).finally(() => {
-      if (!cancelled) setTabLoading(false);
     });
     return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vehicleId]);
 
-  // Gap 3 — per-vehicle reliability lens; Gap A — response-readiness state.
+  // Gap A — response-readiness state.
   const loadReadiness = useCallback(() => {
     api.get(`/vehicles/${vehicleId}/readiness`).then((r) => setReadiness(r.data)).catch(() => setReadiness(null));
   }, [vehicleId]);
 
   useEffect(() => {
+    loadReadiness();
+  }, [loadReadiness]);
+
+  // Gap 3 — per-vehicle reliability lens, feeding the Analytics "Failures
+  // (6 mo)" stat (a chronically-failing vehicle is a safety signal, not
+  // just a cost one — more actionable than a raw open-issues count).
+  useEffect(() => {
     let cancelled = false;
     api.get(`/vehicles/${vehicleId}/reliability`)
       .then((r) => { if (!cancelled) setReliability(r.data); })
       .catch(() => { if (!cancelled) setReliability(null); });
-    loadReadiness();
     return () => { cancelled = true; };
-  }, [vehicleId, loadReadiness]);
+  }, [vehicleId]);
 
   const handleReadinessCheck = async (payload) => {
     setNotice(null);
@@ -9594,49 +10987,33 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, canManage = false, ca
     .filter((r) => Number(r.maintenance_cost) > 0)
     .slice(0, 6)
     .map((r) => ({ label: r.maintenance_type ?? 'Repair', value: Number(r.maintenance_cost) }));
-  const documents = [
-    ...(vehicle.photo_url ? [{ label: 'Vehicle Photo', url: vehicle.photo_url }] : []),
-    ...vehIssues.filter((i) => i.photo_url).map((i) => ({ label: `Issue #${i.issue_report_id} — ${i.issue_type}`, url: i.photo_url })),
-  ];
-  // Activity breakdown (maintenance vs tickets vs issues) for the Analytics donut.
-  const activitySegments = [
-    { label: 'Maintenance', value: vehMaintenance.length, color: '#2563eb' },
-    { label: 'Tickets', value: vehTickets.length, color: '#f97316' },
-    { label: 'Issues', value: vehIssues.length, color: '#ef4444' },
-  ].filter((s) => s.value > 0);
-  const activityTotal = activitySegments.reduce((sum, s) => sum + s.value, 0);
-
   return (
     <ModulePanel description="Full profile, maintenance, and tickets for this vehicle.">
       <div className="vehicle-profile-header">
-        <div className="vehicle-profile-identity">
-          <span className="ticket-detail-id">{vehicle.plate_number}</span>
-          <h3 className="ticket-detail-title">{vehicle.vehicle_name}</h3>
-        </div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {vehicle.status !== 'Decommissioned' && (
-            <button className={editing ? 'ghost-button' : 'primary-button'} type="button" onClick={() => setEditing((e) => !e)}>
-              <Icon name={editing ? 'undo' : 'edit'} size={14} /> {editing ? 'Cancel Edit' : 'Edit Vehicle'}
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginLeft: 'auto' }}>
+          {vehicle.status !== 'Decommissioned' && !editing && (
+            <button className="btn-sm primary-button" type="button" onClick={() => setEditing(true)}>
+              <Icon name="edit" size={13} /> Edit Vehicle
             </button>
           )}
           {canCheckReadiness && !['Decommissioned', 'Inactive'].includes(vehicle.status) && !editing && (
-            <button className="ghost-button" type="button" onClick={() => setCheckingReadiness(true)}>
-              <Icon name="checkCircle" size={14} /> Readiness Check
+            <button className="btn-sm success-button" type="button" onClick={() => setCheckingReadiness(true)}>
+              <Icon name="checkCircle" size={13} /> Readiness Check
             </button>
           )}
           {canManage && vehicle.status !== 'Decommissioned' && !editing && (
-            <button className="danger-button" type="button" onClick={() => setDecommissioning(true)}>
-              <Icon name="alert" size={14} /> Decommission
+            <button className="btn-sm danger-button" type="button" onClick={() => setDecommissioning(true)}>
+              <Icon name="alert" size={13} /> Decommission
             </button>
           )}
           {canManage && vehicle.status === 'Decommissioned' && (
-            <button className="primary-button" type="button" onClick={() => onRequestConfirmation?.({
+            <button className="btn-sm primary-button" type="button" onClick={() => onRequestConfirmation?.({
               title: 'Recommission Vehicle',
               message: `Bring ${vehicle.vehicle_name} back into active service? This reverses the decommission.`,
               confirmLabel: 'Recommission',
               onConfirm: handleRecommission,
             })}>
-              <Icon name="undo" size={14} /> Recommission
+              <Icon name="undo" size={13} /> Recommission
             </button>
           )}
         </div>
@@ -9652,7 +11029,7 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, canManage = false, ca
         </div>
       )}
 
-      <FormModal open={checkingReadiness} title={`Readiness Check — ${vehicle.vehicle_name}`} onClose={() => setCheckingReadiness(false)} confirmClose>
+      <FormModal open={checkingReadiness} title={`Readiness Check — ${vehicle.vehicle_name}`} onClose={() => setCheckingReadiness(false)}>
         <ReadinessCheckForm
           key={`readiness-${vehicle.vehicle_id}`}
           vehicle={vehicle}
@@ -9661,7 +11038,7 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, canManage = false, ca
         />
       </FormModal>
 
-      <FormModal open={decommissioning} title={`Decommission ${vehicle.vehicle_name}`} onClose={() => setDecommissioning(false)} confirmClose>
+      <FormModal open={decommissioning} title={`Decommission ${vehicle.vehicle_name}`} onClose={() => setDecommissioning(false)}>
         <p className="muted" style={{ marginBottom: 12, fontSize: '0.85rem' }}>
           This permanently retires the vehicle (end of life) and removes it from readiness/coverage. Its full history is kept, and an Admin can recommission it later if this was a mistake.
         </p>
@@ -9676,23 +11053,39 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, canManage = false, ca
       </FormModal>
 
       {editing ? (
-        <div className="form-grid-2col">
-          <SmartForm
-            fields={vehicleFields(lookups, allHubs, vehicle.category?.domain ?? 'Land')}
-            initialValues={vehicle}
-            key={vehicle.vehicle_id}
-            onCancel={() => setEditing(false)}
-            onSubmit={handleSave}
-            submitLabel="Save Changes"
-            title=""
-          />
-        </div>
+        <section className="veh-card veh-edit-card">
+          <div className="veh-card-head"><Icon name="edit" size={16} /><h4>Edit Vehicle Information</h4></div>
+          <div className="form-grid-2col veh-edit-body">
+            <SmartForm
+              fields={vehicleFields(
+                lookups,
+                allHubs,
+                lookups.categories?.find((c) => String(c.category_id) === String(editCategoryId))?.domain
+                  ?? vehicle.category?.domain
+                  ?? 'Land',
+                vehicle.photo_url
+              )}
+              initialValues={vehicle}
+              key={vehicle.vehicle_id}
+              onValuesChange={(vals) => setEditCategoryId(vals.category_id)}
+              onCancel={() => setEditing(false)}
+              onSubmit={handleSave}
+              submitLabel="Save Changes"
+              title=""
+            />
+          </div>
+        </section>
       ) : (
       <>
-        <div className="veh-dash">
+      <div className="veh-dash">
+        <div className="veh-dash-left">
           <section className="veh-card veh-info">
-            <div className="veh-card-head"><Icon name="vehicle" size={16} /><h4>Vehicle Information</h4></div>
+            <div className="veh-card-head"><Icon name={vehicleIconName(vehicle.category?.domain)} size={16} /><h4>Vehicle Information</h4></div>
             <div className="veh-info-body">
+              <div className="veh-info-identity">
+                <h3>{vehicle.vehicle_name}</h3>
+                <span>{vehicle.category?.domain ?? 'Land'}.{vehicle.plate_number}</span>
+              </div>
               {vehicle.photo_url && (
                 <div className="veh-info-photo"><PhotoCell alt={vehicle.vehicle_name} url={vehicle.photo_url} /></div>
               )}
@@ -9715,47 +11108,61 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, canManage = false, ca
               <div className="veh-remarks"><span className="veh-remarks-label">Remarks</span><p>{vehicle.remarks}</p></div>
             )}
           </section>
+        </div>
 
-          <section className="veh-card veh-keydates">
-            <div className="veh-card-head"><Icon name="clipboard" size={16} /><h4>Status &amp; Key Dates</h4></div>
-            <dl className="veh-kv">
-              <div><dt>Availability</dt><dd><StatusBadge value={vehicle.status} /></dd></div>
-              <div><dt>Condition</dt><dd><StatusBadge value={vehicle.condition} /></dd></div>
-              {readiness && READINESS_BADGE[readiness.state] && (
-                <div><dt>Response Readiness</dt><dd>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '0.76rem', fontWeight: 700, padding: '3px 10px', borderRadius: 999, background: READINESS_BADGE[readiness.state].bg, color: READINESS_BADGE[readiness.state].color, border: `1px solid ${READINESS_BADGE[readiness.state].border}` }}>
-                    <Icon name={READINESS_BADGE[readiness.state].icon} size={11} /> {READINESS_BADGE[readiness.state].label}
-                  </span>
-                  {readiness.last_checked && <div className="muted" style={{ fontSize: '0.72rem', marginTop: 3 }}>Last checked {formatDate(readiness.last_checked)}</div>}
-                </dd></div>
-              )}
-              <div><dt>Current Location</dt><dd>{vehicle.current_location ?? '-'}</dd></div>
-              {vehicle.estimated_return_date && (
-                <div><dt>Est. Return Date</dt><dd>{formatForecastDate(vehicle.estimated_return_date)}</dd></div>
-              )}
-              <div><dt>Date Added</dt><dd>{vehicle.created_at ? <QuietDate value={vehicle.created_at} /> : '-'}</dd></div>
-              <div><dt>Last Updated</dt><dd>{vehicle.updated_at ? <QuietDate value={vehicle.updated_at} /> : '-'}</dd></div>
-            </dl>
-            <p className="veh-hint">Availability = can it be dispatched now. Condition = its physical state. Tracked independently.</p>
-          </section>
+        <div className="veh-dash-right">
+          <div className="veh-status-row">
+            <section className="veh-card veh-keydates">
+              <div className="veh-card-head"><Icon name="clipboard" size={16} /><h4>Status &amp; Key Dates</h4></div>
+              <dl className="veh-kv">
+                <div><dt>Availability</dt><dd><StatusBadge value={vehicle.status} /></dd></div>
+                <div><dt>Condition</dt><dd><StatusBadge value={vehicle.condition} /></dd></div>
+                {readiness && READINESS_BADGE[readiness.state] && (
+                  <div><dt>Response Readiness</dt><dd>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '0.76rem', fontWeight: 700, padding: '3px 10px', borderRadius: 999, background: READINESS_BADGE[readiness.state].bg, color: READINESS_BADGE[readiness.state].color, border: `1px solid ${READINESS_BADGE[readiness.state].border}` }}>
+                      <Icon name={READINESS_BADGE[readiness.state].icon} size={11} /> {READINESS_BADGE[readiness.state].label}
+                    </span>
+                    {readiness.last_checked && <div className="muted" style={{ fontSize: '0.72rem', marginTop: 3 }}>Last checked {formatDate(readiness.last_checked)}</div>}
+                  </dd></div>
+                )}
+                <div><dt>Current Location</dt><dd>{vehicle.current_location ?? '-'}</dd></div>
+                {vehicle.estimated_return_date && (
+                  <div><dt>Est. Return Date</dt><dd>{formatForecastDate(vehicle.estimated_return_date)}</dd></div>
+                )}
+                <div><dt>Date Added</dt><dd>{vehicle.created_at ? <QuietDate value={vehicle.created_at} /> : '-'}</dd></div>
+                <div><dt>Last Updated</dt><dd>{vehicle.updated_at ? <QuietDate value={vehicle.updated_at} /> : '-'}</dd></div>
+              </dl>
+            </section>
+
+            <div className="veh-square-col">
+              <section className="veh-card veh-reports">
+                <div className="veh-card-head"><Icon name="clipboard" size={16} /><h4>Reports</h4></div>
+                <div className="veh-reports-body">
+                  <select className="veh-reports-select" defaultValue="summary">
+                    <option value="summary">Vehicle Summary Report</option>
+                  </select>
+                  <button type="button" className="veh-reports-print-btn" onClick={() => window.print()} title="Print report" aria-label="Print report">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M6 9V3h12v6" />
+                      <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
+                      <rect x="6" y="14" width="12" height="8" />
+                    </svg>
+                  </button>
+                </div>
+              </section>
+
+              <VehicleFiles vehicleId={vehicle.vehicle_id} canManage={canManage} onRequestConfirmation={onRequestConfirmation} />
+            </div>
+          </div>
 
           <section className="veh-card veh-analytics">
             <div className="veh-card-head"><Icon name="grid" size={16} /><h4>Analytics</h4></div>
             <div className="veh-stat-grid">
-              <div className="veh-stat"><span>{vehMaintenance.length}</span><small>Maintenance Records</small></div>
-              <div className="veh-stat"><span>{openTickets}</span><small>Open Tickets</small></div>
-              <div className="veh-stat"><span>{openIssues}</span><small>Open Issues</small></div>
-              <div className="veh-stat"><span>₱{totalCost.toLocaleString()}</span><small>Total Maint. Cost</small></div>
+              <div className="veh-stat veh-stat-blue"><span>{vehMaintenance.length}</span><small>Maintenance Records</small></div>
+              <div className="veh-stat veh-stat-amber"><span>{openTickets + openIssues}</span><small>Open Items</small></div>
+              <div className="veh-stat veh-stat-red"><span>{reliability?.failures_6mo ?? '—'}</span><small>Failures (6 mo)</small></div>
+              <div className="veh-stat veh-stat-green"><span>₱{totalCost.toLocaleString()}</span><small>Total Maint. Cost</small></div>
             </div>
-            <p className="veh-mini-label">Activity breakdown</p>
-            {activityTotal > 0 ? (
-              <div className="veh-pie">
-                <DonutChart segments={activitySegments} centerLabel={activityTotal} centerSubLabel="Events" />
-                <ChartLegend rows={activitySegments} />
-              </div>
-            ) : (
-              <p className="empty-state">No activity recorded yet.</p>
-            )}
             {costRows.length > 0 && (
               <>
                 <p className="veh-mini-label">Maintenance cost by record</p>
@@ -9763,93 +11170,80 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, canManage = false, ca
               </>
             )}
           </section>
+        </div>
+      </div>
 
-          {reliability && (
-            <section className="veh-card veh-analytics">
-              <div className="veh-card-head"><Icon name="wrench" size={16} /><h4>Reliability</h4></div>
-              {reliability.chronic && (
-                <div style={{ margin: '0 0 12px', padding: '10px 12px', borderRadius: 10, background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b', display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600, fontSize: '0.85rem' }}>
-                  <Icon name="alert" size={16} /> Chronic unit — failing often{reliability.has_recurring ? ' (with recurring issues)' : ''}. Consider a deeper diagnosis or decommissioning.
-                </div>
-              )}
-              <div className="veh-stat-grid">
-                <div className="veh-stat"><span>{reliability.failures_6mo}</span><small>Failures (6 mo)</small></div>
-                <div className="veh-stat"><span>{reliability.failures_12mo}</span><small>Failures (12 mo)</small></div>
-                <div className="veh-stat"><span>{reliability.avg_days_out ?? '—'}</span><small>Avg Days Out</small></div>
-                <div className="veh-stat"><span>₱{Number(reliability.total_spend ?? 0).toLocaleString()}</span><small>Lifetime Repair Spend</small></div>
-              </div>
-              {/* #10 — only renders when the vehicle has an acquisition cost on
-                  file; otherwise there's nothing to compare lifetime spend to. */}
-              {reliability.cost_ratio != null && (
-                <div style={{ margin: '12px 0 0', padding: '10px 12px', borderRadius: 10, background: reliability.decommission_signal ? '#fef2f2' : '#f8fafc', border: `1px solid ${reliability.decommission_signal ? '#fecaca' : '#e2e8f0'}`, color: reliability.decommission_signal ? '#991b1b' : '#334155', display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600, fontSize: '0.85rem' }}>
-                  <Icon name={reliability.decommission_signal ? 'alert' : 'checkCircle'} size={16} />
-                  {(reliability.cost_ratio * 100).toFixed(0)}% of acquisition cost (₱{Number(reliability.acquisition_cost).toLocaleString()}) spent on repairs
-                  {reliability.decommission_signal ? ' — consider a decommission review.' : '.'}
-                </div>
-              )}
-              <p className="veh-hint">A vehicle that keeps failing is a reliability signal — for an emergency unit, that's a safety concern, not just a cost.</p>
-            </section>
-          )}
+      <section className="veh-card veh-map veh-map-wide">
+        <div className="veh-card-head"><Icon name="pin" size={16} /><h4>Current Location — {vehicle.current_location ?? 'Unknown'}</h4></div>
+        <div className="veh-map-wrap">
+          <VehicleLocationMap lat={hub?.lat} lng={hub?.lng} label={vehicle.current_location} scrollWheelZoom />
+        </div>
+      </section>
 
-          <section className="veh-card veh-map">
-            <div className="veh-card-head"><Icon name="pin" size={16} /><h4>Current Location — {vehicle.current_location ?? 'Unknown'}</h4></div>
-            <div className="veh-map-wrap">
+      {/* Print-only — kept off-screen (see .veh-print-report), shown by the
+          Reports card's print button via window.print(). Portaled straight
+          to <body> so it never inherits the app shell's own responsive
+          collapse (that grid narrows unpredictably once Chromium's print
+          engine evaluates media queries against the paper width instead of
+          the screen viewport) and so normal document flow — not
+          position:fixed — is what lands on the page: a fixed element
+          gets reprinted on every page, which was duplicating this whole
+          report onto page 2. Reuses the report band/grid look so a
+          printed page still reads as a formal document: vehicle identity
+          on the left, VMS mark on the right, blue bands. */}
+      {createPortal(
+        <div className="veh-print-report">
+          <div className="veh-print-header">
+            <div className="veh-print-header-left">
+              <h2>{vehicle.vehicle_name}</h2>
+              <p>{vehicle.category?.domain ?? 'Land'}.{vehicle.plate_number}</p>
+            </div>
+            <div className="veh-print-header-right">
+              <Icon name="gear" size={48} className="topbar-gear-icon" filled />
+              <span className="vms-wordmark">vms</span>
+            </div>
+          </div>
+          <div className="veh-print-body">
+            <div className="veh-print-media">
+              {vehicle.photo_url && (
+                <div className="veh-print-photo"><PhotoCell alt={vehicle.vehicle_name} url={vehicle.photo_url} /></div>
+              )}
+            </div>
+            <div className="veh-print-info">
+              <div className="veh-report-band">Vehicle Information</div>
+              <dl className="veh-report-grid">
+                <div><dt>{plateFieldLabel(vehicle.category?.domain)}</dt><dd>{vehicle.plate_number}</dd></div>
+                <div><dt>Vehicle Name</dt><dd>{vehicle.vehicle_name}</dd></div>
+                <div><dt>Vehicle Type</dt><dd>{vehicle.category?.category_name ?? 'Unassigned'}</dd></div>
+                <div><dt>Brand / Model</dt><dd>{`${vehicle.brand ?? '-'} ${vehicle.model ?? ''}`.trim() || '-'}</dd></div>
+                <div><dt>Year Model</dt><dd>{vehicle.year_model ?? '-'}</dd></div>
+                <div><dt>Capacity</dt><dd>{vehicle.capacity ?? '-'}</dd></div>
+                <div><dt>Color</dt><dd>{vehicle.vehicle_color ?? '-'}</dd></div>
+                <div><dt>Fuel Type</dt><dd>{vehicle.fuel_type ?? '-'}</dd></div>
+                {isWater && (
+                  <>
+                    <div><dt>Hull Material</dt><dd>{vehicle.hull_material ?? '-'}</dd></div>
+                    <div><dt>Engine Type</dt><dd>{vehicle.engine_type ?? '-'}</dd></div>
+                  </>
+                )}
+                <div><dt>Acquisition Cost</dt><dd>{vehicle.acquisition_cost != null ? `₱${Number(vehicle.acquisition_cost).toLocaleString()}` : '-'}</dd></div>
+                <div><dt>Status</dt><dd>{vehicle.status}</dd></div>
+                <div><dt>Condition</dt><dd>{vehicle.condition}</dd></div>
+                <div><dt>Current Location</dt><dd>{vehicle.current_location ?? '-'}</dd></div>
+                <div><dt>Date Added</dt><dd>{vehicle.created_at ? <QuietDate value={vehicle.created_at} /> : '-'}</dd></div>
+                <div><dt>Last Updated</dt><dd>{vehicle.updated_at ? <QuietDate value={vehicle.updated_at} /> : '-'}</dd></div>
+              </dl>
+            </div>
+          </div>
+          <div className="veh-print-map-wide">
+            <div className="veh-report-band">Current Location — {vehicle.current_location ?? 'Unknown'}</div>
+            <div className="veh-print-map">
               <VehicleLocationMap lat={hub?.lat} lng={hub?.lng} label={vehicle.current_location} />
             </div>
-          </section>
-
-          <section className="veh-card veh-docs">
-            <div className="veh-card-head"><Icon name="clipboard" size={16} /><h4>Documents &amp; Photos</h4></div>
-            {documents.length ? (
-              <div className="veh-doc-grid">
-                {documents.map((d, i) => (
-                  <a className="veh-doc" key={i} href={resolvePhotoUrl(d.url)} target="_blank" rel="noreferrer">
-                    <img src={resolvePhotoUrl(d.url)} alt={d.label} />
-                    <span>{d.label}</span>
-                  </a>
-                ))}
-              </div>
-            ) : <p className="empty-state">No documents or photos uploaded.</p>}
-          </section>
-
-        </div>
-
-        <section className="veh-card veh-section">
-          <div className="veh-card-head"><Icon name="wrench" size={16} /><h4>Maintenance Records</h4></div>
-          {tabLoading ? <ModuleLoader label="Loading maintenance records" /> : (
-            <DataTable
-              columns={[
-                { label: 'Type', render: (r) => r.maintenance_type },
-                { label: 'Source', render: (r) => <StatusBadge value={r.source} /> },
-                { label: 'Problem / Reason', className: 'cell-text', render: (r) => <ExpandableText text={r.problem_reason} /> },
-                { label: 'Personnel', render: (r) => <UserAvatarName user={r.maintenance_personnel} /> },
-                { label: 'Progress', render: (r) => <StatusBadge value={r.progress_status} /> },
-                { label: 'Date Started', render: (r) => <DateBadge value={r.date_started} /> },
-                { label: 'Date Completed', render: (r) => <DateBadge value={r.date_completed} /> },
-              ]}
-              rows={vehMaintenance}
-            />
-          )}
-        </section>
-
-        <section className="veh-card veh-section">
-          <div className="veh-card-head"><Icon name="ticket" size={16} /><h4>Maintenance Tickets</h4></div>
-          {tabLoading ? <ModuleLoader label="Loading tickets" /> : (
-            <DataTable
-              columns={[
-                { label: 'Ticket ID', render: (r) => r.ticket_id },
-                { label: 'Title', render: (r) => r.ticket_title },
-                { label: 'Status', render: (r) => <TicketStatusBadge value={r.status} /> },
-                { label: 'Priority', render: (r) => <TicketStatusBadge value={r.priority} /> },
-                { label: 'Created', render: (r) => <DateBadge value={r.created_at} /> },
-                { label: 'Time', render: (r) => formatTime(r.created_at) },
-              ]}
-              rows={vehTickets}
-              onRowClick={onViewTicket}
-            />
-          )}
-        </section>
-
+          </div>
+        </div>,
+        document.body
+      )}
       </>
       )}
     </ModulePanel>
@@ -9900,10 +11294,25 @@ const TICKET_STAGE_STYLE = {
   info:    { bg: 'linear-gradient(90deg,#f8fafc,#f1f5f9)', color: '#475569', icon: 'wrench' },
 };
 
-function TicketStageBadge({ ticket }) {
+function TicketStageBadge({ ticket, variant = 'flag' }) {
   const stage = ticketWorkflowStage(ticket);
   if (!stage) return null;
   const style = TICKET_STAGE_STYLE[stage.tone];
+  // "flag" (default) reads as a leading tab flush against a card's left
+  // edge — right for TicketCard, but floats oddly with nothing to sit
+  // flush against once it's just one badge among others in a header row.
+  // "pill" matches the rounded status/priority badges beside it there.
+  if (variant === 'pill') {
+    return (
+      <span style={{
+        display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: '0.74rem', fontWeight: 700,
+        padding: '5px 12px', borderRadius: 999, background: style.bg,
+        border: `1px solid ${style.color}55`, color: style.color,
+      }}>
+        <Icon name={style.icon} size={12} /> {stage.label}
+      </span>
+    );
+  }
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.74rem', fontWeight: 700,
@@ -9987,6 +11396,9 @@ function CustodianInspectionModule({
   setFilterCategory,
   filterCapacity,
   setFilterCapacity,
+  filterPriority,
+  setFilterPriority,
+  priorityOptions,
   onViewVehicle,
   stats,
   activeFilter,
@@ -10005,6 +11417,20 @@ function CustodianInspectionModule({
         activeFilter={activeFilter}
         onFilterChange={onFilterChange}
       />
+      <section className="panel module-filter-panel">
+        <FilterBar
+          categories={categories}
+          vehicles={vehicles}
+          filterCategory={filterCategory}
+          setFilterCategory={setFilterCategory}
+          filterCapacity={filterCapacity}
+          setFilterCapacity={setFilterCapacity}
+          filterPriority={filterPriority}
+          setFilterPriority={setFilterPriority}
+          priorityOptions={priorityOptions}
+          priorityLabel="Priority"
+        />
+      </section>
       <section className="panel">
         <div className="panel-header-bar">
           {/* Not every ticket in this second bucket was actually inspected —
@@ -10013,14 +11439,6 @@ function CustodianInspectionModule({
               "Already Inspected" claimed something that never happened. */}
           <h3>{isPendingView ? 'Pending Inspections' : 'Diagnosed'} <span className="count-badge">{tickets.length}</span></h3>
         </div>
-        <FilterBar
-          categories={categories}
-          vehicles={vehicles}
-          filterCategory={filterCategory}
-          setFilterCategory={setFilterCategory}
-          filterCapacity={filterCapacity}
-          setFilterCapacity={setFilterCapacity}
-        />
         <div style={{ height: '16px' }} />
         {tickets.length === 0
           ? <p className="empty-state">{isPendingView ? 'No inspection assignments pending.' : 'Nothing diagnosed yet.'}</p>
@@ -10091,10 +11509,42 @@ function InspectTicketPage({ ticket, onBack, onSubmit, ticketLookups }) {
     <ModulePanel description="Review the vehicle in person and submit your physical inspection findings.">
       <div className="vehicle-profile-header">
         <h3 className="ticket-detail-title" style={{ margin: 0 }}>Inspect Ticket #{ticket.ticket_id}</h3>
+        {ticket.priority && <TicketStatusBadge value={ticket.priority} />}
       </div>
+
+      {/* Same rich vehicle-preview card the New Ticket page uses when a
+          vehicle is picked — bigger photo (with a proper icon fallback
+          instead of just omitting the box), plus type/brand/location, not
+          just name and plate — so there's something to actually look at
+          here, not just text. */}
+      <section className="ticket-section" style={{ marginBottom: 16 }}>
+        <h4><Icon name="vehicle" size={14} /> Overview</h4>
+        {ticket.ticket_title && <p className="muted" style={{ marginTop: -4, marginBottom: 12 }}>{ticket.ticket_title}</p>}
+        <div className="ticket-preview-card" style={{ marginBottom: 12 }}>
+          {ticket.vehicle?.photo_url ? (
+            <img className="ticket-preview-photo" style={{ width: 140, height: 140 }} src={resolvePhotoUrl(ticket.vehicle.photo_url)} alt={ticket.vehicle.vehicle_name} />
+          ) : (
+            <span className="ticket-preview-photo ticket-preview-photo-empty" style={{ width: 140, height: 140 }}><Icon name="vehicle" size={48} /></span>
+          )}
+          <div className="ticket-preview-body">
+            <strong>{ticket.vehicle?.vehicle_name}</strong>
+            <span>{ticket.vehicle?.plate_number} &middot; {ticket.vehicle?.category?.category_name ?? 'Unclassified'}</span>
+            <span className="muted">{[ticket.vehicle?.brand, ticket.vehicle?.model].filter(Boolean).join(' ') || '—'} &middot; {ticket.vehicle?.current_location ?? 'No location on file'}</span>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+              <StatusBadge value={ticket.vehicle?.status} />
+              <StatusBadge value={ticket.vehicle?.condition} />
+            </div>
+          </div>
+        </div>
+        <div className="ticket-detail-description-box">
+          <span className="ticket-detail-label">Description</span>
+          <ExpandableText text={ticket.ticket_description} className="muted" lines={3} />
+        </div>
+      </section>
+
       {/* One continuous form — Cancel/Submit sit at the very end, after every
           field (including Category/Root Causes), never in the middle. */}
-      <form className="smart-form" onSubmit={handleSubmit}>
+      <form className="smart-form" onSubmit={handleSubmit} noValidate>
         <label>
           <span>Inspection Result</span>
           <select required value={resultValue} onChange={(e) => setResultValue(e.target.value)}>
@@ -10113,12 +11563,16 @@ function InspectTicketPage({ ticket, onBack, onSubmit, ticketLookups }) {
             <h4 style={{ margin: '0 0 4px 0', display: 'flex', alignItems: 'center', gap: 7 }}><Icon name="wrench" size={16} /> Root Causes Found</h4>
             <p className="muted" style={{ marginTop: 0, marginBottom: 14 }}>All root causes here belong to the same ticket, so they share one category.</p>
 
-            <label style={{ display: 'block', marginBottom: 16 }}>
-              <span style={{ display: 'block', fontSize: '0.72rem', fontWeight: 600, color: '#64748b', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.02em' }}>Category</span>
-              <select value={category} onChange={(e) => setCategory(e.target.value)} style={{ width: '100%' }}>
-                <option value="">Select a category</option>
-                {(ticketLookups?.maintenance_types ?? []).map((t) => <option key={t} value={t}>{t}</option>)}
-              </select>
+            <label style={{ marginBottom: 16 }}>
+              <span>Category</span>
+              <CreatableSelect
+                value={category}
+                onChange={setCategory}
+                options={ticketLookups?.maintenance_types ?? []}
+                placeholder="Select a category or type to add new"
+                newItemLabel="maintenance type"
+                catalogEndpoint="/maintenance-types"
+              />
             </label>
 
             <span style={{ display: 'block', fontSize: '0.72rem', fontWeight: 600, color: '#64748b', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.02em' }}>Root Causes</span>
@@ -10150,14 +11604,10 @@ function InspectTicketPage({ ticket, onBack, onSubmit, ticketLookups }) {
         )}
 
         <div className="form-actions">
-          <button className="ghost-button btn-exit-action" onClick={onBack} type="button">Cancel</button>
+          <button className="ghost-button" onClick={onBack} type="button">Cancel</button>
           <button className="primary-button" type="submit">Submit Inspection</button>
         </div>
       </form>
-      <div style={{marginTop: '16px', paddingTop: '12px', borderTop: '1px solid var(--border-subtle)'}}>
-        <p className="muted"><strong>Vehicle:</strong> {ticket.vehicle?.vehicle_name}</p>
-        <p className="muted"><strong>Issue:</strong> {ticket.ticket_description}</p>
-      </div>
     </ModulePanel>
   );
 }
@@ -10179,6 +11629,11 @@ function CustodianVerificationModule({
   setFilterCategory,
   filterCapacity,
   setFilterCapacity,
+  filterPriority,
+  setFilterPriority,
+  mechanicOptions,
+  filterVerdict,
+  setFilterVerdict,
   onViewVehicle,
   stats,
   activeFilter,
@@ -10197,10 +11652,7 @@ function CustodianVerificationModule({
         activeFilter={activeFilter}
         onFilterChange={onFilterChange}
       />
-      <section className="panel">
-        <div className="panel-header-bar">
-          <h3>{isPendingView ? 'Pending Verifications' : 'Verified Repairs'} <span className="count-badge">{tickets.length}</span></h3>
-        </div>
+      <section className="panel module-filter-panel">
         <FilterBar
           categories={categories}
           vehicles={vehicles}
@@ -10208,7 +11660,23 @@ function CustodianVerificationModule({
           setFilterCategory={setFilterCategory}
           filterCapacity={filterCapacity}
           setFilterCapacity={setFilterCapacity}
+          filterPriority={filterPriority}
+          setFilterPriority={setFilterPriority}
+          priorityOptions={mechanicOptions}
+          priorityLabel="Mechanic"
+          extraFilters={[{
+            key: 'verdict',
+            label: 'Verdicts',
+            options: ['Approved', 'Rejected'],
+            selected: filterVerdict,
+            setSelected: setFilterVerdict,
+          }]}
         />
+      </section>
+      <section className="panel">
+        <div className="panel-header-bar">
+          <h3>{isPendingView ? 'Pending Verifications' : 'Verified Repairs'} <span className="count-badge">{tickets.length}</span></h3>
+        </div>
         <div style={{ height: '16px' }} />
         {tickets.length === 0
           ? <p className="empty-state">{isPendingView ? 'No repairs pending your verification.' : 'No repairs verified yet.'}</p>
@@ -10269,7 +11737,7 @@ function CustodianVerificationModule({
           )
         }
       </section>
-      <FormModal open={!!editTarget} title={`Functional Test — ${editTarget?.ticket_title ? `${editTarget.ticket_title}: ` : ''}${editTarget?.title ?? `Ticket #${editTarget?.ticket_id}`}`} onClose={onCancelEdit} confirmClose>
+      <FormModal open={!!editTarget} title={`Functional Test — ${editTarget?.ticket_title ? `${editTarget.ticket_title}: ` : ''}${editTarget?.title ?? `Ticket #${editTarget?.ticket_id}`}`} onClose={onCancelEdit}>
         <VerificationForm
           key={editTarget?.sub_issue_id ?? editTarget?.ticket_id}
           target={editTarget}
@@ -10354,6 +11822,9 @@ function MechanicWorkOrderModule({
   setFilterCategory,
   filterCapacity,
   setFilterCapacity,
+  filterPriority,
+  setFilterPriority,
+  maintTypeOptions,
   onViewVehicle,
   searchQuery,
   setSearchQuery,
@@ -10374,11 +11845,7 @@ function MechanicWorkOrderModule({
         activeFilter={activeFilter}
         onFilterChange={onFilterChange}
       />
-      <section className="panel">
-        <div className="panel-header-bar">
-          <h3>{isPendingView ? 'Pending Work Orders' : 'Submitted Work Orders'} <span className="count-badge">{tickets.length}</span></h3>
-          <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search work orders..." />
-        </div>
+      <section className="panel module-filter-panel">
         <FilterBar
           categories={categories}
           vehicles={vehicles}
@@ -10386,7 +11853,17 @@ function MechanicWorkOrderModule({
           setFilterCategory={setFilterCategory}
           filterCapacity={filterCapacity}
           setFilterCapacity={setFilterCapacity}
+          filterPriority={filterPriority}
+          setFilterPriority={setFilterPriority}
+          priorityOptions={maintTypeOptions}
+          priorityLabel="Maintenance Type"
         />
+      </section>
+      <section className="panel">
+        <div className="panel-header-bar">
+          <h3>{isPendingView ? 'Pending Work Orders' : 'Submitted Work Orders'} <span className="count-badge">{tickets.length}</span></h3>
+          <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search work orders..." />
+        </div>
         <div style={{ height: '16px' }} />
         {tickets.length === 0
           ? <p className="empty-state">{isPendingView ? 'No active work orders assigned to you.' : 'No repair logs submitted yet.'}</p>
@@ -10494,7 +11971,7 @@ function LogRepairsPage({ ticket, onBack, onSubmit }) {
         </div>
       )}
 
-      <form className="smart-form" onSubmit={handleSubmit}>
+      <form className="smart-form" onSubmit={handleSubmit} noValidate>
         <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: 10, marginBottom: 8 }}>
           <h4 style={{ margin: '0 0 6px 0', display: 'flex', alignItems: 'center', gap: 6, color: '#0f172a', fontSize: '0.85rem' }}><Icon name="clipboard" size={14} /> Repair Log Entry</h4>
           <textarea required rows={2} value={repairLogs} onChange={(e) => setRepairLogs(e.target.value)} style={{ width: '100%' }} />
@@ -10584,7 +12061,7 @@ function LogRepairsPage({ ticket, onBack, onSubmit }) {
         </div>
 
         <div className="form-actions">
-          <button className="ghost-button btn-exit-action" onClick={onBack} type="button">Cancel</button>
+          <button className="ghost-button" onClick={onBack} type="button">Cancel</button>
           <button className="primary-button" type="submit">Submit Repair Log</button>
         </div>
       </form>
@@ -10606,10 +12083,32 @@ function LogRepairsPage({ ticket, onBack, onSubmit }) {
 // TICKET TABLE VIEW COLUMNS (alternative to the ticket card grid)
 // =========================================================================
 
-function ticketTableColumns() {
+function ticketTableColumns(unreadByTicket = {}) {
   return [
     { label: 'Ticket ID', render: (r) => r.ticket_id },
-    { label: 'Title', render: (r) => r.ticket_title },
+    {
+      label: 'Title',
+      render: (r) => {
+        const unread = unreadByTicket[r.ticket_id] ?? 0;
+        return (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            {unread > 0 && (
+              <span
+                title={`${unread} unread update${unread > 1 ? 's' : ''} on this ticket`}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                  minWidth: 18, height: 18, padding: '0 4px', borderRadius: 999,
+                  background: '#dc2626', color: '#fff', fontSize: '0.65rem', fontWeight: 700,
+                }}
+              >
+                {unread > 9 ? '9+' : unread}
+              </span>
+            )}
+            {r.ticket_title}
+          </span>
+        );
+      },
+    },
     { label: 'Vehicle', render: (r) => <VehicleCell vehicle={r.vehicle} /> }, { label: 'Plate', render: (r) => r.vehicle?.plate_number ?? '-' },
     { label: 'Status', render: (r) => <TicketStatusBadge value={r.status} /> },
     { label: 'Next Step', render: (r) => <TicketStageBadge ticket={r} /> },
@@ -10657,6 +12156,485 @@ const PHASE_STEP_COLORS = {
   'Closed': '#16a34a',
 };
 
+// Order-insensitive comparison for the array-valued filter state used by
+// FilterBar's multi-select dropdowns.
+const sameSelection = (a = [], b = []) => a.length === b.length && a.every((v) => b.includes(v));
+
+// Naive but good-enough English pluralization for filter placeholders
+// ("Priority" -> "Priorities", "Status" -> "Statuses", "Mechanic" -> "Mechanics").
+const pluralizeLabel = (label) => {
+  if (label.endsWith('y')) return `${label.slice(0, -1)}ies`;
+  if (label.endsWith('s')) return `${label}es`;
+  return `${label}s`;
+};
+
+// Checkbox multi-select dropdown — lets a filter row pick zero, one, or many
+// values instead of forcing a single native <select> choice.
+function MultiSelectDropdown({ placeholder = 'All', options = [], selected = [], onChange }) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const containerRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handleOutsideClick = (e) => {
+      if (containerRef.current && !containerRef.current.contains(e.target)) {
+        setOpen(false);
+        setSearch('');
+      }
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    return () => document.removeEventListener('mousedown', handleOutsideClick);
+  }, [open]);
+
+  const normalizedOptions = useMemo(
+    () => options.map((opt) => (opt && typeof opt === 'object' ? opt : { value: opt, label: String(opt) })),
+    [options]
+  );
+  const query = search.trim().toLowerCase();
+  const filteredOptions = query
+    ? normalizedOptions.filter((opt) => opt.label.toLowerCase().includes(query))
+    : normalizedOptions;
+
+  const toggleAll = () => onChange([]);
+  const toggleOption = (value) => {
+    onChange(selected.includes(value) ? selected.filter((v) => v !== value) : [...selected, value]);
+  };
+
+  const summaryLabel = selected.length === 0
+    ? placeholder
+    : selected.length === 1
+      ? (normalizedOptions.find((o) => String(o.value) === String(selected[0]))?.label ?? String(selected[0]))
+      : `${selected.length} selected`;
+
+  return (
+    <div className="multi-select-dropdown" ref={containerRef}>
+      <button
+        type="button"
+        className={`filter-select multi-select-trigger${selected.length ? ' has-selection' : ''}`}
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+      >
+        <span>{summaryLabel}</span>
+        <Icon name="chevronDown" size={14} className={`multi-select-chevron${open ? ' is-open' : ''}`} />
+      </button>
+      {open && (
+        <div className="multi-select-panel">
+          <input
+            type="text"
+            className="multi-select-search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search..."
+            autoFocus
+          />
+          <label className="multi-select-option multi-select-all-option">
+            <input type="checkbox" checked={selected.length === 0} onChange={toggleAll} />
+            <span>- All -</span>
+          </label>
+          <div className="multi-select-option-list">
+            {filteredOptions.map((opt) => (
+              <label key={opt.value} className="multi-select-option">
+                <input
+                  type="checkbox"
+                  checked={selected.includes(opt.value)}
+                  onChange={() => toggleOption(opt.value)}
+                />
+                <span>{opt.label}</span>
+              </label>
+            ))}
+            {filteredOptions.length === 0 && <div className="multi-select-empty">No matches</div>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// A text input that suggests existing options as you type, and — when
+// nothing matches — offers to add whatever was typed as a brand new one.
+// The catalog it's editing (fault categories, maintenance types) is meant
+// to grow with real use instead of being a fixed, admin-curated list; the
+// backend persists new values the same way, so anyone who adds one here
+// finds it waiting in the dropdown next time, everywhere it's offered.
+function CreatableSelect({
+  value, onChange, options = [], placeholder = 'Select or type to add new', newItemLabel = 'option',
+  required = false, catalogEndpoint = null,
+  // For a catalog whose API doesn't use plain {id, name} — e.g. vehicle
+  // categories use {category_id, category_name} — read/write under these
+  // keys instead, normalizing to {id, name} internally either way.
+  idField = 'id', nameField = 'name',
+  // True when the field this drives (e.g. category_id) stores the
+  // catalog row's id, not its name — value/onChange deal in ids, and the
+  // displayed text is resolved by looking the id up in the catalog.
+  valueIsId = false,
+  // Extra required fields the create-endpoint needs beyond a bare name
+  // (e.g. vehicle categories also require a Domain) — rendered as simple
+  // selects in the add-new modal, merged into the POST body.
+  extraFields = [],
+}) {
+  // Only an Admin can remove a catalog entry — it's a shared list everyone
+  // adds to, so letting any role delete from it risks a Custodian or
+  // Mechanic wiping out something others rely on. The backend enforces
+  // this too; hiding the button for non-Admins just avoids a guaranteed
+  // 403 on click.
+  const { user: currentUser } = useContext(AuthContext);
+  const canDeleteCatalogItems = hasRole(currentUser, 'Admin');
+  // Accepts either a plain name string (the simple catalogs) or a raw API
+  // row keyed by idField/nameField (e.g. vehicle categories) — either way,
+  // normalized to one {id, name} shape everything below works with.
+  const normalizeItem = useCallback((raw) => (
+    typeof raw === 'string' ? { id: null, name: raw } : { id: raw[idField] ?? null, name: raw[nameField] }
+  ), [idField, nameField]);
+  const [open, setOpen] = useState(false);
+  // Only holds what's being typed while the panel is open — closed, the
+  // input just displays `value` directly, so there's nothing to keep in
+  // sync via an effect when the value changes from outside.
+  const [draftText, setDraftText] = useState('');
+  // {id, name} pairs — seeded from the plain-string `options` prop (ids
+  // unknown yet) so the list isn't empty on first render, then replaced
+  // with the authoritative version once catalogEndpoint responds. Ids are
+  // what make per-row delete possible; a bare string list (no catalog
+  // backing) just never shows a delete button.
+  const [catalogItems, setCatalogItems] = useState(() => options.map(normalizeItem));
+  // Non-null while the "complete new item" modal is open — holds its own
+  // editable Name field, seeded from what was typed but not locked to it,
+  // same as the reference add-new-Company flow (a real little form, not
+  // just a yes/no confirmation of the raw typed text).
+  const [addModalName, setAddModalName] = useState(null);
+  // Values for `extraFields` (e.g. Domain), keyed by field name.
+  const [addModalExtra, setAddModalExtra] = useState({});
+  const [addModalError, setAddModalError] = useState(null);
+  const [addSaving, setAddSaving] = useState(false);
+  const [addedMessage, setAddedMessage] = useState(null);
+  // The item pending the delete confirmation modal — a real, permanent
+  // removal (it disappears from this list for everyone), so it gets the
+  // same "are you sure" step as any other destructive action in the app.
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [deleteError, setDeleteError] = useState(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  // True right after opening (via focus), before the user has actually
+  // typed anything — the input still shows the current value, but the
+  // option list is NOT filtered by it, so reopening an already-picked
+  // field shows the full catalog instead of just the one exact match
+  // (which used to look like every other option had vanished).
+  const [justOpened, setJustOpened] = useState(false);
+  const containerRef = useRef(null);
+
+  useEffect(() => {
+    if (!catalogEndpoint) return;
+    let cancelled = false;
+    api.get(catalogEndpoint).then((res) => {
+      if (!cancelled) setCatalogItems(res.data.map(normalizeItem));
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [catalogEndpoint, normalizeItem]);
+
+  useEffect(() => {
+    if (!addedMessage) return;
+    const timer = setTimeout(() => setAddedMessage(null), 2600);
+    return () => clearTimeout(timer);
+  }, [addedMessage]);
+
+  useEffect(() => {
+    if (!open) return;
+    const handleOutsideClick = (e) => {
+      if (containerRef.current && !containerRef.current.contains(e.target)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    return () => document.removeEventListener('mousedown', handleOutsideClick);
+  }, [open]);
+
+  // When the driven field stores an id (valueIsId), resolve it to a name
+  // for display — `value` itself is never text in that mode.
+  const selectedItem = valueIsId ? catalogItems.find((o) => String(o.id) === String(value)) : null;
+  const displayText = valueIsId ? (selectedItem?.name ?? '') : (value ?? '');
+  const text = open ? draftText : displayText;
+  const query = justOpened ? '' : text.trim().toLowerCase();
+  const filtered = query ? catalogItems.filter((o) => o.name.toLowerCase().includes(query)) : catalogItems;
+  const hasExactMatch = catalogItems.some((o) => o.name.toLowerCase() === query);
+  const canAddNew = query.length > 0 && !hasExactMatch;
+
+  const openPanel = () => {
+    setDraftText(displayText);
+    setJustOpened(true);
+    setOpen(true);
+  };
+  const pick = (item) => {
+    onChange(valueIsId ? item.id : item.name);
+    setOpen(false);
+  };
+  const openAddModal = (name) => {
+    setAddModalName(name);
+    // Extra fields can carry a sensible default from context (e.g. Domain
+    // pre-filled to match the vehicle already being filled out) — still
+    // shown and changeable, just not blank by default.
+    setAddModalExtra(Object.fromEntries(extraFields.map((f) => [f.name, f.default ?? ''])));
+    setAddModalError(null);
+    setOpen(false);
+  };
+  const newItemTitle = newItemLabel.replace(/\b\w/g, (c) => c.toUpperCase());
+  const saveAddModal = async (e) => {
+    e.preventDefault();
+    // React portals bubble synthetic events through the component tree, not
+    // the DOM tree — without this, submitting this modal's form (portaled
+    // to document.body) also fires the outer page's own <form onSubmit>,
+    // since CreatableSelect is nested inside it there.
+    e.stopPropagation();
+    const val = addModalName.trim();
+    if (!val) {
+      setAddModalError('Name is required.');
+      return;
+    }
+    const missingExtra = extraFields.find((f) => f.required && !addModalExtra[f.name]);
+    if (missingExtra) {
+      setAddModalError(`${missingExtra.label} is required.`);
+      return;
+    }
+    if (!catalogEndpoint) {
+      pick({ id: null, name: val });
+      setAddModalName(null);
+      setAddModalError(null);
+      setAddedMessage(`"${val}" added as a new ${newItemLabel}.`);
+      return;
+    }
+    setAddSaving(true);
+    try {
+      const res = await api.post(catalogEndpoint, { [nameField]: val, ...addModalExtra });
+      const created = normalizeItem(res.data);
+      setCatalogItems((items) => {
+        const withoutDupe = items.filter((i) => i.name.toLowerCase() !== created.name.toLowerCase());
+        return [...withoutDupe, created].sort((a, b) => a.name.localeCompare(b.name));
+      });
+      pick(created);
+      setAddModalName(null);
+      setAddModalError(null);
+      setAddedMessage(`"${created.name}" added as a new ${newItemLabel}.`);
+    } catch (err) {
+      setAddModalError(err?.response?.data?.message || 'Something went wrong — please try again.');
+    } finally {
+      setAddSaving(false);
+    }
+  };
+  const closeAddModal = () => {
+    setAddModalName(null);
+    setAddModalError(null);
+  };
+  const confirmDelete = async () => {
+    setDeleteBusy(true);
+    try {
+      await api.delete(`${catalogEndpoint}/${deleteTarget.id}`);
+      setCatalogItems((items) => items.filter((i) => i.id !== deleteTarget.id));
+      const wasSelected = valueIsId ? String(value) === String(deleteTarget.id) : value === deleteTarget.name;
+      if (wasSelected) onChange(valueIsId ? null : '');
+      setDeleteTarget(null);
+      setDeleteError(null);
+    } catch (err) {
+      setDeleteError(err?.response?.data?.message || 'Something went wrong — please try again.');
+    } finally {
+      setDeleteBusy(false);
+    }
+  };
+
+  return (
+    <div className="creatable-select" ref={containerRef}>
+      <input
+        type="text"
+        value={text}
+        placeholder={placeholder}
+        required={required}
+        onFocus={openPanel}
+        onChange={(e) => { setDraftText(e.target.value); setJustOpened(false); if (!open) setOpen(true); }}
+      />
+      {open && (
+        <div className="creatable-select-panel">
+          {!canAddNew && (
+            <button type="button" className="creatable-select-option creatable-select-add creatable-select-add-pinned" onClick={() => openAddModal('')}>
+              <Icon name="plus" size={13} /> Add New {newItemTitle}
+            </button>
+          )}
+          <div className="creatable-select-option-list">
+            {filtered.map((o) => (
+              <div key={o.id ?? o.name} className="creatable-select-option-row">
+                <button type="button" className="creatable-select-option" onClick={() => pick(o)}>
+                  {o.name}
+                </button>
+                {catalogEndpoint && canDeleteCatalogItems && o.id != null && (
+                  <button
+                    type="button"
+                    className="creatable-select-option-delete"
+                    onClick={(e) => { e.stopPropagation(); setDeleteTarget(o); setDeleteError(null); }}
+                    title={`Remove ${o.name}`}
+                    aria-label={`Remove ${o.name}`}
+                  >
+                    <Icon name="close" size={12} />
+                  </button>
+                )}
+              </div>
+            ))}
+            {filtered.length === 0 && !canAddNew && <div className="multi-select-empty">No matches</div>}
+          </div>
+          {canAddNew && (
+            <button type="button" className="creatable-select-option creatable-select-add" onClick={() => openAddModal(text.trim())}>
+              <Icon name="plus" size={13} /> Add "{text.trim()}" as a new {newItemLabel}
+            </button>
+          )}
+        </div>
+      )}
+      <FormModal open={addModalName !== null} title={`Add New ${newItemTitle}`} onClose={closeAddModal}>
+        <form className="smart-form" onSubmit={saveAddModal} noValidate>
+          {addModalError && (
+            <div className="toast-notice-overlay" onClick={() => setAddModalError(null)}>
+              <div className="toast-notice toast-notice-validation error" role="alert" onClick={(e) => e.stopPropagation()}>
+                <Icon name="alert" size={17} className="toast-notice-icon" />
+                <div className="toast-notice-lines"><span>{addModalError}</span></div>
+                <button type="button" className="toast-notice-close" onClick={() => setAddModalError(null)} aria-label="Dismiss">
+                  <Icon name="close" size={13} />
+                </button>
+              </div>
+            </div>
+          )}
+          <label>
+            <span>Name <span className="required-asterisk">*</span></span>
+            <input type="text" required autoFocus value={addModalName ?? ''} onChange={(e) => setAddModalName(e.target.value)} />
+          </label>
+          {extraFields.map((f) => (
+            <label key={f.name}>
+              <span>{f.label} {f.required && <span className="required-asterisk">*</span>}</span>
+              <select
+                required={f.required}
+                value={addModalExtra[f.name] ?? ''}
+                onChange={(e) => setAddModalExtra((cur) => ({ ...cur, [f.name]: e.target.value }))}
+              >
+                <option value="" disabled>Select {f.label}</option>
+                {f.options.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+              </select>
+            </label>
+          ))}
+          <div className="form-actions">
+            <button className="ghost-button" type="button" onClick={closeAddModal} disabled={addSaving}>Cancel</button>
+            <button className="primary-button" type="submit" disabled={addSaving}>{addSaving ? 'Saving…' : 'Save'}</button>
+          </div>
+        </form>
+      </FormModal>
+      {deleteTarget && createPortal(
+        <div className="confirm-overlay" onClick={() => !deleteBusy && setDeleteTarget(null)}>
+          <section className="confirm-dialog" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+            <div className="confirm-dialog-icon" aria-hidden="true">
+              <Icon name="alert" size={20} />
+            </div>
+            <div className="confirm-dialog-copy">
+              <p className="eyebrow">Confirmation</p>
+              <h3>Remove {newItemTitle}</h3>
+              <p>Remove "{deleteTarget.name}" from this list? It disappears for everyone — existing tickets/records that already used it keep showing it, but it won't be selectable anymore.</p>
+              {deleteError && <p style={{ color: '#b91c1c', fontWeight: 600, marginTop: 8 }}>{deleteError}</p>}
+            </div>
+            <div className="confirm-dialog-actions">
+              <button className="ghost-button" disabled={deleteBusy} onClick={() => setDeleteTarget(null)} type="button">Cancel</button>
+              <button className="danger-button" disabled={deleteBusy} onClick={confirmDelete} type="button">
+                {deleteBusy ? 'Removing…' : 'Remove'}
+              </button>
+            </div>
+          </section>
+        </div>,
+        document.body
+      )}
+      {addedMessage && createPortal(
+        <div className="toast-notice success" role="alert">
+          <div className="toast-notice-body">
+            <Icon name="checkCircle" size={16} />
+            <span>{addedMessage}</span>
+          </div>
+        </div>,
+        document.body
+      )}
+    </div>
+  );
+}
+
+// Popup-modal version of the "+ Add New Issue…" field on the Maintenance
+// Record form. Opens immediately (lazy initial state, not an effect — no
+// extra click on an inline trigger first) and only asks for Issue Type;
+// Description/Severity aren't asked twice — submitFormPage fills those in
+// from the outer form's own Problem/Reason field and a default severity.
+// Writes new_issue_type plus a truthy sentinel on its own field name (so
+// SmartForm's generic required-field check has something to check) via one
+// onChange patch — nothing downstream needs to know it came from a modal.
+function NewIssueModalField({ value, onChange, issueTypeOptions = [] }) {
+  const hasValue = !!value?.new_issue_type;
+  const [open, setOpen] = useState(() => !hasValue);
+  const [draft, setDraft] = useState(() => value?.new_issue_type ?? '');
+  const [error, setError] = useState(null);
+
+  const openModal = () => {
+    setDraft(value?.new_issue_type ?? '');
+    setError(null);
+    setOpen(true);
+  };
+
+  // Cancelling out of a first-time add (nothing saved yet) reverts the
+  // Related Issue Report dropdown back to blank instead of leaving the
+  // field group stranded with no value and no visible way back in.
+  const cancel = () => {
+    if (!hasValue) onChange({ issue_report_id: '' });
+    setOpen(false);
+  };
+
+  const save = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!draft.trim()) {
+      setError('Issue Type is required.');
+      return;
+    }
+    onChange({ new_issue_type: draft.trim(), __new_issue_group__: 1 });
+    setOpen(false);
+  };
+
+  return (
+    <>
+      {hasValue && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '10px 12px', border: '1px solid var(--border-subtle, #e2e8f0)', borderRadius: 8 }}>
+          <strong>{value.new_issue_type}</strong>
+          <button type="button" className="ghost-button" onClick={openModal} style={{ flexShrink: 0 }}>Edit</button>
+        </div>
+      )}
+      <FormModal open={open} title="Add New Issue" onClose={cancel}>
+        <form className="smart-form new-issue-form" onSubmit={save} noValidate>
+          {error && (
+            <div className="toast-notice-overlay" onClick={() => setError(null)}>
+              <div className="toast-notice toast-notice-validation error" role="alert" onClick={(e) => e.stopPropagation()}>
+                <Icon name="alert" size={17} className="toast-notice-icon" />
+                <div className="toast-notice-lines"><span>{error}</span></div>
+                <button type="button" className="toast-notice-close" onClick={() => setError(null)} aria-label="Dismiss">
+                  <Icon name="close" size={13} />
+                </button>
+              </div>
+            </div>
+          )}
+          <label>
+            <span>Issue Type <span className="required-asterisk">*</span></span>
+            <CreatableSelect
+              value={draft}
+              onChange={setDraft}
+              options={issueTypeOptions}
+              newItemLabel="issue type"
+              catalogEndpoint="/fault-categories"
+              required
+            />
+          </label>
+          <div className="form-actions">
+            <button className="ghost-button" type="button" onClick={cancel}>Cancel</button>
+            <button className="primary-button" type="submit">Save</button>
+          </div>
+        </form>
+      </FormModal>
+    </>
+  );
+}
+
 function FilterBar({
   categories = [],
   vehicles = [],
@@ -10672,7 +12650,20 @@ function FilterBar({
   priorityOptions = [],
   priorityLabel = "Priority",
   statusLabel = "Status",
-  trailing
+  trailing,
+  // Advanced filter panel — opt-in (Vehicle Management only today) so every
+  // other FilterBar usage renders exactly as before.
+  showAdvanced = false,
+  filterLocation,
+  setFilterLocation,
+  filterDomain,
+  setFilterDomain,
+  // Extra module-specific dropdowns beyond the standard six — each applies
+  // immediately (no "Filter" click needed), unlike the staged fields above.
+  // Shape: [{ key, label, options, selected, setSelected }].
+  extraFilters = [],
+  // Optional date-range pair (also applies immediately as typed).
+  dateRange = null,
 }) {
   // Extract unique capacities dynamically
   const capacities = useMemo(() => {
@@ -10685,44 +12676,73 @@ function FilterBar({
     return Array.from(caps).sort();
   }, [vehicles]);
 
+  const locations = useMemo(() => {
+    const locs = new Set();
+    vehicles.forEach((v) => {
+      if (v.current_location) locs.add(v.current_location.trim());
+    });
+    return Array.from(locs).sort();
+  }, [vehicles]);
+
+  const domains = useMemo(() => {
+    const doms = new Set();
+    categories.forEach((c) => { if (c.domain) doms.add(c.domain); });
+    return Array.from(doms).sort();
+  }, [categories]);
+
   // Draft selections — only applied to the table when "Filter" is clicked.
+  // Each field is an array now, so a dropdown can hold zero, one, or many values.
   const [draft, setDraft] = useState({
-    category: filterCategory,
-    capacity: filterCapacity,
-    status: filterStatus,
-    priority: filterPriority,
+    category: filterCategory ?? [],
+    capacity: filterCapacity ?? [],
+    status: filterStatus ?? [],
+    priority: filterPriority ?? [],
+    location: filterLocation ?? [],
+    domain: filterDomain ?? [],
   });
 
   // Keep the draft in sync when applied filters are reset externally
   // (e.g. switching modules clears all filters).
   useEffect(() => {
     setDraft({
-      category: filterCategory,
-      capacity: filterCapacity,
-      status: filterStatus,
-      priority: filterPriority,
+      category: filterCategory ?? [],
+      capacity: filterCapacity ?? [],
+      status: filterStatus ?? [],
+      priority: filterPriority ?? [],
+      location: filterLocation ?? [],
+      domain: filterDomain ?? [],
     });
-  }, [filterCategory, filterCapacity, filterStatus, filterPriority]);
+  }, [filterCategory, filterCapacity, filterStatus, filterPriority, filterLocation, filterDomain]);
 
-  const hasActiveFilters = filterCategory || filterCapacity || filterStatus || filterPriority;
-  const isDirty = draft.category !== filterCategory
-    || draft.capacity !== filterCapacity
-    || draft.status !== filterStatus
-    || draft.priority !== filterPriority;
+  const hasActiveFilters = (filterCategory?.length || filterCapacity?.length || filterStatus?.length
+    || filterPriority?.length || filterLocation?.length || filterDomain?.length
+    || extraFilters.some((f) => f.selected?.length) || (dateRange && (dateRange.start || dateRange.end))) > 0;
+  const isDirty = !sameSelection(draft.category, filterCategory ?? [])
+    || !sameSelection(draft.capacity, filterCapacity ?? [])
+    || !sameSelection(draft.status, filterStatus ?? [])
+    || !sameSelection(draft.priority, filterPriority ?? [])
+    || !sameSelection(draft.location, filterLocation ?? [])
+    || !sameSelection(draft.domain, filterDomain ?? []);
 
   const applyFilters = () => {
     setFilterCategory(draft.category);
     setFilterCapacity(draft.capacity);
     setFilterStatus(draft.status);
     if (setFilterPriority) setFilterPriority(draft.priority);
+    if (setFilterLocation) setFilterLocation(draft.location);
+    if (setFilterDomain) setFilterDomain(draft.domain);
   };
 
   const clearFilters = () => {
-    setDraft({ category: '', capacity: '', status: '', priority: '' });
-    setFilterCategory('');
-    setFilterCapacity('');
-    setFilterStatus('');
-    if (setFilterPriority) setFilterPriority('');
+    setDraft({ category: [], capacity: [], status: [], priority: [], location: [], domain: [] });
+    setFilterCategory([]);
+    setFilterCapacity([]);
+    setFilterStatus([]);
+    if (setFilterPriority) setFilterPriority([]);
+    if (setFilterLocation) setFilterLocation([]);
+    if (setFilterDomain) setFilterDomain([]);
+    extraFilters.forEach((f) => f.setSelected([]));
+    if (dateRange) { dateRange.setStart(''); dateRange.setEnd(''); }
   };
 
   return (
@@ -10732,63 +12752,94 @@ function FilterBar({
       </div>
 
       {/* Category Dropdown */}
-      <select
-        className="filter-select"
-        value={draft.category}
-        onChange={(e) => setDraft((d) => ({ ...d, category: e.target.value }))}
-      >
-        <option value="">All Categories</option>
-        {categories.map((cat) => (
-          <option key={cat.category_id} value={cat.category_id}>
-            {cat.category_name}
-          </option>
-        ))}
-      </select>
+      <MultiSelectDropdown
+        placeholder="All Categories"
+        options={categories.map((cat) => ({ value: String(cat.category_id), label: cat.category_name }))}
+        selected={draft.category}
+        onChange={(vals) => setDraft((d) => ({ ...d, category: vals }))}
+      />
 
       {/* Capacity Dropdown */}
-      <select
-        className="filter-select"
-        value={draft.capacity}
-        onChange={(e) => setDraft((d) => ({ ...d, capacity: e.target.value }))}
-      >
-        <option value="">All Capacities</option>
-        {capacities.map((cap) => (
-          <option key={cap} value={cap}>
-            {cap}
-          </option>
-        ))}
-      </select>
+      <MultiSelectDropdown
+        placeholder="All Capacities"
+        options={capacities}
+        selected={draft.capacity}
+        onChange={(vals) => setDraft((d) => ({ ...d, capacity: vals }))}
+      />
 
       {/* Status Dropdown */}
       {statusOptions && statusOptions.length > 0 && (
-        <select
-          className="filter-select"
-          value={draft.status}
-          onChange={(e) => setDraft((d) => ({ ...d, status: e.target.value }))}
-        >
-          <option value="">All {statusLabel}es</option>
-          {statusOptions.map((opt) => (
-            <option key={opt} value={opt}>
-              {opt}
-            </option>
-          ))}
-        </select>
+        <MultiSelectDropdown
+          placeholder={`All ${pluralizeLabel(statusLabel)}`}
+          options={statusOptions}
+          selected={draft.status}
+          onChange={(vals) => setDraft((d) => ({ ...d, status: vals }))}
+        />
       )}
 
       {/* Priority / Severity / Condition Dropdown */}
       {priorityOptions && priorityOptions.length > 0 && (
-        <select
-          className="filter-select"
-          value={draft.priority}
-          onChange={(e) => setDraft((d) => ({ ...d, priority: e.target.value }))}
-        >
-          <option value="">All {priorityLabel}s</option>
-          {priorityOptions.map((opt) => (
-            <option key={opt} value={opt}>
-              {opt}
-            </option>
-          ))}
-        </select>
+        <MultiSelectDropdown
+          placeholder={`All ${pluralizeLabel(priorityLabel)}`}
+          options={priorityOptions}
+          selected={draft.priority}
+          onChange={(vals) => setDraft((d) => ({ ...d, priority: vals }))}
+        />
+      )}
+
+      {/* Advanced filters — merged directly into the main filter row */}
+      {showAdvanced && (
+        <>
+          <MultiSelectDropdown
+            placeholder="All Locations"
+            options={locations}
+            selected={draft.location}
+            onChange={(vals) => setDraft((d) => ({ ...d, location: vals }))}
+          />
+          <MultiSelectDropdown
+            placeholder="All Domains (Land/Water)"
+            options={domains}
+            selected={draft.domain}
+            onChange={(vals) => setDraft((d) => ({ ...d, domain: vals }))}
+          />
+        </>
+      )}
+
+      {/* Extra module-specific dropdowns — apply immediately, not staged. */}
+      {extraFilters.map((f) => (
+        <MultiSelectDropdown
+          key={f.key}
+          placeholder={`All ${f.label}`}
+          options={f.options}
+          selected={f.selected}
+          onChange={f.setSelected}
+        />
+      ))}
+
+      {/* Date range — also applies immediately as typed. */}
+      {dateRange && (
+        <>
+          <div className="filter-date-group">
+            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted, #64748b)', fontWeight: 'bold' }}>From:</span>
+            <input
+              type="date"
+              className="filter-select"
+              style={{ minWidth: 'auto' }}
+              value={dateRange.start}
+              onChange={(e) => dateRange.setStart(e.target.value)}
+            />
+          </div>
+          <div className="filter-date-group">
+            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted, #64748b)', fontWeight: 'bold' }}>To:</span>
+            <input
+              type="date"
+              className="filter-select"
+              style={{ minWidth: 'auto' }}
+              value={dateRange.end}
+              onChange={(e) => dateRange.setEnd(e.target.value)}
+            />
+          </div>
+        </>
       )}
 
       {/* Apply Filter button */}

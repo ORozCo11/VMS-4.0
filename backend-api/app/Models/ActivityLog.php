@@ -2,10 +2,13 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\BelongsToBarangay;
 use Illuminate\Database\Eloquent\Model;
 
 class ActivityLog extends Model
 {
+    use BelongsToBarangay;
+
     protected $primaryKey = 'log_id';
 
     protected $fillable = [
@@ -15,6 +18,7 @@ class ActivityLog extends Model
         'module',
         'affected_record_id',
         'details',
+        'barangay_id',
     ];
 
     public function user()

@@ -393,6 +393,23 @@
   .auth-split-hero { display: none; }
 }
 
+/* Privacy/Terms brand mark — sits inside the white policy card itself,
+   pinned to its upper-right corner (the card is already position:relative
+   via .auth-page .auth-card above). */
+.policy-card-logo {
+  position: absolute;
+  top: 1.5rem;
+  right: 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #2563eb;
+}
+.policy-card-logo-wordmark { color: #2563eb; }
+@media (max-width: 480px) {
+  .policy-card-logo-wordmark { display: none; }
+}
+
 /* Filled counterpart to .auth-page-header-login-btn, placed beside it so
    the two public-facing CTAs (sign in vs. create an account) read as a
    primary/secondary pair rather than two identical outline buttons. */
@@ -1078,9 +1095,21 @@
 .auth-page-shell .notice.success { background: linear-gradient(90deg, #ecfdf5, #d1fae5); border: 1px solid #86efac; color: #065f46; }
 .auth-page-shell .notice.error { background: linear-gradient(90deg, #fef2f2, #fee2e2); border: 1px solid #fca5a5; color: #991b1b; }
 
+/* Same problem, same fix, for the Privacy/Terms body text: their section
+   headings and paragraphs inherit .auth-card's color from a dark-theme
+   variable (these public pages never carry data-theme="light"), reading
+   as near-illegible pale cream against the card's forced-white
+   background. Pin readable colors directly instead of relying on the
+   in-app theme cascade these pages never actually participate in. */
+.policy-card { color: #475569 !important; }
+.policy-card h3 { color: #0f172a !important; }
+.policy-card .eyebrow { color: #1d4ed8 !important; }
+
 /* Floating toast for every add/edit/delete/validation result — replaces the
    old full-width inline banner so it overlays the page instead of pushing
    content down, and auto-dismisses instead of sticking around. */
+/* A flat, compact pill instead of a big bordered rounded card — a plain
+   one-line confirmation shouldn't be as visually loud as an actual modal. */
 .toast-notice {
   position: fixed;
   top: 50%;
@@ -1092,13 +1121,13 @@
   align-items: center;
   justify-content: center;
   text-align: center;
-  gap: 10px;
-  padding: 16px 40px;
-  border-radius: 12px;
-  font-size: 0.875rem;
+  gap: 6px;
+  padding: 10px 20px;
+  border-radius: 8px;
+  font-size: 0.85rem;
   font-weight: 600;
   max-width: 420px;
-  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.18);
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.12);
   animation: toastDrop 0.25s ease;
 }
 @keyframes toastDrop {
@@ -1161,25 +1190,33 @@ html[data-theme="light"] .toast-notice-ticket-link:hover,
   background: #0b3d28;
   border: 1px solid #10b981;
   color: #6ee7b7;
-  box-shadow: 0 10px 24px rgba(16, 185, 129, 0.22);
+  box-shadow: 0 4px 10px rgba(16, 185, 129, 0.18);
 }
 .toast-notice.error {
   background: #43151a;
   border: 1px solid #ef4444;
   color: #fca5a5;
-  box-shadow: 0 10px 24px rgba(239, 68, 68, 0.22);
+  box-shadow: 0 4px 10px rgba(239, 68, 68, 0.18);
 }
 html[data-theme="light"] .toast-notice.success {
   background: #eafcf3;
   border: 1px solid #86efac;
   color: #15803d;
-  box-shadow: 0 10px 24px rgba(16, 185, 129, 0.16);
+  box-shadow: 0 4px 10px rgba(16, 185, 129, 0.12);
 }
 html[data-theme="light"] .toast-notice.error {
   background: #fdedee;
   border: 1px solid #fca5a5;
   color: #b91c1c;
-  box-shadow: 0 10px 24px rgba(239, 68, 68, 0.16);
+  box-shadow: 0 4px 10px rgba(239, 68, 68, 0.12);
+}
+/* Icon + message side by side, not stacked — any extra content (e.g. the
+   ticket-link buttons below) still stacks under this row since the outer
+   .toast-notice itself stays a column. */
+.toast-notice-body {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 /* Centered validation-summary card — every "field is required" message
@@ -1392,6 +1429,11 @@ html[data-theme="light"] .toast-notice.error {
   flex-shrink: 0;
 }
 
+.btn-gear-spinner {
+  animation: loaderSpin 1s linear infinite;
+  flex-shrink: 0;
+}
+
 /* --- Full-screen session loader --- */
 .fullscreen-loader {
   position: fixed;
@@ -1426,11 +1468,11 @@ html[data-theme="light"] .toast-notice.error {
 
 /* PANELS */
 .panel {
-  background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
-  border: 1px solid #d9e6f8;
-  border-radius: 16px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
   padding: 24px;
-  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.12);
 }
 .panel-header {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
@@ -1459,56 +1501,189 @@ html[data-theme="light"] .toast-notice.error {
 /* MODULE GRID — always full width; forms open as modals */
 .module-grid { display: grid; grid-template-columns: 1fr; gap: 24px; align-items: start; }
 
+/* Issue Reports' stat cards + filter bar share a left column; the "what
+   just came in" card sits in a fixed-width right column spanning BOTH
+   rows — tall enough to run alongside the cards and the (narrow, natural-
+   width) filter row below them, instead of one flat strip per row. */
+.issue-summary-grid {
+  display: grid;
+  grid-template-columns: 1fr 420px;
+  grid-template-rows: auto auto;
+  gap: 16px;
+}
+@media (max-width: 900px) {
+  .issue-summary-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.issue-summary-stats {
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
+}
+.issue-summary-stats .metric-grid {
+  margin-bottom: 0 !important;
+}
+.issue-summary-filters {
+  grid-column: 1;
+  grid-row: 2;
+  min-width: 0;
+}
+@media (max-width: 900px) {
+  .issue-summary-filters {
+    grid-column: 1;
+    grid-row: auto;
+  }
+}
+.latest-issue-card {
+  grid-column: 2;
+  grid-row: 1 / 3;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px 24px;
+}
+@media (max-width: 900px) {
+  .latest-issue-card {
+    grid-column: 1;
+    grid-row: auto;
+  }
+}
+.latest-issue-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.latest-issue-card-label {
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted, #64748b);
+}
+.latest-issue-card-title {
+  font-size: 1.1rem;
+  color: var(--text-strong, #0f172a);
+}
+.latest-issue-card-row {
+  display: flex;
+  align-items: center;
+}
+.latest-issue-card-tags {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+.latest-issue-card.is-empty {
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  gap: 6px;
+}
+/* Activity-timeline variant — a scrollable dashed timeline of recent
+   reports, each with an icon bubble, title/description, and a relative
+   "X ago" timestamp. */
+.latest-issue-timeline-list {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  max-height: 440px;
+  overflow-y: auto;
+  padding-left: 22px;
+  margin-top: 4px;
+}
+.latest-issue-timeline-list::before {
+  content: '';
+  position: absolute;
+  left: 5px;
+  top: 22px;
+  bottom: 22px;
+  border-left: 2px dashed var(--border, #cbd5e1);
+}
+.latest-issue-timeline-item {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 14px 4px;
+  border: none;
+  border-bottom: 1px solid var(--border-subtle, #eef2f7);
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+.latest-issue-timeline-item:last-child {
+  border-bottom: none;
+}
+.latest-issue-timeline-item:hover {
+  background: var(--surface-hover, #f8fafc);
+}
+.latest-issue-timeline-dot {
+  position: absolute;
+  left: -22px;
+  top: 22px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #2563eb;
+  box-shadow: 0 0 0 2px var(--surface, #fff);
+}
+.latest-issue-timeline-icon {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #eff6ff;
+  color: #2563eb;
+}
+.latest-issue-timeline-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.latest-issue-timeline-body strong {
+  font-size: 0.85rem;
+  color: var(--text-strong, #0f172a);
+}
+.latest-issue-timeline-body span {
+  font-size: 0.76rem;
+  color: var(--text-muted, #64748b);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.latest-issue-timeline-time {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding-top: 2px;
+  font-size: 0.7rem;
+  color: var(--text-muted, #94a3b8);
+  white-space: nowrap;
+}
+
 /* DASHBOARD */
 .dashboard-grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 14px; }
 .metric-grid { grid-column: 1/-1; display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
-/* Dashboard's headline KPI row always has exactly 5 cards — fixed equal
-   columns instead of auto-fit, which can size the last card differently
-   depending on exactly how many implicit tracks fit at a given width. */
-.dashboard-headline-grid { grid-template-columns: repeat(5, 1fr) !important; }
+/* Dashboard's headline KPI row carries all 8 fleet counts in one consistent
+   tile style — 4 fixed columns so they land as two clean rows of four rather
+   than an auto-fit row that sizes the trailing card differently. */
+.dashboard-headline-grid { grid-template-columns: repeat(4, 1fr) !important; }
 @media (max-width: 900px) {
   .dashboard-headline-grid { grid-template-columns: repeat(2, 1fr) !important; }
 }
 @media (max-width: 560px) {
   .dashboard-headline-grid { grid-template-columns: 1fr !important; }
-}
-/* Secondary KPI tier — issues/upcoming/overdue counts, already actionable
-   elsewhere on the page, so they get slim rows instead of full metric cards. */
-.dashboard-mini-stats {
-  grid-column: 1/-1;
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
-}
-.dashboard-mini-stat {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 14px;
-  border-radius: 10px;
-  background: var(--surface, #fff);
-  border: 1px solid var(--border-subtle, #e2e8f0);
-}
-.dashboard-mini-stat-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-.dashboard-mini-stat-label {
-  font-size: 0.82rem;
-  color: var(--text-muted, #64748b);
-  flex: 1;
-}
-.dashboard-mini-stat strong {
-  font-size: 0.95rem;
-  font-weight: 800;
-  color: var(--text-strong, #0f172a);
-}
-@media (max-width: 720px) {
-  .dashboard-mini-stats {
-    grid-template-columns: 1fr;
-  }
 }
 .full-span { grid-column: 1/-1; }
 .metric-card {
@@ -1535,6 +1710,36 @@ html[data-theme="light"] .toast-notice.error {
 /* Total/summary card icon — theme-aware blue tint instead of a hardcoded
    pale-blue that only worked in light mode. */
 .metric-card-icon.is-total { background: rgba(37, 99, 235, 0.12); color: var(--primary, #2563eb); }
+
+/* Solid-color stat cards — each status gets its own bold background
+   (colors come from the card's own inline style) instead of a white card
+   with only the icon chip tinted, so the row reads at a glance. */
+.metric-card-solid {
+  border: none;
+}
+.metric-card-solid:hover {
+  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.25);
+}
+
+/* Clickable stat cards double as filter toggles — a visible press effect
+   on every click, plus a persistent state while the filter it represents
+   is the active one, so "did that click register" is never ambiguous. The
+   card's own icon always stays put (swapping it to a checkmark read as
+   wrong on cards like "Pending" whose icon means something specific); the
+   "selected" signal is a white gap ring + a glow tinted to the card's own
+   color instead (set inline, since it depends on each card's color) — the
+   same visual language as a selected color swatch, readable against any
+   background. */
+.stat-filter-card {
+  position: relative;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+.stat-filter-card:active {
+  transform: scale(0.97);
+}
+.stat-filter-card.is-active {
+  transform: translateY(-2px);
+}
 .metric-card-iconic .metric-card-body { display: flex; flex-direction: column; text-align: left; }
 .metric-card-iconic .metric-card-body span { margin-bottom: 4px; }
 .metric-card-iconic .metric-card-body strong { font-size: 1.5rem; }
@@ -1815,7 +2020,12 @@ table a:hover {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: var(--text-strong, #0f172a);
+  color: #64748b;
+  transition: color 0.15s ease;
+}
+.smart-form .required-asterisk {
+  color: #ef4444;
+  text-transform: none;
 }
 .smart-form input, .smart-form select, .smart-form textarea {
   background: #ffffff;
@@ -1873,14 +2083,118 @@ table a:hover {
 .password-toggle-btn:hover {
   color: #2563eb;
 }
-.file-preview {
+/* Single self-contained photo box: empty placeholder until a file is
+   picked, then the photo fills the box itself. The <input type="file">
+   covers the whole box (so both click-anywhere and native drag-and-drop
+   work); the "+ Add Image" pill and remove button float above it. */
+.photo-box {
+  position: relative;
   width: 100%;
-  max-width: 200px;
-  height: 120px;
+  max-width: 460px;
+  aspect-ratio: 4 / 3;
+  border-radius: 12px;
+  border: 1px solid #d7dee7;
+  background: linear-gradient(180deg, #eef2f7, #dde4ec);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.photo-box-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  z-index: 1;
+}
+.photo-box-add-btn {
+  /* The generic .smart-form label rule (position:relative "legend on the
+     border" anchor, plus display:flex + flex-direction:column for the
+     usual span-over-input stack) outweighs this single-class selector on
+     specificity — !important keeps this pill pinned to the corner as a
+     single-line row instead of an absolutely-positioned column. */
+  position: absolute !important;
+  margin-top: 0 !important;
+  display: inline-flex !important;
+  flex-direction: row !important;
+  top: 8px;
+  left: 8px;
+  z-index: 2;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 9px;
+  border-radius: 6px;
+  background: #2563eb;
+  color: #fff;
+  font-size: 0.68rem;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(37, 99, 235, 0.35);
+  transition: background 0.15s ease;
+}
+.photo-box-add-btn:hover {
+  background: #1d4ed8;
+}
+.photo-box-remove {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 2;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 7px;
+  background: rgba(15, 23, 42, 0.55);
+  color: #fff;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.photo-box-remove:hover {
+  background: rgba(15, 23, 42, 0.75);
+}
+.photo-box-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  color: #94a3b8;
+  font-size: 0.85rem;
+  font-weight: 600;
+  pointer-events: none;
+}
+.photo-box-fill {
+  width: 100%;
+  height: 100%;
   object-fit: cover;
-  border-radius: 10px;
-  border: 1.5px solid #e2e8f0;
-  margin-top: 6px;
+}
+.photo-box-file {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 0 20px;
+  color: #2563eb;
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-align: center;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
+/* Opt-in (field.compactFile) — lets a file field sit beside its next
+   sibling in the 2-column grid instead of the default full-width row,
+   e.g. the Add Vehicle wizard's photo box next to the Current Location
+   dropdown. */
+.smart-form label.file-inline {
+  grid-column: auto !important;
+}
+.field-extra {
+  margin-top: -4px;
 }
 .photo-cell {
   display: inline-flex;
@@ -2302,16 +2616,6 @@ button.vehicle-cell-name.cell-link { font-weight: 600; }
 /* Center date-badge cells under their (centered) column headers. */
 td:has(> .date-badge) { text-align: center; }
 
-/* Back control is now an arrow-only icon button — keep it compact/square
-   instead of the wide text-button width. */
-.vehicle-profile-header .btn-exit-action,
-.ticket-detail-header .btn-exit-action {
-  width: 44px;
-  min-width: 44px;
-  padding: 0;
-  flex-shrink: 0;
-}
-
 .repair-log-entries {
   display: flex;
   flex-direction: column;
@@ -2605,6 +2909,14 @@ table button.icon-btn svg,
   animation: modalIn 0.22s ease;
   position: relative;
 }
+/* "Add New Issue" popup — a single short field would otherwise leave the
+   card barely taller than its Cancel/Save row, so the Issue Type dropdown
+   (which can run ~230px tall once catalog items load) visually spills past
+   the card's bottom edge instead of having room to sit inside it. */
+.modal-box:has(.new-issue-form) {
+  width: min(520px, 100%);
+  min-height: 360px;
+}
 .modal-header {
   display: flex; align-items: center; justify-content: space-between;
   padding: 22px 28px 16px;
@@ -2624,7 +2936,7 @@ table button.icon-btn svg,
 
 .wizard-steps {
   display: flex;
-  gap: 16px;
+  gap: 28px;
   padding: 12px;
   margin-bottom: 18px;
   background: #2563eb;
@@ -2649,7 +2961,12 @@ table button.icon-btn svg,
   font-weight: 400;
 }
 .wizard-step-pill.is-active svg { stroke: #1d4ed8; }
-.wizard-step-pill.is-done { color: #16a34a; }
+/* A completed step reads as done at a glance (green pill), not just a
+   green checkmark on the same blue-tinted background as every other step. */
+.wizard-step-pill.is-done {
+  background: #dcfce7;
+  color: #16a34a;
+}
 .wizard-step-pill.is-done svg { stroke: #16a34a; }
 button.wizard-step-pill {
   border: none;
@@ -2658,7 +2975,7 @@ button.wizard-step-pill {
   transition: background 0.15s ease, transform 0.15s ease;
 }
 button.wizard-step-pill:hover {
-  background: #dcfce7;
+  background: #bbf7d0;
   transform: translateY(-1px);
 }
 /* Wide modal — two-column form so tall forms don't need vertical scrolling */
@@ -2671,6 +2988,13 @@ button.wizard-step-pill:hover {
   grid-template-columns: 1fr 1fr;
   grid-auto-flow: dense;
   gap: 10px 18px;
+}
+/* Add Vehicle wizard's Photo & Location step only — the photo box never
+   grows past its own 460px cap, so giving it an even 1fr leaves the
+   Current Location column (dropdown + map) narrower than it needs to be.
+   Fix the photo column to its cap and let location take the rest. */
+.wizard-photo-location-grid .smart-form {
+  grid-template-columns: 460px 1fr;
 }
 .modal-box-wide .smart-form label,
 .form-grid-2col .smart-form label {
@@ -2757,6 +3081,14 @@ button.wizard-step-pill:hover {
 .smart-form select {
   max-width: 280px;
 }
+/* Full-page forms (the Add Vehicle wizard, Edit Vehicle, etc. — anything
+   wrapped in .form-grid-2col rather than a narrow modal popup) have plenty
+   of horizontal room; let each field fill its grid column instead of
+   staying capped at the same compact width a modal popup needs. */
+.form-grid-2col .smart-form input:not([type="file"]),
+.form-grid-2col .smart-form select {
+  max-width: none;
+}
 /* Password fields wrap the <input> in a .password-field row with the
    show/hide button absolutely positioned against THAT row, not the input.
    Capping the input directly leaves it narrower than the row, so the
@@ -2786,13 +3118,64 @@ button.wizard-step-pill:hover {
   padding: 0 6px;
   background: var(--surface-2, #f8fafc);
 }
-.smart-form input:not([type="file"]),
+.smart-form input:not([type="file"]):not([type="checkbox"]),
 .smart-form select,
 .smart-form textarea {
   border: 1px solid var(--border, #cbd5e1);
   border-radius: 8px;
   padding: 10px 12px 8px;
   color: var(--text-strong, #0f172a);
+}
+/* A native <select>'s OS-drawn "menulist" chrome keeps its own intrinsic
+   height regardless of the padding above, so it rendered a few px taller
+   than the plain-text <input> beside it in the same grid row — visible as
+   the two boxes not lining up ("dropdowns are misplaced"). A fixed height
+   on both, plus a hand-drawn chevron once appearance is reset, fixes it. */
+.smart-form input:not([type="file"]):not([type="checkbox"]),
+.smart-form select {
+  height: 42px;
+  line-height: 1.2;
+  box-sizing: border-box;
+}
+/* Per-option rows inside a 'checkboxes' field aren't excluded by the
+   :not(:has(.checkbox-group)) guards above — those only exclude the OUTER
+   field label wrapping the whole group, not each option's own row, which
+   doesn't itself contain .checkbox-group (that's its parent, not a
+   descendant). Left unguarded, the option row inherited position:relative
+   + its <span> got pulled position:absolute (the "legend on border" look
+   above), AND the row's own flex-direction fell back to .smart-form
+   label's base column setting since the row's inline style never
+   overrides that one property — together, that scattered the checkbox
+   and its text across the row instead of sitting side by side. Reset
+   both here with enough specificity to win regardless of source order. */
+.smart-form .checkbox-group label {
+  position: static;
+  margin-top: 0;
+  flex-direction: row;
+}
+.smart-form .checkbox-group label > span {
+  position: static;
+  padding: 0;
+  background: none;
+}
+.smart-form select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  cursor: pointer;
+  padding-right: 32px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 16px;
+}
+/* Focus accent — while actually focused, tint the border-sitting caption
+   the accent color instead of its default neutral gray, so it's clear
+   which field currently has focus without needing an idle/floated state
+   switch (every label already sits on the border permanently via the
+   rule above). */
+.smart-form label:not(:has(.checkbox-group)):not(:has(input[type="file"])):has(input:focus, textarea:focus, select:focus) > span {
+  color: var(--primary, #2563eb);
 }
 /* Page-level title, sitting inside the card above the field legends — dark
    like a section heading, distinct from the blue per-field legends above
@@ -2814,7 +3197,8 @@ button.wizard-step-pill:hover {
   padding: 16px 18px;
   background: var(--surface-2, #f8fafc);
 }
-.modal-box-wide .smart-form > h3:empty {
+.modal-box-wide .smart-form > h3:empty,
+.form-grid-2col .smart-form > h3:empty {
   display: none;
 }
 .modal-box-wide .smart-form textarea {
@@ -2824,72 +3208,6 @@ button.wizard-step-pill:hover {
   .modal-box-wide .smart-form {
     grid-template-columns: 1fr;
   }
-}
-
-/* Confirm-before-exit overlay inside a form modal */
-.modal-confirm-overlay {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(3, 6, 12, 0.6);
-  backdrop-filter: blur(2px);
-  border-radius: 18px;
-  z-index: 5;
-  padding: 20px;
-}
-.modal-confirm-box {
-  width: min(360px, 100%);
-  background: var(--surface, #14171f);
-  border: 1px solid var(--border, #2a2f3a);
-  border-radius: 14px;
-  padding: 24px 22px;
-  text-align: center;
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
-  animation: modalIn 0.16s ease;
-}
-.modal-confirm-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 48px;
-  height: 48px;
-  border-radius: 50%;
-  background: rgba(239, 68, 68, 0.14);
-  color: #ef4444;
-  margin-bottom: 12px;
-}
-.modal-confirm-box h4 {
-  margin: 0 0 6px;
-  font-size: 1.05rem;
-  font-weight: 800;
-  color: var(--text-strong, #f7f8fb);
-}
-.modal-confirm-box p {
-  margin: 0 0 18px;
-  font-size: 0.85rem;
-  color: var(--text-muted, #94a3b8);
-  line-height: 1.45;
-}
-.modal-confirm-actions {
-  display: flex;
-  gap: 10px;
-  justify-content: center;
-}
-.modal-confirm-exit {
-  padding: 9px 16px;
-  border-radius: 9px;
-  border: 1px solid #ef4444;
-  background: #ef4444;
-  color: #fff;
-  font-weight: 700;
-  font-size: 0.85rem;
-  cursor: pointer;
-  transition: background 0.15s ease;
-}
-.modal-confirm-exit:hover {
-  background: #dc2626;
 }
 
 /* Module panel action bar */
@@ -2911,15 +3229,21 @@ button.wizard-step-pill:hover {
   flex-wrap: wrap;
   background: #2563eb;
   color: #ffffff;
-  padding: 14px 18px;
+  padding: 20px 16px;
+  /* Matches .panel's actual padding (14px 16px) exactly, so this bleeds
+     flush to the panel's own edge instead of overshooting past its rounded
+     corner (which left a sliver of the panel's white background showing
+     through at each top corner). */
   margin: -14px -16px 16px -16px;
-  border-radius: 4px 4px 0 0;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
 }
 /* Use when the bar isn't the first element in the panel (e.g. below a tab
    row) — same look, but doesn't bleed into whatever sits above it. */
 .panel-header-bar.inline {
   margin: 0 0 16px 0;
-  border-radius: 8px;
+  padding: 14px 20px;
+  border-radius: 6px;
 }
 .panel-header-bar h3 {
   margin: 0;
@@ -2931,28 +3255,35 @@ button.wizard-step-pill:hover {
   gap: 10px;
 }
 .panel-header-bar .local-search-input {
-  border-color: #ffffff;
+  background: #ffffff;
+  border-color: rgba(255, 255, 255, 0.7);
+  color: #0f172a;
 }
-.panel-header-bar .icon-add-btn,
 .panel-header-bar .export-btn {
-  background: rgba(255, 255, 255, 0.14);
-  border: 1.5px solid rgba(255, 255, 255, 0.65);
+  background: rgba(255, 255, 255, 0.12);
+  border: 1.5px solid #ffffff;
   color: #ffffff;
 }
-.panel-header-bar .icon-add-btn:hover,
 .panel-header-bar .export-btn:hover {
-  background: rgba(255, 255, 255, 0.28);
-  border-color: #ffffff;
+  background: rgba(255, 255, 255, 0.22);
 }
-/* View-mode dropdown on the blue panel header — white outline pill, like the
-   reference "Transaction View ⌄" control. */
+.panel-header-bar .icon-add-btn {
+  background: #2563eb;
+  border: 1.5px solid #ffffff;
+  color: #ffffff;
+}
+.panel-header-bar .icon-add-btn:hover {
+  background: #1d4ed8;
+}
+/* View-mode dropdown on the panel header — white outline pill against the
+   blue band, like the reference "Transaction View ⌄" control. */
 .panel-header-bar .view-dropdown-btn {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.12);
   border: 1.5px solid #ffffff;
   color: #ffffff;
 }
 .panel-header-bar .view-dropdown-btn:hover {
-  background: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.22);
 }
 
 /* Mobile overflow guards — grid/flex children don't shrink below their
@@ -2975,9 +3306,25 @@ button.wizard-step-pill:hover {
 }
 
 /* RESPONSIVE */
+/* Below this width there's no room for the full-label sidebar beside page
+   content, so it's forced into the same icon-only rail used for the
+   manual desktop-collapsed state — narrow enough that content always has
+   room, without the "stack the whole nav list above the page" bug a
+   `position: static` sidebar used to cause here. */
 @media (max-width: 1100px) {
-  .workspace { grid-template-columns: 1fr; }
-  .sidebar { position: static; height: auto; }
+  .workspace { grid-template-columns: 76px 1fr; }
+  .sidebar .module-nav-section { display: none; }
+  .sidebar .module-nav-group + .module-nav-group { margin-top: 8px; }
+  .sidebar .sidebar-brand { justify-content: center; padding: 8px 0 24px; }
+  .sidebar .eyebrow,
+  .sidebar .module-nav button span,
+  .sidebar .module-nav-badge,
+  .sidebar .profile-info,
+  .sidebar .profile-arrow-icon {
+    display: none;
+  }
+  .sidebar .module-nav button { justify-content: center; padding: 10px; }
+  .sidebar .profile-card { justify-content: center; }
   .content-area > *:not(.topbar) { padding: 20px 18px; }
   .module-grid { grid-template-columns: 1fr !important; }
   .form-panel { position: static; }
@@ -3054,24 +3401,26 @@ button.wizard-step-pill:hover {
 }
 .ticket-detail-panel {
   width: min(600px, 100%); max-height: 90vh; overflow-y: auto;
-  background: #ffffff; border: 1px solid #d9e6f8;
-  border-radius: 18px;
+  background: #ffffff; border: 1px solid #e2e8f0;
+  border-radius: 10px;
   box-shadow: 0 30px 70px rgba(15,23,42,0.25);
   display: flex; flex-direction: column;
 }
 /* Rendered as its own page (TicketProfilePage) instead of a floating modal —
-   drop the fixed width/height/shadow so it reads as normal page content. */
+   the same soft card shadow used everywhere else instead of the modal's
+   heavy drop shadow (appropriate for an overlay, not page content) or no
+   shadow at all (which read as a flat, un-carded page). */
 .ticket-detail-panel.is-page {
   width: 100%;
   max-height: none;
-  box-shadow: none;
+  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.12);
 }
 .ticket-detail-header {
   display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
   padding: 28px 28px 20px; border-bottom: 1px solid #e2e8f0;
-  background: linear-gradient(180deg,#f8fbff,#fff);
+  background: #fff;
   position: sticky; top: 0; z-index: 10;
-  border-radius: 18px 18px 0 0;
+  border-radius: 10px 10px 0 0;
 }
 .ticket-detail-id { font-size: 0.72rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em; color: #1d4ed8; display: block; margin-bottom: 4px; }
 .ticket-detail-title { font-size: 1.2rem; font-weight: 800; color: #0f172a; margin-bottom: 10px; }
@@ -3232,10 +3581,248 @@ button.wizard-step-pill:hover {
   opacity: 1;
 }
 
+/* Ticket process hero — the at-a-glance summary at the top of a ticket's
+   detail page: title/status/description on the left, a resolved-% ring in
+   the middle, and a "what to do next" card with a quick stat grid on the
+   right. Tone (is-ok/is-warn/is-alert/is-active) mirrors nextSignal and
+   tints the card so its urgency reads before any text is even parsed. */
+/* Same dark navy-to-blue "command center" gradient as the dashboard banner
+   — tone (ok/warn/alert/active) now only tints the accent ring and label,
+   not the whole card, matching how the dashboard's Ops Score ring works. */
+.ticket-process-hero {
+  display: grid;
+  grid-template-columns: minmax(240px, 1.3fr) minmax(140px, 0.6fr) minmax(240px, 1fr);
+  gap: 20px;
+  align-items: center;
+  padding: 24px 28px;
+  margin: 20px 28px 0;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  background: linear-gradient(135deg, rgba(7, 15, 28, 0.98), rgba(20, 45, 110, 0.98) 52%, rgba(29, 78, 216, 0.9));
+  color: #e5edf8;
+}
+.ticket-process-hero.is-ok { --ticket-hero-accent: #22c55e; --ticket-hero-accent-text: #86efac; }
+.ticket-process-hero.is-warn { --ticket-hero-accent: #f59e0b; --ticket-hero-accent-text: #fbbf24; }
+.ticket-process-hero.is-alert { --ticket-hero-accent: #ef4444; --ticket-hero-accent-text: #fca5a5; }
+.ticket-process-hero.is-active { --ticket-hero-accent: #2563eb; --ticket-hero-accent-text: #93c5fd; }
+
+.ticket-process-hero-main { min-width: 0; }
+.ticket-process-kicker {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ticket-hero-accent-text, #93c5fd);
+  margin-bottom: 6px;
+}
+.ticket-process-kicker > span:not(:first-child) {
+  color: rgba(226, 232, 240, 0.75);
+  font-weight: 700;
+  text-transform: none;
+  letter-spacing: normal;
+}
+html section.ticket-process-hero .ticket-detail-title { margin-bottom: 8px; color: #ffffff; }
+.ticket-process-hero .ticket-detail-subline { margin-top: 8px; color: rgba(226, 232, 240, 0.78); }
+.ticket-process-hero .ticket-meta-item { color: rgba(226, 232, 240, 0.78); }
+.ticket-process-description {
+  margin-top: 10px;
+  font-size: 0.85rem;
+  color: rgba(226, 232, 240, 0.85);
+  line-height: 1.55;
+  max-width: 60ch;
+}
+.ticket-process-cancelled { margin: 20px 28px 0; }
+
+/* Resolved-% ring — same conic-gradient technique as the dashboard's Ops
+   Score, and the same dark inner circle, so the two rings read as one
+   consistent design language. */
+.ticket-process-meter {
+  aspect-ratio: 1;
+  width: 100%;
+  max-width: 148px;
+  min-width: 108px;
+  justify-self: center;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: conic-gradient(var(--ticket-hero-accent, #2563eb) var(--ticket-progress, 0%), rgba(148, 163, 184, 0.28) 0);
+}
+.ticket-process-meter-core {
+  width: 78%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: rgba(2, 6, 23, 0.78);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+.ticket-process-meter-core span {
+  font-size: 0.62rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #bae6fd;
+}
+.ticket-process-meter-core strong {
+  font-size: 1.5rem;
+  font-weight: 900;
+  color: #ffffff;
+  line-height: 1.1;
+}
+.ticket-process-meter-core small {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: rgba(226, 232, 240, 0.72);
+  margin-top: 2px;
+}
+
+.ticket-process-next-card {
+  position: relative;
+  background: rgba(255, 255, 255, 0.09);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 10px;
+  padding: 16px 18px;
+}
+.ticket-process-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  color: rgba(226, 232, 240, 0.85);
+}
+.ticket-process-next-label {
+  display: block;
+  font-size: 0.66rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: rgba(226, 240, 255, 0.8);
+  margin-bottom: 4px;
+}
+.ticket-process-next-card > strong {
+  display: block;
+  font-size: 1.02rem;
+  font-weight: 800;
+  color: #ffffff;
+}
+.ticket-process-next-card > p {
+  margin: 4px 0 12px;
+  font-size: 0.8rem;
+  color: rgba(226, 232, 240, 0.78);
+  line-height: 1.45;
+}
+.ticket-process-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(64px, 1fr));
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.14);
+}
+.ticket-process-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  text-align: center;
+}
+.ticket-process-stat svg { color: rgba(226, 232, 240, 0.85); }
+.ticket-process-stat span {
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: rgba(226, 232, 240, 0.72);
+}
+.ticket-process-stat strong {
+  font-size: 0.88rem;
+  font-weight: 800;
+  color: #ffffff;
+}
+
+/* Phase flow — same dot-and-line language as .ticket-progress-tracker, plus
+   a one-line hint under each phase name explaining what happens there. */
+.ticket-process-flow {
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+  padding: 18px 28px 6px;
+}
+.ticket-process-flow-step {
+  flex: 1;
+  min-width: 90px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  position: relative;
+  text-align: center;
+}
+.ticket-process-flow-step:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  top: 15px;
+  left: 50%;
+  width: 100%;
+  height: 3px;
+  background: rgba(128, 138, 158, 0.25);
+  z-index: 0;
+}
+.ticket-process-flow-step.is-done:not(:last-child)::after { background: #22c55e; }
+.ticket-process-flow-marker {
+  position: relative;
+  z-index: 1;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #f1f5f9;
+  border: 2px solid rgba(128, 138, 158, 0.4);
+  color: #ffffff;
+}
+.ticket-process-flow-step.is-done .ticket-process-flow-marker {
+  background: #22c55e;
+  border-color: #22c55e;
+}
+.ticket-process-flow-step.is-active .ticket-process-flow-marker {
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.18);
+}
+.ticket-process-flow-step.is-upcoming .ticket-process-flow-marker { color: #94a3b8; }
+.ticket-process-flow-label {
+  font-size: 0.76rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #94a3b8;
+}
+.ticket-process-flow-step > small {
+  font-size: 0.68rem;
+  color: #94a3b8;
+  max-width: 130px;
+  line-height: 1.3;
+}
+
+@media (max-width: 860px) {
+  .ticket-process-hero {
+    grid-template-columns: 1fr;
+    margin: 16px 16px 0;
+    padding: 18px;
+  }
+  .ticket-process-meter { max-width: 110px; }
+  .ticket-process-flow { padding: 14px 16px 4px; flex-wrap: wrap; gap: 14px 0; }
+  .ticket-process-flow-step { min-width: 80px; }
+}
+
 /* Ticket Detail Body */
 .ticket-detail-body { padding: 24px 28px; flex: 1; display: flex; flex-direction: column; gap: 16px; }
-.ticket-section { padding: 16px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; }
-.ticket-section h4 { font-size: 0.82rem; font-weight: 800; color: #0f172a; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.05em; display: flex; align-items: center; gap: 8px; }
+.ticket-section { padding: 16px; background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; box-shadow: 0 4px 10px rgba(15, 23, 42, 0.12); }
+.ticket-section h4 { font-size: 0.95rem; font-weight: 700; color: #0f172a; margin-bottom: 10px; text-transform: none; letter-spacing: normal; display: flex; align-items: center; gap: 8px; }
 .ticket-section h5 { font-size: 0.75rem; font-weight: 700; color: #475569; margin: 10px 0 6px; }
 .ticket-section p { font-size: 0.875rem; color: #334155; margin-bottom: 4px; }
 .ticket-section p.muted { color: #64748b; font-size: 0.8rem; }
@@ -3307,6 +3894,32 @@ button.wizard-step-pill:hover {
 }
 .danger-button:active { transform: translateY(0); }
 .danger-button:disabled { opacity: 0.55; cursor: not-allowed; }
+
+.success-button {
+  display: inline-flex; align-items: center; justify-content: center;
+  height: 44px; padding: 0 22px; border-radius: 9px;
+  background: linear-gradient(90deg, #16a34a, #22c55e); color: #ffffff; font-size: 0.95rem; font-weight: 600;
+  border: none; cursor: pointer; transition: all 0.15s ease;
+  box-shadow: 0 2px 8px rgba(22,163,74,0.25); text-decoration: none;
+}
+.success-button:hover:not(:disabled) {
+  background: linear-gradient(90deg, #15803d, #16a34a); box-shadow: 0 4px 14px rgba(22,163,74,0.35); transform: translateY(-1px);
+}
+.success-button:active { transform: translateY(0); }
+.success-button:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* Small variant of any pill button — used where a row of actions needs to
+   stay compact (e.g. the Vehicle Profile header) instead of the default
+   ~46px-tall size meant for standalone call-to-action buttons. */
+.btn-sm {
+  height: 30px !important;
+  padding: 0 12px !important;
+  font-size: 0.76rem !important;
+  border-radius: 7px !important;
+  gap: 5px;
+  box-shadow: none !important;
+}
+.btn-sm:hover:not(:disabled) { transform: none !important; }
 
 /* Notifications Dropdown Panel */
 .notifications-dropdown-container {
@@ -3729,36 +4342,27 @@ button.wizard-step-pill:hover {
   object-fit: cover;
 }
 
-/* --- Ticket Detail Vehicle Layout --- */
-.ticket-detail-vehicle-layout {
-  display: flex;
-  gap: 16px;
-  align-items: center;
+.ticket-detail-label {
+  display: block;
+  font-size: 0.66rem;
+  font-weight: 700;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-bottom: 2px;
+}
+.ticket-detail-description-box {
   background: #f8fafc;
-  padding: 12px;
-  border-radius: 10px;
   border: 1px solid #e2e8f0;
-  margin-top: 6px;
+  border-radius: 10px;
+  padding: 10px 12px;
 }
-.ticket-detail-vehicle-photo {
-  width: 64px;
-  height: 64px;
-  border-radius: 8px;
-  overflow: hidden;
-  border: 1px solid #cbd5e1;
-  flex-shrink: 0;
-  box-shadow: 0 2px 6px rgba(15,23,42,0.05);
+.ticket-detail-description-box p,
+.ticket-detail-description-box .expandable-text {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.5;
 }
-.ticket-detail-vehicle-photo img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-.ticket-detail-vehicle-info {
-  flex: 1;
-  min-width: 0;
-}
-
 .vehicle-detail-specs {
   flex: 1;
   min-width: 0;
@@ -3802,78 +4406,112 @@ button.wizard-step-pill:hover {
 /* ============================================================
    Vehicle Profile — overview dashboard (multi-panel)
    ============================================================ */
+/* Report-style layout — a narrower left column carries the photo, spec
+   info, and location map (in that reading order); the wider right column
+   stacks the status/report/analytics/files cards. Matches a printed
+   report's photo-then-details-on-the-left convention instead of an
+   even N-column grid. */
 .veh-dash {
-  display: grid;
-  grid-template-columns: 1.25fr 1fr 1.15fr;
-  grid-template-areas:
-    "info keydates analytics"
-    "map  map       docs"
-    "history history history";
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+.veh-dash-left {
+  flex: 0 0 380px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.veh-dash-right {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
   gap: 16px;
 }
 @media (max-width: 1000px) {
   .veh-dash {
-    grid-template-columns: 1fr 1fr;
-    grid-template-areas:
-      "info keydates"
-      "analytics analytics"
-      "map docs"
-      "history history";
+    flex-direction: column;
+  }
+  .veh-dash-left {
+    flex: 1 1 auto;
+    width: 100%;
   }
 }
-@media (max-width: 680px) {
-  .veh-dash {
-    grid-template-columns: 1fr;
-    grid-template-areas: "info" "keydates" "analytics" "map" "docs" "history";
-  }
-}
-/* Full-width detail sections stacked below the overview grid (single-page view) */
-.veh-section { margin-top: 16px; }
-.veh-section .table-shell { padding: 6px; }
 
-.veh-info { grid-area: info; }
-.veh-keydates { grid-area: keydates; }
-.veh-analytics { grid-area: analytics; }
-.veh-map { grid-area: map; }
-.veh-docs { grid-area: docs; }
-.veh-history { grid-area: history; }
-
-/* Calm white cards with a quiet header row + thin divider (the RealCore
-   reference look), matching the ticket-detail sections — replaces the old
-   heavy 2px-blue-border + solid-blue header band. */
+/* Calm white cards, flat — no tinted header band and no drop shadow, just
+   a plain bold title over a thin divider (the RealCore reference look:
+   "Property" / "Important Dates" / "Reports" sit directly on white with
+   nothing but a hairline underneath, not a colored icon+band header). */
 .veh-card {
   background: var(--surface, #fff);
-  border: 1px solid var(--border, #e2e8f0);
-  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
   padding: 0;
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.05);
+  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.12);
 }
 .veh-card-head {
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 12px 18px;
-  background: rgba(37, 99, 235, 0.05);
+  padding: 14px 18px;
+  background: transparent;
   border-bottom: 1px solid var(--border, #e2e8f0);
 }
 .veh-card-head h4 {
   margin: 0;
-  font-size: 0.78rem;
-  font-weight: 800;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: normal;
+  text-transform: none;
   color: var(--text-strong, #0f172a);
 }
-.veh-card-head svg { stroke: #3b82f6; color: #3b82f6; flex-shrink: 0; }
+/* Hides the decorative title icon (e.g. the car glyph before "Vehicle
+   Information") to match the reference's plain-text headers — but NOT
+   icons inside actual controls like the Files card's expand/add buttons,
+   which live one level deeper (.veh-files-head-title) or in a button. */
+.veh-card-head > svg,
+.veh-files-head-title > svg {
+  display: none;
+}
 .veh-card-head .veh-seeall { color: var(--primary, #2563eb); }
 .veh-seeall {
   margin-left: auto; background: none; border: none; cursor: pointer;
   color: var(--primary, #2563eb); font-size: 0.78rem; font-weight: 700;
 }
 .veh-seeall:hover { text-decoration: underline; }
+
+/* Edit Vehicle — the plain SmartForm grid used to sit directly on the
+   page with no visual frame ("the design is ugly"); wrapping it in the
+   same veh-card + banded header used everywhere else on this page gives
+   it a title and a consistent border/background instead of looking like
+   an unstyled leftover. */
+.veh-edit-card { margin-bottom: 16px; }
+.veh-edit-body { padding: 20px 22px; }
+.veh-edit-body .smart-form .form-actions { grid-column: 1 / -1; margin-top: 6px; }
+/* Override the generic "file inputs always span both columns" rule here —
+   the photo box caps at 460px regardless, so forcing the full row just
+   leaves the rest of that row empty. Letting it sit in one column means
+   Vehicle Type naturally fills the column beside it instead. */
+.form-grid-2col.veh-edit-body .smart-form label:has(input[type="file"]) {
+  grid-column: auto;
+}
+.form-grid-2col.veh-edit-body .photo-box {
+  max-width: 280px;
+}
+/* Same fix as .veh-edit-body above, for the Add/Edit User page — the photo
+   box caps at 460px regardless, so forcing the label to span the full row
+   just leaves the rest of that row empty. Pairs it beside Roles instead
+   (see userFields()'s comment on field order). */
+.form-grid-2col.user-form-grid .smart-form label:has(input[type="file"]) {
+  grid-column: auto;
+}
+.form-grid-2col.user-form-grid .photo-box {
+  max-width: 280px;
+}
 
 /* Create Ticket form — sectioned card layout instead of one long vertical
    list of full-width fields. */
@@ -3886,6 +4524,122 @@ button.wizard-step-pill:hover {
 @media (max-width: 720px) {
   .ticket-form-grid-2 { grid-template-columns: 1fr; }
 }
+/* This form has a full-width 2-column layout with plenty of room, so let
+   each field fill its grid column instead of staying capped at the
+   compact 280px width meant for narrow modal popups. */
+.smart-form .ticket-form-grid-2 input:not([type="file"]),
+.smart-form .ticket-form-grid-2 select {
+  max-width: none;
+  width: 100%;
+}
+
+/* Vehicle/Custodian preview — appears once a select above it has a value,
+   so the Admin sees who/what they picked instead of just an ID in a list. */
+.ticket-selection-preview {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  padding: 0 18px 18px;
+}
+@media (max-width: 720px) {
+  .ticket-selection-preview { grid-template-columns: 1fr; }
+}
+.ticket-preview-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+}
+.ticket-preview-photo {
+  width: 84px;
+  height: 84px;
+  border-radius: 10px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+.ticket-preview-photo-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #e2e8f0;
+  color: #64748b;
+}
+.ticket-preview-body {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  font-size: 0.88rem;
+  line-height: 1.4;
+}
+.ticket-preview-body strong {
+  font-size: 1.05rem;
+  color: #0f172a;
+}
+.ticket-preview-card .user-avatar-name {
+  flex-shrink: 0;
+}
+.ticket-preview-card .user-avatar-name-photo,
+.ticket-preview-card .user-avatar-name-initials {
+  width: 64px;
+  height: 64px;
+  font-size: 1.15rem;
+}
+
+.btn-reassign-custodian {
+  background: #d97706;
+  border: 1.5px solid #d97706;
+  color: #ffffff;
+}
+.btn-reassign-custodian:hover {
+  background: #b45309;
+  border-color: #b45309;
+}
+
+/* Defer is a lighter-weight, non-committal action (not a fix, not a
+   reassignment) — an amber outline instead of a solid fill, but still
+   sized/shaped exactly like every other .ghost-button on the page. */
+.btn-defer-action {
+  background: none;
+  border: 1.5px solid #f59e0b;
+  color: #b45309;
+}
+.btn-defer-action:hover {
+  background: rgba(245, 158, 11, 0.1);
+  border-color: #d97706;
+}
+
+.sub-issue-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 16px 0 10px;
+}
+.sub-issue-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.sub-issue-row-index {
+  flex: 0 0 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #2563eb;
+  font-size: 0.72rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.sub-issue-row input {
+  flex: 1;
+  min-width: 0;
+}
+
 .entry-mode-toggle {
   display: flex;
   gap: 10px;
@@ -3895,14 +4649,38 @@ button.wizard-step-pill:hover {
   padding: 10px 16px;
 }
 
-.veh-info-body { display: flex; gap: 18px; padding: 18px; flex-wrap: wrap; }
+/* Photo on top, spec info stacked below it — the left-column "report photo"
+   convention, and a much bigger photo than the old side-by-side thumbnail. */
+.veh-info-body { display: flex; flex-direction: column; gap: 16px; padding: 18px; }
+/* Vehicle name + plate — moved here (inside the card) instead of floating
+   above all the sections in the page's top-left corner. */
+.veh-info-identity {
+  padding-bottom: 14px;
+  margin-bottom: -2px;
+  border-bottom: 1px solid var(--border, #e2e8f0);
+}
+.veh-info-identity h3 {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 800;
+  color: var(--text-strong, #0f172a);
+}
+.veh-info-identity span {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  color: var(--primary, #2563eb);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
 .veh-info-photo {
-  width: 230px; height: 168px; border-radius: 12px; overflow: hidden;
+  width: 100%; height: 280px; border-radius: 12px; overflow: hidden;
   border: 1px solid var(--border, #e2e8f0); flex-shrink: 0;
   box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
 }
 .veh-info-photo .photo-cell, .veh-info-photo .photo-thumb { width: 100%; height: 100%; }
-@media (max-width: 520px) { .veh-info-photo { width: 100%; height: 190px; } }
+@media (max-width: 520px) { .veh-info-photo { height: 220px; } }
 
 .veh-pie { display: flex; align-items: center; gap: 16px; padding: 4px 18px 16px; flex-wrap: wrap; }
 .veh-pie .donut-chart { width: 120px; flex-shrink: 0; }
@@ -3916,7 +4694,6 @@ button.wizard-step-pill:hover {
   color: var(--text-muted, #64748b);
 }
 .veh-kv dd { margin: 0; font-size: 0.9rem; font-weight: 600; color: var(--text-strong, #0f172a); }
-.veh-hint { margin: 0; padding: 0 18px 16px; font-size: 0.74rem; color: var(--text-muted, #94a3b8); line-height: 1.5; }
 
 .veh-remarks { padding: 0 18px 16px; }
 .veh-remarks-label {
@@ -3932,6 +4709,22 @@ button.wizard-step-pill:hover {
 }
 .veh-stat span { font-size: 1.15rem; font-weight: 800; color: var(--primary-strong, #1d4ed8); font-variant-numeric: tabular-nums; }
 .veh-stat small { font-size: 0.68rem; font-weight: 600; color: var(--text-muted, #64748b); text-transform: uppercase; letter-spacing: 0.04em; }
+/* One solid color per stat (not a pastel tint) so the four read as
+   distinct signals at a glance instead of four identical gray boxes. */
+.veh-stat-blue, .veh-stat-amber, .veh-stat-red, .veh-stat-green {
+  border-color: transparent;
+}
+.veh-stat-blue span, .veh-stat-amber span, .veh-stat-red span, .veh-stat-green span,
+.veh-stat-blue small, .veh-stat-amber small, .veh-stat-red small, .veh-stat-green small {
+  color: #fff;
+}
+.veh-stat-blue small, .veh-stat-amber small, .veh-stat-red small, .veh-stat-green small {
+  opacity: 0.85;
+}
+.veh-stat-blue { background: #2563eb; }
+.veh-stat-amber { background: #d97706; }
+.veh-stat-red { background: #dc2626; }
+.veh-stat-green { background: #16a34a; }
 .veh-mini-label {
   margin: 8px 18px 6px; font-size: 0.68rem; font-weight: 700; text-transform: uppercase;
   letter-spacing: 0.06em; color: var(--text-muted, #64748b);
@@ -3956,17 +4749,274 @@ button.wizard-step-pill:hover {
 }
 .location-density-hub-icon, .veh-map-pin { background: none; border: none; }
 
-.veh-doc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 12px; padding: 16px 18px; }
-.veh-doc {
-  display: flex; flex-direction: column; gap: 6px; text-decoration: none;
-  border: 1px solid var(--border-subtle, #e2e8f0); border-radius: 10px; overflow: hidden;
-  background: var(--surface-2, #f8fafc); transition: transform 0.15s ease, box-shadow 0.15s ease;
+.veh-docs .empty-state { padding: 18px; }
+
+/* ============================================================
+   Vehicle Report — printed-report-style summary of the vehicle: bold
+   color band per section, bordered two-column field rows underneath (the
+   NAI Capital deal-sheet look, recolored to the app's blue instead of
+   red). Used only inside .veh-print-report below — the Reports card
+   triggers it via window.print() instead of showing it on-screen, since
+   an always-visible duplicate of Vehicle Information/Status would be
+   redundant on the page itself.
+   ============================================================ */
+.veh-report-band {
+  background: linear-gradient(90deg, #2563eb, #1d4ed8);
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 9px 18px;
 }
-.veh-doc:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(15,23,41,.12); }
-.veh-doc img { width: 100%; height: 88px; object-fit: cover; display: block; }
-.veh-doc span { padding: 0 10px 10px; font-size: 0.74rem; font-weight: 600; color: var(--text, #475569); line-height: 1.35; }
-.veh-docs .empty-state, .veh-history .empty-state { padding: 18px; }
-.veh-history .table-shell { padding: 0 6px 6px; }
+.veh-report-band ~ .veh-report-band { margin-top: 14px; }
+/* Label stacked above value (not side-by-side with a space-between/
+   right-align squeeze) — the print page is much narrower than it looks
+   in an on-screen preview, and a real value like "Mitsubishi Fuso Canter
+   Light Pumper" next to a right-aligned label just wrapped mid-word.
+   Stacking tolerates wrapping cleanly with no visual misalignment. */
+.veh-report-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+.veh-report-grid > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border-subtle, #e2e8f0);
+  border-right: 1px solid var(--border-subtle, #e2e8f0);
+  font-size: 0.82rem;
+}
+.veh-report-grid > div:nth-child(2n) { border-right: none; }
+.veh-report-grid dt {
+  margin: 0;
+  font-size: 0.68rem;
+  color: #2563eb;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.veh-report-grid dd {
+  margin: 0;
+  font-weight: 700;
+  color: var(--text-strong, #0f172a);
+  overflow-wrap: anywhere;
+}
+@media (max-width: 560px) {
+  .veh-report-grid { grid-template-columns: 1fr; }
+  .veh-report-grid > div { border-right: none; }
+}
+
+/* Status & Key Dates sits beside a stacked pair of full Files/Reports
+   cards (narrower than the default full-width card) so all three
+   top-align in one row instead of Files/Reports each taking a
+   full-width row of their own further down. */
+.veh-status-row {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+.veh-status-row .veh-keydates {
+  flex: 1;
+  min-width: 0;
+}
+.veh-square-col {
+  flex: 0 0 300px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+@media (max-width: 900px) {
+  .veh-status-row { flex-direction: column; }
+  .veh-square-col { flex-direction: row; width: 100%; flex-wrap: wrap; }
+  .veh-square-col > * { flex: 1 1 260px; }
+}
+
+/* Reports card — a small report picker + print trigger (window.print),
+   not a full preview; the printable content itself lives in
+   .veh-print-report, hidden until a print is actually requested. */
+.veh-reports-body { display: flex; gap: 10px; padding: 14px 18px; align-items: center; }
+.veh-reports-select {
+  flex: 1; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 8px;
+  font-size: 0.85rem; font-weight: 600; color: #2563eb; background: #fff;
+}
+.veh-reports-print-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 38px; height: 38px; flex-shrink: 0; border: 1px solid #2563eb; border-radius: 8px;
+  background: #fff; color: #2563eb; cursor: pointer; transition: background 0.15s ease;
+}
+.veh-reports-print-btn:hover { background: #eff6ff; }
+
+/* Current Location map — moved out of the narrow left column entirely so
+   it spans the full page width instead of being squeezed to ~380px. */
+.veh-map-wide { width: 100%; margin-top: 16px; }
+.veh-map-wide .veh-map-wrap { height: 360px; }
+
+/* Printable report — kept off-screen (not display:none) so the embedded
+   Leaflet map inside it can actually size/mount and load tiles ahead of
+   time; Leaflet never recovers from mounting inside a display:none box.
+   Becomes the entire printed page (everything else hidden) once the
+   Reports card's print button calls window.print(). Left = vehicle photo
+   + location map, right of the header = VMS mark, matching the left-
+   info/right-logo letterhead layout requested for the PDF output. */
+/* Portaled to <body> (see the VehicleProfilePage JSX), so it's a sibling
+   of #root rather than nested inside the app shell — that sidesteps the
+   app's own responsive grid, which was collapsing to a near-zero width
+   here because Chromium's print engine evaluates width-based media
+   queries against the paper size, not the screen viewport. Kept
+   off-screen (not display:none) so the embedded Leaflet map can actually
+   size/mount and load tiles ahead of time; Leaflet never recovers from
+   mounting inside a display:none box. */
+.veh-print-report {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 700px;
+  height: 0;
+  overflow: hidden;
+  z-index: -1;
+}
+@media print {
+  /* Chrome renders its own header/footer (title, URL, date, page number)
+     inside the page's margin box. Zeroing that margin via @page leaves it
+     nowhere to draw them, which is the only page-level (not browser
+     "Headers and footers" checkbox) way to suppress that text — but it
+     also means the browser no longer provides ANY breathing room, so the
+     compensating padding below is what keeps content off the paper edge
+     instead. This is authored-page CSS, not a print-dialog setting, so it
+     always applies without the person printing needing to toggle anything. */
+  @page { margin: 0; }
+  /* Hiding the whole app (everything React rendered) is simpler and more
+     reliable than naming individual chrome elements — and necessary now
+     that .veh-print-report lives outside #root as a body-level sibling,
+     so #root can go away entirely without touching the report itself. */
+  #root { display: none !important; }
+  /* Normal static flow — not position:fixed — is what actually paginates
+     correctly. A fixed element gets reprinted on every page, which is
+     exactly what was duplicating this whole report onto a second page. */
+  .veh-print-report {
+    position: static;
+    width: auto;
+    height: auto;
+    overflow: visible;
+    z-index: auto;
+    padding: 16mm 14mm;
+    box-sizing: border-box;
+  }
+}
+.veh-print-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding-bottom: 14px; margin-bottom: 16px; border-bottom: 2px solid #2563eb;
+}
+.veh-print-header-left h2 { margin: 0; font-size: 1.5rem; font-weight: 800; color: #0f172a; }
+.veh-print-header-left p { margin: 4px 0 0; font-size: 0.8rem; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.06em; }
+.veh-print-header-right { display: flex; align-items: center; gap: 10px; color: #2563eb; font-weight: 800; font-size: 1.8rem; }
+.veh-print-body { display: flex; gap: 16px; align-items: flex-start; }
+.veh-print-media { flex: 0 0 190px; display: flex; flex-direction: column; gap: 12px; }
+.veh-print-photo { width: 100%; height: 200px; border-radius: 8px; overflow: hidden; border: 1px solid #e2e8f0; }
+.veh-print-photo .photo-cell, .veh-print-photo .photo-thumb { width: 100%; height: 100%; }
+.veh-print-info { flex: 1; min-width: 0; }
+/* Location map — full report width, below the photo/info row rather than
+   squeezed into the narrow photo column. */
+.veh-print-map-wide { margin-top: 16px; }
+.veh-print-map { width: 100%; height: 260px; border-radius: 8px; overflow: hidden; border: 1px solid #e2e8f0; }
+.veh-print-map .veh-map-canvas { height: 260px; width: 100%; }
+
+/* Generic small icon-button + dropzone + empty-state building blocks,
+   shared between the compact Files card and the Files modal below. */
+.file-card-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #fff;
+  color: #64748b;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+.file-card-icon-btn:hover { border-color: #93c5fd; background: #eff6ff; color: #2563eb; }
+button.file-card-icon-btn:disabled { opacity: 0.4; cursor: not-allowed; pointer-events: none; }
+.file-card-empty {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 14px;
+  text-align: center;
+  color: #94a3b8;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+.file-card-dropzone {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px;
+  border: 1.5px dashed #93c5fd;
+  border-radius: 10px;
+  background: #f8fbff;
+  color: #2563eb;
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.file-card-dropzone:hover, .file-card-dropzone:focus-within { border-color: #2563eb; background: #eef4ff; }
+
+/* ============================================================
+   Vehicle Files — compact card + full "Files" modal (add/edit/delete).
+   ============================================================ */
+.veh-files-head { justify-content: space-between; }
+.veh-files-head-title { display: flex; align-items: center; gap: 9px; }
+.veh-files-head-actions { display: flex; gap: 6px; }
+.veh-files-body { padding: 14px 18px; display: flex; flex-direction: column; gap: 12px; }
+.veh-files-compact-list { display: flex; flex-direction: column; gap: 6px; }
+.veh-files-compact-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px; border: 1px solid var(--border-subtle, #e2e8f0); border-radius: 8px;
+  color: var(--text, #334155); font-size: 0.82rem; font-weight: 600; text-decoration: none;
+}
+.veh-files-compact-row:hover { border-color: #93c5fd; background: var(--surface-2, #f8fafc); }
+.veh-files-compact-row svg { color: #2563eb; stroke: #2563eb; flex-shrink: 0; }
+.veh-files-more {
+  align-self: flex-start; background: none; border: none; cursor: pointer;
+  color: var(--primary, #2563eb); font-size: 0.78rem; font-weight: 700; padding: 2px 0;
+}
+.veh-files-dropzone-trigger {
+  width: 100%; margin: 0; font-family: inherit; text-align: inherit;
+}
+
+.files-modal-toolbar { display: flex; align-items: center; gap: 6px; margin-right: 8px; }
+.files-modal-table-wrap { border: 1px solid var(--border-subtle, #e2e8f0); border-radius: 10px; overflow: hidden; margin-bottom: 16px; }
+.files-modal-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+.files-modal-table th {
+  text-align: left; padding: 9px 12px; background: var(--surface-2, #f8fafc);
+  border-bottom: 1px solid var(--border-subtle, #e2e8f0); font-size: 0.7rem;
+  text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted, #64748b);
+}
+.files-modal-table td { padding: 9px 12px; border-bottom: 1px solid var(--border-subtle, #eef2f7); vertical-align: middle; }
+.files-modal-table tr:last-child td { border-bottom: none; }
+.files-modal-table tr.is-selected { background: rgba(37, 99, 235, 0.06); }
+.files-modal-table input[type="text"], .files-modal-table input:not([type]) {
+  width: 100%; padding: 5px 8px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.82rem;
+}
+.files-modal-empty { text-align: center; color: var(--text-muted, #94a3b8); font-weight: 600; padding: 22px !important; }
+.files-modal-title-link { display: inline-flex; align-items: center; gap: 6px; color: var(--primary, #2563eb); font-weight: 700; text-decoration: none; }
+.files-modal-title-link:hover { text-decoration: underline; }
+.files-modal-dropzone { width: 100%; margin: 0 0 14px; }
+.files-modal-pending { border: 1px solid var(--border-subtle, #e2e8f0); border-radius: 10px; padding: 12px 14px; }
+.files-modal-pending-row { display: flex; align-items: center; gap: 8px; }
+.files-modal-pending-name { flex: 1; font-size: 0.84rem; font-weight: 600; overflow-wrap: anywhere; }
+.files-modal-pending-pct { font-size: 0.8rem; font-weight: 700; color: var(--primary, #2563eb); }
+.files-modal-progress-track { height: 6px; border-radius: 999px; background: var(--surface-2, #e2e8f0); margin-top: 10px; overflow: hidden; }
+.files-modal-progress-bar { height: 100%; background: linear-gradient(90deg, #2563eb, #1d4ed8); transition: width 0.15s ease; }
+.files-modal-pending-fields { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.files-modal-pending-fields input { flex: 1; min-width: 140px; padding: 7px 10px; border: 1px solid #cbd5e1; border-radius: 7px; font-size: 0.82rem; }
 
 /* --- Dashboard Banner & Weather Widget --- */
 .dashboard-banner {
@@ -3991,90 +5041,6 @@ button.wizard-step-pill:hover {
   font-size: 0.9rem;
   opacity: 0.9;
   margin: 0;
-}
-/* Its own card row directly under the banner + Fleet Status row — the two
-   numbers that most deserve a glance the moment the dashboard loads. Only
-   blinks when there's actually something to act on — a card reading
-   "0 Critical" or "5/5 Ready" sits still like every other card on the page. */
-.dashboard-crucial-alerts {
-  display: flex;
-  gap: 14px;
-  /* Grid items stretch to fill their track by default — without this, the
-     row itself claims the full 7-column width even though the two cards
-     inside it don't, leaving a big empty strip of background after them. */
-  justify-self: start;
-  width: fit-content;
-  max-width: 100%;
-}
-.dashboard-alert-card {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex: 0 0 auto;
-  width: fit-content;
-  padding: 10px 16px;
-  border-radius: 12px;
-  background: var(--surface, #fff);
-  border: 1px solid var(--border-subtle, #e2e8f0);
-  box-shadow: var(--shadow-soft, 0 8px 20px rgba(15, 23, 42, 0.06));
-}
-.dashboard-alert-card-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  width: 38px;
-  height: 38px;
-  border-radius: 10px;
-  background: var(--surface-2, #f1f5f9);
-  color: var(--text-muted, #64748b);
-}
-.dashboard-alert-card-body {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-.dashboard-alert-card-body span {
-  font-size: 0.7rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-muted, #64748b);
-}
-.dashboard-alert-card-body strong {
-  font-size: 1.4rem;
-  font-weight: 800;
-  color: var(--text-strong, #0f172a);
-  line-height: 1;
-}
-.dashboard-alert-card.is-blinking {
-  border-color: #fca5a5;
-  background: #fef2f2;
-  animation: dashboardAlertBlink 1.6s ease-in-out infinite;
-}
-.dashboard-alert-card.is-blinking .dashboard-alert-card-icon {
-  background: #fee2e2;
-  color: #dc2626;
-}
-.dashboard-alert-card.is-blinking .dashboard-alert-card-body span {
-  color: #b91c1c;
-}
-.dashboard-alert-card.is-blinking .dashboard-alert-card-body strong {
-  color: #dc2626;
-}
-@keyframes dashboardAlertBlink {
-  0%, 100% { background: #fef2f2; border-color: #fca5a5; }
-  50% { background: #fee2e2; border-color: #ef4444; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .dashboard-alert-card.is-blinking {
-    animation: none;
-  }
-}
-@media (max-width: 560px) {
-  .dashboard-crucial-alerts {
-    flex-direction: column;
-  }
 }
 /* Compact variant — paired with Fleet Status instead of stretching full
    width alone; smaller padding/type so the pairing reads as two cards of
@@ -4290,6 +5256,14 @@ button.wizard-step-pill:hover {
   gap: 8px;
   margin-left: auto;
 }
+.module-filter-panel {
+  padding: 16px 22px;
+}
+.module-filter-panel .filter-bar-container {
+  margin: 0;
+  padding: 0;
+  border-bottom: none;
+}
 .filter-select {
   background: #ffffff;
   border: 1.5px solid #cbd5e1;
@@ -4306,6 +5280,198 @@ button.wizard-step-pill:hover {
 .filter-select:focus {
   border-color: #3b82f6;
   box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+}
+
+/* Checkbox multi-select dropdown — replaces the native <select> in filter
+   rows so a filter can hold zero, one, or many values. */
+.multi-select-dropdown {
+  position: relative;
+  display: inline-block;
+}
+.filter-bar-container > .filter-date-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.multi-select-trigger.filter-select {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+}
+.multi-select-trigger span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.multi-select-trigger.has-selection {
+  border-color: #2563eb;
+  color: #1d4ed8;
+  background: #eff6ff;
+}
+.multi-select-chevron {
+  flex-shrink: 0;
+  transition: transform 0.15s ease;
+}
+.multi-select-chevron.is-open {
+  transform: rotate(180deg);
+}
+.multi-select-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 40;
+  min-width: 230px;
+  max-width: 320px;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.18);
+  padding: 10px;
+}
+.multi-select-search {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 7px;
+  font-size: 0.82rem;
+  margin-bottom: 8px;
+  outline: none;
+}
+.multi-select-search:focus {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+}
+.multi-select-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: #1e293b;
+  cursor: pointer;
+  border-radius: 6px;
+}
+.multi-select-option:hover {
+  background: #f1f5f9;
+}
+.multi-select-option input[type="checkbox"] {
+  margin: 0;
+  accent-color: #2563eb;
+  cursor: pointer;
+}
+.multi-select-all-option {
+  font-weight: 700;
+  border-bottom: 1px solid #e2e8f0;
+  margin-bottom: 4px;
+  padding-bottom: 8px;
+}
+.multi-select-option-list {
+  max-height: 220px;
+  overflow-y: auto;
+}
+.multi-select-empty {
+  padding: 10px 6px;
+  font-size: 0.8rem;
+  color: #94a3b8;
+  text-align: center;
+}
+
+/* Type-to-search + "add as new" combobox — used wherever a catalog
+   (fault categories, maintenance types) is meant to grow with real use
+   instead of staying a fixed, admin-curated list. The input itself
+   inherits whatever surrounding input styling already applies (.smart-form
+   input, etc.) — only the dropdown panel needs its own styling here. */
+.creatable-select {
+  position: relative;
+  display: block;
+  width: 100%;
+}
+.creatable-select-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  /* Above .modal-overlay (200) — CreatableSelect can be nested inside a
+     FormModal (e.g. the "Add New Issue" popup), and its own dropdown panel
+     still needs to paint above that modal's content, not get trapped
+     beneath later fields in the modal's local stacking order. */
+  z-index: 250;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.18);
+  padding: 6px;
+}
+.creatable-select-option-list {
+  max-height: 220px;
+  overflow-y: auto;
+}
+.creatable-select-option-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.creatable-select-option {
+  display: block;
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 7px 8px;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: #1e293b;
+  cursor: pointer;
+  border-radius: 6px;
+}
+.creatable-select-option:hover {
+  background: #f1f5f9;
+}
+.creatable-select-option-delete {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: #94a3b8;
+  cursor: pointer;
+}
+.creatable-select-option-delete:hover {
+  background: #fef2f2;
+  color: #dc2626;
+}
+.creatable-select-add {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  border-top: 1px solid #e2e8f0;
+  padding-top: 8px;
+  color: #2563eb;
+  font-weight: 700;
+}
+.creatable-select-add:hover {
+  background: #eff6ff;
+}
+.creatable-select-add-pinned {
+  margin-top: 0;
+  margin-bottom: 4px;
+  border-top: none;
+  border-bottom: 1px solid #e2e8f0;
+  padding-top: 7px;
+  padding-bottom: 8px;
 }
 .filter-label {
   font-size: 0.78rem;
@@ -4354,6 +5520,44 @@ button.wizard-step-pill:hover {
   color: #dc2626;
   transform: translateY(-1px);
 }
+
+/* Advanced Filter — a collapsed bar that expands into a second row of
+   more specific criteria, instead of cramming every filter into the one
+   always-visible basic row. */
+.advanced-filter-panel {
+  width: 100%;
+  margin-top: 4px;
+  border: 1px solid #dbeafe;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #f8fafc;
+}
+.advanced-filter-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 11px 16px;
+  background: #eef4ff;
+  border: none;
+  color: #1e293b;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.advanced-filter-toggle:hover { background: #dbeafe; }
+.advanced-filter-chevron { transition: transform 0.15s ease; }
+.advanced-filter-chevron.is-open { transform: rotate(180deg); }
+.advanced-filter-grid {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  animation: fadeSlide 0.15s ease;
+}
+.advanced-filter-grid .filter-select { min-width: 200px; }
 
 /* Condition Monitoring Checklist Filter Panel */
 .filter-popover-container {
@@ -4792,11 +5996,14 @@ table button,
    columns, their paired secondary section gets 5, instead of every section
    being either full-width or an even 50/50 split regardless of how much
    each side actually needs. Collapses to full width under 960px. */
+/* Paired panels stretch to their row's height so the two cards in a row
+   end on the same line — with align-self:start the shorter card stopped
+   mid-row and left a ragged step of page background beside its partner. */
 .dashboard-grid .col-span-7,
 .dashboard-grid .col-span-5,
 .dashboard-grid .col-span-6,
 .dashboard-grid .col-span-12 {
-  align-self: start;
+  align-self: stretch;
 }
 .dashboard-grid .col-span-7 { grid-column: span 7; }
 .dashboard-grid .col-span-5 { grid-column: span 5; }
@@ -4819,8 +6026,20 @@ table button,
   }
 }
 
+/* .dashboard-panel-chart-body's flex:1 only does anything once its parent
+   panel is itself a flex column — without this, a paired panel stretched
+   taller than its own content (align-self: stretch above) just left that
+   extra height as dead white space below a short list, instead of
+   centering it like a deliberately-composed card. */
+.dashboard-grid .panel {
+  display: flex;
+  flex-direction: column;
+}
 .dashboard-panel-chart-body {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 
 /* Quick-glance cards for Action Queue / Emergency Readiness / Risk &
@@ -4837,6 +6056,9 @@ table button,
     grid-template-columns: 1fr;
   }
 }
+/* Action Center cards — the dashboard's hero row. A coloured left rail
+   keyed to urgency (red = act now, amber = watch, green = clear) so the
+   row is readable at a glance before any number is actually read. */
 .dashboard-quick-card {
   display: flex;
   flex-direction: column;
@@ -4845,17 +6067,21 @@ table button,
   text-align: left;
   background: var(--card-bg, #fff);
   border: 1px solid var(--border-subtle, #e2e8f0);
+  border-left: 4px solid #94a3b8;
   border-radius: 12px;
   box-shadow: var(--shadow-soft);
-  padding: 14px 16px;
+  padding: 16px 18px;
   cursor: pointer;
-  transition: border-color 0.15s ease, transform 0.15s ease;
+  transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
   width: 100%;
 }
 .dashboard-quick-card:hover {
-  border-color: var(--accent, #2563eb);
-  transform: translateY(-1px);
+  transform: translateY(-2px);
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.12);
 }
+.dashboard-quick-card:has(.is-alert) { border-left-color: #dc2626; }
+.dashboard-quick-card:has(.is-warn) { border-left-color: #d97706; }
+.dashboard-quick-card:has(.is-ok) { border-left-color: #16a34a; }
 .dashboard-quick-card-head {
   display: flex;
   align-items: center;
@@ -4872,12 +6098,16 @@ table button,
   opacity: 0.6;
 }
 .dashboard-quick-card-stat {
-  font-size: 1.3rem;
-  font-weight: 700;
+  font-size: 1.5rem;
+  font-weight: 800;
+  line-height: 1.15;
   color: var(--text);
 }
 .dashboard-quick-card-stat.is-alert {
   color: #dc2626;
+}
+.dashboard-quick-card-stat.is-warn {
+  color: #b45309;
 }
 .dashboard-quick-card-stat.is-ok {
   color: #16a34a;
@@ -5265,8 +6495,8 @@ table button,
 
 .panel-header-bar .area-chart-tag {
   color: #ffffff;
-  background: rgba(255, 255, 255, 0.14);
-  border-color: rgba(255, 255, 255, 0.65);
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.5);
 }
 
 .area-chart-tag {
@@ -5396,26 +6626,49 @@ table button,
   background: var(--surface-2, #f8fafc);
 }
 
-/* --- Emergency Readiness (per-category row list) --- */
+/* --- Emergency Readiness (per-category row list) --- Each category is its
+   own card, not a divided list row, so a glance at the left-edge dot and
+   fill bar says "covered / not covered" before any number is read. */
 .emergency-readiness-rows {
   padding: 4px 18px 18px;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 8px;
 }
 .emergency-readiness-row {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 9px 4px;
-  border-bottom: 1px solid var(--border-subtle, #e2e8f0);
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--surface-2, #f8fafc);
+  border: 1px solid var(--border-subtle, #e2e8f0);
 }
-.emergency-readiness-row:last-child {
-  border-bottom: none;
+.emergency-readiness-row.is-none {
+  background: rgba(220, 38, 38, 0.07);
+  border-color: rgba(220, 38, 38, 0.22);
 }
-.emergency-readiness-row-name {
+.emergency-readiness-row-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #dc2626;
+}
+.emergency-readiness-row-dot.is-ready {
+  background: #16a34a;
+}
+.emergency-readiness-row-dot.is-unverified {
+  background: #d97706;
+}
+.emergency-readiness-row-main {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.emergency-readiness-row-name {
   font-size: 0.86rem;
   font-weight: 700;
   color: var(--text-strong, #0f172a);
@@ -5424,9 +6677,21 @@ table button,
   font-size: 0.76rem;
   color: var(--text-muted, #64748b);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.emergency-readiness-row-unverified {
+  color: #b45309;
+  font-weight: 700;
+}
+.emergency-readiness-row-stat {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 5px;
 }
 .emergency-readiness-row-tag {
-  flex-shrink: 0;
   font-size: 0.68rem;
   font-weight: 800;
   letter-spacing: 0.03em;
@@ -5439,6 +6704,25 @@ table button,
 .emergency-readiness-row-tag.is-ready {
   background: #ecfdf5;
   color: #16a34a;
+}
+.emergency-readiness-row-bar {
+  width: 64px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--border-subtle, #e2e8f0);
+  overflow: hidden;
+}
+.emergency-readiness-row-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: #dc2626;
+}
+.emergency-readiness-row-bar-fill.is-ready {
+  background: #16a34a;
+}
+.emergency-readiness-row-bar-fill.is-unverified {
+  background: #d97706;
 }
 .emergency-readiness-note {
   display: flex;
@@ -5481,6 +6765,11 @@ table button,
 .fleet-status-compact .chart-legend {
   gap: 5px;
 }
+.fleet-status-legend-col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 /* Trims the standard panel padding/header spacing (used consistently by
    every other card) specifically here, so this card's total height lands
    close to the compact banner beside it instead of the usual ~180px. */
@@ -5518,38 +6807,56 @@ table button,
 .risk-watch-item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   width: 100%;
-  padding: 8px 12px;
-  margin-bottom: 6px;
-  border-radius: 8px;
-  background: #fffbeb;
-  border: 1px solid #fde68a;
-  color: #92400e;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  border-radius: 10px;
+  background: var(--surface-2, #f8fafc);
+  border: 1px solid var(--border-subtle, #e2e8f0);
+  color: var(--text-strong, #0f172a);
   font-size: 0.82rem;
   font-weight: 600;
 }
 .risk-watch-item.is-critical {
-  background: #fef2f2;
-  border-color: #fecaca;
-  color: #991b1b;
+  background: rgba(220, 38, 38, 0.07);
+  border-color: rgba(220, 38, 38, 0.22);
+}
+.risk-watch-item-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #d97706;
+}
+.risk-watch-item-dot.is-critical {
+  background: #dc2626;
 }
 /* Clickable rows (vehicle name can wrap to 2 lines) stack their own
    top-row (name + tag) over a subtitle line, instead of a single row
    fighting to keep a wrapped name and a tag vertically aligned. */
 .risk-watch-item-clickable {
-  flex-direction: column;
-  align-items: stretch;
-  gap: 2px;
-  background: var(--surface-2, #f8fafc);
-  border: 1px solid var(--border, #e2e8f0);
+  align-items: flex-start;
   color: inherit;
   cursor: pointer;
   text-align: left;
   font: inherit;
 }
+.risk-watch-item-clickable .risk-watch-item-dot {
+  margin-top: 4px;
+}
 .risk-watch-item-clickable:hover {
   background: rgba(37, 99, 235, 0.06);
+}
+.risk-watch-item-clickable.is-critical:hover {
+  background: rgba(220, 38, 38, 0.12);
+}
+.risk-watch-item-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
 }
 .risk-watch-item-top {
   display: flex;
@@ -5606,13 +6913,17 @@ table button,
   border-top: 1px solid var(--border-subtle, #e2e8f0);
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 .risk-watch-footer-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: var(--surface-2, #f8fafc);
+  border: 1px solid var(--border-subtle, #e2e8f0);
   font-size: 0.8rem;
   color: var(--text-muted, #64748b);
 }
@@ -6001,8 +7312,7 @@ table button,
   width: 100%;
 }
 
-.value-list li,
-.ticket-detail-vehicle-layout {
+.value-list li {
   background: rgba(255, 255, 255, 0.025);
   border: 1px solid var(--border-subtle);
   border-radius: 7px;
@@ -6014,7 +7324,7 @@ table button,
    faint blue-tinted header strip, so the blue identity is kept without the
    band shouting over the content. */
 .ticket-section {
-  padding: 0 16px 16px;
+  padding: 14px 16px 16px;
   background: var(--surface);
   border: 1px solid var(--border, #e2e8f0);
   border-radius: 12px;
@@ -6022,13 +7332,13 @@ table button,
   overflow: hidden;
 }
 .ticket-section h4 {
-  margin: 0 -16px 14px;
-  padding: 11px 16px;
-  font-size: 0.72rem;
-  font-weight: 800;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  background: rgba(37, 99, 235, 0.05);
+  margin: 0 0 12px;
+  padding: 0 0 10px;
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: normal;
+  text-transform: none;
+  background: transparent;
   border-bottom: 1px solid var(--border, #e2e8f0);
   display: flex;
   align-items: center;
@@ -6280,7 +7590,6 @@ table a:hover,
 .status-badge.under-repair,
 .status-badge.needs-inspection,
 .status-badge.under-review,
-.status-badge.ticket-open,
 .status-badge.ticket-formaint,
 .status-badge.ticket-repair,
 .status-badge.ticket-deferred,
@@ -6369,7 +7678,7 @@ table a:hover,
 }
 
 .smart-form label span {
-  color: var(--text-strong, #0f172a);
+  color: #64748b;
   font-size: 0.68rem;
   font-weight: 700;
 }
@@ -6443,10 +7752,8 @@ table a:hover,
   color: var(--text-strong);
 }
 
-.file-preview,
 .photo-thumb,
-.ticket-card-photo,
-.ticket-detail-vehicle-photo {
+.ticket-card-photo {
   border-color: var(--border);
   border-radius: 8px;
   background: var(--surface);
@@ -6531,16 +7838,10 @@ button.btn-confirm-action:hover {
 .row-actions button.btn-delete-action,
 .DataTable button.btn-delete-action,
 button.btn-delete-action,
-.danger-button,
-.btn-exit-action {
+.danger-button {
   background: rgba(37, 99, 235, 0.14);
   border: 1px solid rgba(37, 99, 235, 0.34);
   color: #93c5fd !important;
-  box-shadow: none;
-}
-.btn-exit-action:hover:not(:disabled) {
-  background: rgba(37, 99, 235, 0.24);
-  border-color: rgba(37, 99, 235, 0.5);
   box-shadow: none;
 }
 
@@ -7720,10 +9021,6 @@ button.btn-view-action svg {
 }
 
 @media (max-width: 1100px) {
-  .workspace {
-    grid-template-columns: 1fr;
-  }
-
   .dashboard-graphs {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -7734,17 +9031,6 @@ button.btn-view-action svg {
      full width instead of squeezing into ~350px each on a narrow viewport. */
   .dashboard-half {
     grid-column: span 12 !important;
-  }
-
-  .sidebar {
-    border-bottom: 1px solid var(--border-subtle);
-    border-right: none;
-    height: auto;
-    position: static;
-  }
-
-  .content-area > *:not(.topbar) {
-    padding: 20px 18px;
   }
 }
 
@@ -7966,7 +9252,7 @@ button.btn-view-action svg {
   --primary-soft: rgba(37, 99, 235, 0.10);
   --primary-border: rgba(37, 99, 235, 0.30);
   --shadow-deep: 0 22px 54px rgba(15, 23, 42, 0.14);
-  --shadow-soft: 0 14px 30px rgba(15, 23, 42, 0.10);
+  --shadow-soft: 0 4px 10px rgba(15, 23, 42, 0.12);
 }
 
 [data-theme="light"] html,
@@ -8017,10 +9303,10 @@ button.btn-view-action svg {
 
 /* Tables */
 [data-theme="light"] thead th {
-  background: linear-gradient(180deg, #f8fafc 0%, #eef2f7 100%);
-  color: #1e293b;
-  border-bottom: 2px solid #cbd5e1;
-  border-right: 1px solid #e2e8f0;
+  background: #2563eb;
+  color: #ffffff;
+  border-bottom: 2px solid #2563eb;
+  border-right: 1px solid rgba(255, 255, 255, 0.25);
 }
 [data-theme="light"] tbody td {
   color: #334155;
@@ -8140,7 +9426,7 @@ html[data-theme="light"] {
   --success: #14b879;
   --text-success: #10a66d;
   --shadow-deep: 0 18px 38px rgba(31, 75, 122, 0.14);
-  --shadow-soft: 0 8px 20px rgba(31, 75, 122, 0.08);
+  --shadow-soft: 0 4px 10px rgba(15, 23, 42, 0.12);
 }
 
 html[data-theme="light"],
@@ -8337,6 +9623,13 @@ html[data-theme="light"] .panel {
   padding: 14px 16px;
 }
 
+/* Solid-color stat cards don't want the light theme's pale card border —
+   the whole card IS the color, so an outline just looks like a mismatched
+   ring around it. */
+html[data-theme="light"] .metric-card-solid {
+  border: none;
+}
+
 /* Module content panels (the card wrapping a table + its search/filter bar) —
    calm 1px border + soft neutral shadow, matching every other card in the
    app. Previously a thick blue border + blue-tinted glow, which bled onto
@@ -8423,6 +9716,18 @@ html[data-theme="light"] .filter-bar-container {
   padding: 0 0 14px;
 }
 
+html[data-theme="light"] .module-filter-panel,
+[data-theme="light"] .module-filter-panel {
+  padding: 16px 22px;
+}
+
+html[data-theme="light"] .module-filter-panel .filter-bar-container,
+[data-theme="light"] .module-filter-panel .filter-bar-container {
+  margin: 0;
+  padding: 0;
+  border-bottom: none;
+}
+
 html[data-theme="light"] .filter-label {
   color: #071a35;
   font-size: 0.74rem;
@@ -8453,13 +9758,14 @@ html[data-theme="light"] .filter-select {
 }
 
 html[data-theme="light"] .local-search-container {
-  width: min(260px, 100%);
+  width: min(300px, 100%);
 }
 
 html[data-theme="light"] .local-search-input {
-  height: 30px;
+  height: 40px;
   padding-left: 34px;
   border: 1.5px solid #2563eb;
+  font-size: 0.92rem;
 }
 
 html[data-theme="light"] .smart-form input:focus,
@@ -8470,6 +9776,21 @@ html[data-theme="light"] .local-search-input:focus,
 html[data-theme="light"] .popover-date-group input[type="date"]:focus {
   border-color: #2f7de1;
   box-shadow: 0 0 0 2px rgba(47, 125, 225, 0.16);
+}
+
+/* The dark-theme default and BOTH light-theme overrides above each set a
+   shorthand `background` (one with !important) on .smart-form select —
+   every one of them silently resets background-image back to none, which
+   is what was eating the custom chevron. Matching each one's exact
+   selector + !important here is the only way to reliably win in every
+   theme context regardless of source order. */
+html[data-theme="light"] .smart-form select,
+[data-theme="light"] .smart-form select,
+.smart-form select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E") !important;
+  background-repeat: no-repeat !important;
+  background-position: right 10px center !important;
+  background-size: 16px !important;
 }
 
 html[data-theme="light"] .primary-button,
@@ -8511,6 +9832,12 @@ html[data-theme="light"] .filter-apply-btn:hover:not(:disabled) {
   box-shadow: none;
 }
 
+/* Was border-radius: 3px here — nearly square, while the base (dark-theme)
+   rule above and every solid-color modifier class layered on top of
+   .ghost-button (.btn-reassign-custodian, .btn-defer-action, the confirm
+   dialog's Cancel button, etc.) keep their own ~9-10px rounding. That
+   mismatch is what made action rows read as "different buttons" instead
+   of one consistent button style with different colors. */
 html[data-theme="light"] .ghost-button,
 html[data-theme="light"] .row-actions button,
 html[data-theme="light"] .report-heading button,
@@ -8520,11 +9847,44 @@ html[data-theme="light"] .filter-clear-btn,
 html[data-theme="light"] .filter-clear-all-btn {
   background: #ffffff;
   border: 1px solid #cbd8e9;
-  border-radius: 3px;
+  border-radius: 10px;
   box-shadow: none;
   color: #2575d8;
-  font-size: 0.74rem;
   font-weight: 600;
+}
+/* .ghost-button alone (not the compact table/row-action variants above,
+   which are deliberately small) keeps the base rule's 46px height — the
+   0.74rem shared above reads fine on a 36px row-action button but is
+   disproportionately tiny stretched across a full 46px standalone button
+   like "Add Another Part" or a modal's "Cancel". */
+html[data-theme="light"] .ghost-button {
+  font-size: 0.85rem;
+}
+html[data-theme="light"] .row-actions button,
+html[data-theme="light"] .report-heading button,
+html[data-theme="light"] table button,
+html[data-theme="light"] .table-shell button,
+html[data-theme="light"] .filter-clear-btn,
+html[data-theme="light"] .filter-clear-all-btn {
+  font-size: 0.74rem;
+}
+html[data-theme="light"] .btn-reassign-custodian {
+  background: #d97706;
+  border: 1.5px solid #d97706;
+  color: #ffffff !important;
+}
+html[data-theme="light"] .btn-reassign-custodian:hover {
+  background: #b45309;
+  border-color: #b45309;
+}
+html[data-theme="light"] .btn-defer-action {
+  background: none !important;
+  border: 1.5px solid #f59e0b !important;
+  color: #b45309 !important;
+}
+html[data-theme="light"] .btn-defer-action:hover {
+  background: rgba(245, 158, 11, 0.1) !important;
+  border-color: #d97706 !important;
 }
 /* Cell links stay plain hyperlinks in light theme too (beats the rule above). */
 html[data-theme="light"] table button.cell-link,
@@ -8542,25 +9902,13 @@ html[data-theme="light"] .table-shell button.cell-link:hover {
   text-decoration: underline;
 }
 
-/* "Back" / "Cancel" on form pages — same solid red treatment as the other
-   red buttons in the app (e.g. Archive), not the blue ghost-button look. */
-html[data-theme="light"] .btn-exit-action {
-  background: linear-gradient(90deg, #2563eb, #3b82f6) !important;
-  border: none !important;
-  color: #ffffff !important;
-  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.28) !important;
-}
-html[data-theme="light"] .btn-exit-action:hover:not(:disabled) {
-  background: linear-gradient(90deg, #1d4ed8, #2563eb) !important;
-  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.38) !important;
-}
-
 /* Confirmation popup: Cancel reads as a solid green "safe" action, and the
    confirm/destructive action is a solid red — not the pale, washed-out tint
    that .danger-button inherits from an unscoped dark-theme rule elsewhere. */
 html[data-theme="light"] .confirm-dialog-actions .ghost-button {
   background: #16a34a !important;
   border: 1px solid #16a34a !important;
+  border-radius: 9px !important;
   color: #ffffff !important;
 }
 html[data-theme="light"] .confirm-dialog-actions .ghost-button:hover:not(:disabled) {
@@ -8606,8 +9954,8 @@ html[data-theme="light"] .filter-clear-btn:hover {
 
 html[data-theme="light"] .table-shell {
   background: #ffffff;
-  border: none;
-  border-radius: 0;
+  border: 3px solid #2563eb;
+  border-radius: 6px;
   box-shadow: none;
   margin-bottom: 0;
   overflow: auto;
@@ -8621,10 +9969,10 @@ html[data-theme="light"] .table-shell table {
 }
 
 html[data-theme="light"] thead th {
-  background: #ffffff;
-  border-bottom: 1px solid #c9d4e3;
-  border-right: 1px solid #d9e2ee;
-  color: #071a35;
+  background: #2563eb;
+  border-bottom: 1px solid #2563eb;
+  border-right: 1px solid rgba(255, 255, 255, 0.25);
+  color: #ffffff;
   font-size: 0.7rem;
   font-weight: 700;
   line-height: 1.25;
@@ -8683,26 +10031,30 @@ html[data-theme="light"] .table-shell button.icon-btn {
    block, table button color would flatten every action to the same
    light-blue default above. */
 html[data-theme="light"] table button.btn-edit-action,
-html[data-theme="light"] .table-shell button.btn-edit-action {
+html[data-theme="light"] .table-shell button.btn-edit-action,
+html[data-theme="light"] button.btn-edit-action {
   background: #2563eb;
   border-color: #2563eb;
   color: #ffffff !important;
 }
 html[data-theme="light"] table button.btn-edit-action:hover,
-html[data-theme="light"] .table-shell button.btn-edit-action:hover {
+html[data-theme="light"] .table-shell button.btn-edit-action:hover,
+html[data-theme="light"] button.btn-edit-action:hover {
   background: #1d4ed8;
   border-color: #1d4ed8;
   color: #ffffff !important;
 }
 
 html[data-theme="light"] table button.btn-delete-action,
-html[data-theme="light"] .table-shell button.btn-delete-action {
+html[data-theme="light"] .table-shell button.btn-delete-action,
+html[data-theme="light"] button.btn-delete-action {
   background: #dc2626;
   border-color: #dc2626;
   color: #ffffff !important;
 }
 html[data-theme="light"] table button.btn-delete-action:hover,
-html[data-theme="light"] .table-shell button.btn-delete-action:hover {
+html[data-theme="light"] .table-shell button.btn-delete-action:hover,
+html[data-theme="light"] button.btn-delete-action:hover {
   background: #b91c1c;
   border-color: #b91c1c;
   color: #ffffff !important;
@@ -8722,13 +10074,15 @@ html[data-theme="light"] .table-shell button.btn-archive-action:hover {
 }
 
 html[data-theme="light"] table button.btn-confirm-action,
-html[data-theme="light"] .table-shell button.btn-confirm-action {
+html[data-theme="light"] .table-shell button.btn-confirm-action,
+html[data-theme="light"] button.btn-confirm-action {
   background: #16a34a;
   border-color: #16a34a;
   color: #ffffff !important;
 }
 html[data-theme="light"] table button.btn-confirm-action:hover,
-html[data-theme="light"] .table-shell button.btn-confirm-action:hover {
+html[data-theme="light"] .table-shell button.btn-confirm-action:hover,
+html[data-theme="light"] button.btn-confirm-action:hover {
   background: #15803d;
   border-color: #15803d;
   color: #ffffff !important;
@@ -8796,7 +10150,6 @@ html[data-theme="light"] .status-badge.for-repair,
 html[data-theme="light"] .status-badge.under-repair,
 html[data-theme="light"] .status-badge.needs-inspection,
 html[data-theme="light"] .status-badge.under-review,
-html[data-theme="light"] .status-badge.ticket-open,
 html[data-theme="light"] .status-badge.ticket-formaint,
 html[data-theme="light"] .status-badge.ticket-repair,
 html[data-theme="light"] .status-badge.ticket-deferred,
@@ -8806,6 +10159,15 @@ html[data-theme="light"] .status-badge.rework-warning {
   background: #fef3c7;
   border-color: #fcd34d;
   color: #92400e;
+}
+/* "Open" is a neutral starting state, not a caution — keep it in its own
+   blue (matching the base .ticket-open rule) instead of the shared amber
+   "in-progress/caution" bucket above, which made it read identically to a
+   High-priority badge right next to it. */
+html[data-theme="light"] .status-badge.ticket-open {
+  background: #eff6ff;
+  border-color: #93c5fd;
+  color: #1e40af;
 }
 /* Light-theme: keep these two stages visually distinct (green / purple). */
 html[data-theme="light"] .status-badge.ticket-forinspect { background: #dcfce7; border-color: #86efac; color: #166534; }
@@ -8962,7 +10324,7 @@ html[data-theme="light"] .issue-id-badge {
 
 @media (max-width: 1100px) {
   html[data-theme="light"] .workspace {
-    grid-template-columns: 1fr;
+    grid-template-columns: 76px 1fr;
   }
 }
 
@@ -8975,5 +10337,683 @@ html[data-theme="light"] .issue-id-badge {
   html[data-theme="light"] .module-action-bar,
   html[data-theme="light"] .filter-bar-container {
     align-items: stretch;
+  }
+}
+
+/* Smart dashboard redesign */
+.dashboard-grid-smart {
+  gap: 18px;
+}
+
+.dashboard-grid-smart > .dashboard-banner-compact,
+.dashboard-grid-smart > .dashboard-fleet-status-panel,
+.dashboard-grid-smart > .dashboard-quick-cards,
+.dashboard-grid-smart > .dashboard-headline-grid,
+.dashboard-grid-smart > .panel:not(.action-queue-panel) {
+  display: none !important;
+}
+
+.dashboard-grid-smart > .action-queue-panel {
+  grid-column: 1 / -1;
+}
+
+.dashboard-command-center {
+  --core: #22c55e;
+  --core-soft: rgba(34, 197, 94, 0.18);
+  background:
+    linear-gradient(135deg, rgba(7, 15, 28, 0.98), rgba(20, 45, 110, 0.98) 52%, rgba(29, 78, 216, 0.9));
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 8px;
+  box-shadow: 0 22px 44px rgba(15, 23, 42, 0.22);
+  color: #e5edf8;
+  display: grid;
+  grid-template-columns: minmax(260px, 1.18fr) minmax(210px, 0.62fr) minmax(300px, 1fr);
+  gap: 20px;
+  min-height: 230px;
+  overflow: hidden;
+  padding: 24px;
+  position: relative;
+}
+
+.dashboard-command-center::before {
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.055) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.045) 1px, transparent 1px);
+  background-size: 34px 34px;
+  content: '';
+  inset: 0;
+  opacity: 0.34;
+  pointer-events: none;
+  position: absolute;
+}
+
+.dashboard-command-center.is-warn {
+  --core: #f59e0b;
+  --core-soft: rgba(245, 158, 11, 0.2);
+}
+
+.dashboard-command-center.is-alert {
+  --core: #ef4444;
+  --core-soft: rgba(239, 68, 68, 0.2);
+}
+
+.dashboard-command-center > * {
+  position: relative;
+  z-index: 1;
+}
+
+.dashboard-command-copy {
+  align-self: center;
+  min-width: 0;
+}
+
+.dashboard-smart-panel-head span,
+.dashboard-live-chips span,
+.dashboard-micro-metric small {
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.dashboard-command-role {
+  color: #60a5fa;
+  display: block;
+  font-size: 1.5rem;
+  font-weight: 900;
+  letter-spacing: 0.03em;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+}
+
+.dashboard-command-copy h2 {
+  color: #ffffff;
+  font-size: clamp(1.6rem, 2.1vw, 2.35rem);
+  line-height: 1.08;
+  margin: 8px 0;
+  max-width: 680px;
+}
+
+.dashboard-command-copy p {
+  color: rgba(226, 232, 240, 0.78);
+  margin: 0;
+}
+
+.dashboard-command-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.dashboard-command-pills span {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  color: #dbeafe;
+  font-size: 0.74rem;
+  font-weight: 800;
+  padding: 6px 10px;
+}
+
+.dashboard-hologram-core {
+  align-self: center;
+  aspect-ratio: 1;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(15, 23, 42, 0.94) 0 43%, transparent 44%),
+    conic-gradient(var(--core) var(--score), rgba(148, 163, 184, 0.2) 0),
+    radial-gradient(circle, var(--core-soft), transparent 68%);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 50%;
+  box-shadow:
+    0 0 38px var(--core-soft),
+    inset 0 0 30px rgba(255, 255, 255, 0.06);
+  display: grid;
+  justify-self: center;
+  max-width: 230px;
+  min-width: 190px;
+  place-items: center;
+  position: relative;
+  width: 100%;
+}
+
+.dashboard-hologram-inner {
+  align-content: center;
+  background: rgba(2, 6, 23, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 50%;
+  display: grid;
+  height: 57%;
+  justify-items: center;
+  padding: 14px;
+  text-align: center;
+  width: 57%;
+}
+
+.dashboard-hologram-inner span {
+  color: #bae6fd;
+  font-size: 0.66rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.dashboard-hologram-inner strong {
+  color: #ffffff;
+  font-size: 3rem;
+  font-weight: 900;
+  line-height: 0.95;
+}
+
+.dashboard-hologram-inner small {
+  color: rgba(226, 232, 240, 0.88);
+  font-size: 0.7rem;
+  font-weight: 800;
+}
+
+.dashboard-hologram-scan {
+  animation: dashboardScan 3.8s linear infinite;
+  background: repeating-linear-gradient(180deg, rgba(125, 211, 252, 0.18) 0 2px, transparent 2px 9px);
+  border-radius: 50%;
+  clip-path: circle(48% at 50% 50%);
+  inset: 8%;
+  opacity: 0.42;
+  position: absolute;
+}
+
+.dashboard-hologram-orbit {
+  border: 1px solid rgba(186, 230, 253, 0.34);
+  border-radius: 50%;
+  height: 72%;
+  position: absolute;
+  width: 94%;
+}
+
+.dashboard-hologram-orbit.orbit-one {
+  animation: dashboardOrbit 12s linear infinite;
+  transform: rotateX(68deg) rotateZ(18deg);
+}
+
+.dashboard-hologram-orbit.orbit-two {
+  animation: dashboardOrbit 15s linear infinite reverse;
+  transform: rotateX(68deg) rotateZ(-42deg);
+}
+
+.dashboard-command-side {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  justify-content: center;
+  min-width: 0;
+}
+
+.dashboard-live-chips,
+.dashboard-command-mini-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.dashboard-live-chips > div,
+.dashboard-micro-metric {
+  background: rgba(255, 255, 255, 0.09);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  min-width: 0;
+  padding: 12px;
+}
+
+.dashboard-live-chips span,
+.dashboard-micro-metric small {
+  color: rgba(226, 240, 255, 0.92);
+  display: block;
+}
+
+.dashboard-live-chips strong {
+  color: #ffffff;
+  display: flex;
+  font-size: 1.2rem;
+  font-weight: 900;
+  gap: 6px;
+  line-height: 1.1;
+  margin-top: 4px;
+}
+
+.dashboard-live-chips small {
+  color: rgba(226, 232, 240, 0.85);
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  margin-top: 4px;
+}
+
+.dashboard-weather-mark {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.dashboard-micro-metric {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+
+.dashboard-micro-metric > span {
+  align-items: center;
+  background: rgba(148, 163, 184, 0.16);
+  border-radius: 8px;
+  color: #cbd5e1;
+  display: flex;
+  flex: 0 0 32px;
+  height: 32px;
+  justify-content: center;
+  width: 32px;
+}
+
+.dashboard-micro-metric strong {
+  color: #ffffff;
+  display: block;
+  font-size: 1.1rem;
+  font-weight: 900;
+  line-height: 1.1;
+}
+
+.dashboard-micro-metric.is-ok > span { color: #86efac; }
+.dashboard-micro-metric.is-warn > span { color: #fbbf24; }
+.dashboard-micro-metric.is-alert > span { color: #fca5a5; }
+
+.dashboard-signal-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.dashboard-signal-card {
+  --signal: #2563eb;
+  background: var(--card-bg, #101827);
+  border: 1px solid var(--border-subtle, rgba(148, 163, 184, 0.2));
+  border-radius: 8px;
+  box-shadow: var(--shadow-soft);
+  color: var(--text, #dbeafe);
+  cursor: default;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 15px;
+  text-align: left;
+  width: 100%;
+}
+
+button.dashboard-signal-card {
+  cursor: pointer;
+  font: inherit;
+}
+
+button.dashboard-signal-card:hover {
+  border-color: color-mix(in srgb, var(--signal) 64%, var(--border-subtle));
+  transform: translateY(-1px);
+}
+
+.dashboard-signal-card.is-ok { --signal: #16a34a; }
+.dashboard-signal-card.is-warn { --signal: #d97706; }
+.dashboard-signal-card.is-alert { --signal: #dc2626; }
+
+.dashboard-signal-card-head {
+  align-items: center;
+  color: var(--text-muted, #94a3b8);
+  display: flex;
+  font-size: 0.78rem;
+  font-weight: 800;
+  gap: 8px;
+  min-width: 0;
+}
+
+.dashboard-signal-card-icon {
+  align-items: center;
+  background: color-mix(in srgb, var(--signal) 14%, transparent);
+  border-radius: 7px;
+  color: var(--signal);
+  display: flex;
+  height: 28px;
+  justify-content: center;
+  width: 28px;
+}
+
+.dashboard-signal-card-chevron {
+  margin-left: auto;
+  opacity: 0.65;
+}
+
+.dashboard-signal-card strong {
+  color: var(--text-strong, #f8fafc);
+  font-size: 1.5rem;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.dashboard-signal-card p {
+  color: var(--text-muted, #94a3b8);
+  font-size: 0.76rem;
+  font-weight: 650;
+  line-height: 1.35;
+  margin: 0;
+  min-height: 2.05em;
+  overflow: hidden;
+}
+
+.dashboard-signal-meter {
+  background: rgba(148, 163, 184, 0.18);
+  border-radius: 999px;
+  display: block;
+  height: 5px;
+  overflow: hidden;
+}
+
+.dashboard-signal-meter span {
+  background: linear-gradient(90deg, var(--signal), color-mix(in srgb, var(--signal) 58%, #ffffff));
+  border-radius: inherit;
+  display: block;
+  height: 100%;
+}
+
+.dashboard-intelligence-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+}
+
+.dashboard-smart-panel {
+  background: var(--card-bg, linear-gradient(180deg, rgba(22, 23, 27, 0.98), rgba(14, 15, 18, 0.98)));
+  border: 1px solid var(--border, rgba(148, 163, 184, 0.2));
+  border-radius: 8px;
+  box-shadow: var(--shadow-soft);
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  padding: 18px;
+}
+
+.dashboard-readiness-matrix { grid-column: span 5; }
+.dashboard-condition-matrix { grid-column: span 3; }
+.dashboard-operations-matrix { grid-column: span 4; }
+.dashboard-distribution-matrix { grid-column: 1 / -1; }
+
+.dashboard-smart-panel-head {
+  align-items: flex-start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.dashboard-smart-panel-head span {
+  color: var(--primary-strong, #60a5fa);
+}
+
+.dashboard-smart-panel-head h3 {
+  color: var(--text-strong);
+  font-size: 0.98rem;
+  font-weight: 900;
+  line-height: 1.2;
+  margin: 4px 0 0;
+}
+
+.dashboard-smart-panel-head > strong {
+  color: var(--text-strong);
+  font-size: 1.35rem;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.dashboard-readiness-compact-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dashboard-readiness-compact-list .emergency-readiness-row {
+  margin: 0;
+  padding: 9px 10px;
+}
+
+.dashboard-readiness-compact-list .emergency-readiness-row-stat {
+  min-width: 76px;
+}
+
+.dashboard-inline-action {
+  align-self: flex-start;
+  background: rgba(37, 99, 235, 0.1);
+  border: 1px solid rgba(37, 99, 235, 0.22);
+  border-radius: 8px;
+  color: var(--primary-strong, #2563eb);
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 850;
+  padding: 8px 11px;
+}
+
+.dashboard-condition-core {
+  align-items: center;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 116px minmax(0, 1fr);
+}
+
+.dashboard-condition-donut .donut-chart {
+  width: 112px;
+}
+
+.dashboard-condition-core .chart-legend {
+  gap: 7px;
+}
+
+.dashboard-condition-core .chart-legend li {
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+}
+
+.dashboard-status-strip {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.dashboard-status-strip div {
+  background: color-mix(in srgb, var(--strip-color) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--strip-color) 26%, transparent);
+  border-radius: 8px;
+  min-width: 0;
+  padding: 8px 10px;
+}
+
+.dashboard-status-strip span {
+  color: var(--text-muted);
+  display: block;
+  font-size: 0.68rem;
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-status-strip strong {
+  color: var(--strip-color);
+  display: block;
+  font-size: 1rem;
+  font-weight: 900;
+  line-height: 1.1;
+  margin-top: 3px;
+}
+
+.dashboard-operations-matrix .column-chart {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  min-height: 142px;
+}
+
+.dashboard-operations-matrix .column-bar {
+  grid-template-rows: 96px auto auto;
+}
+
+.dashboard-operations-matrix .column-track {
+  height: 96px;
+}
+
+.dashboard-panel-note {
+  border-top: 1px solid var(--border-subtle, rgba(148, 163, 184, 0.2));
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1.4;
+  margin: auto 0 0;
+  padding-top: 10px;
+}
+
+.dashboard-dual-bars {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.dashboard-dual-bars > div {
+  min-width: 0;
+}
+
+.dashboard-dual-bars h4 {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 900;
+  letter-spacing: 0;
+  margin: 0 0 10px;
+  text-transform: uppercase;
+}
+
+.dashboard-grid-smart .horizontal-bars {
+  gap: 10px;
+}
+
+.dashboard-grid-smart .bar-track {
+  background: rgba(148, 163, 184, 0.18);
+  height: 7px;
+}
+
+@keyframes dashboardScan {
+  from { transform: translateY(-9px); }
+  to { transform: translateY(9px); }
+}
+
+@keyframes dashboardOrbit {
+  to { rotate: 360deg; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dashboard-hologram-scan,
+  .dashboard-hologram-orbit {
+    animation: none;
+  }
+}
+
+html[data-theme="light"] .dashboard-command-center {
+  background:
+    linear-gradient(135deg, #0b1f4d 0%, #1d4ed8 55%, #2563eb 100%);
+  border-color: rgba(37, 99, 235, 0.3);
+  box-shadow: 0 16px 34px rgba(31, 75, 122, 0.18);
+}
+
+html[data-theme="light"] .dashboard-smart-panel,
+html[data-theme="light"] .dashboard-signal-card {
+  background: #ffffff;
+  border-color: #cdddf0;
+  box-shadow: 0 8px 20px rgba(31, 75, 122, 0.1);
+}
+
+html[data-theme="light"] .dashboard-signal-card p,
+html[data-theme="light"] .dashboard-signal-card-head,
+html[data-theme="light"] .dashboard-panel-note,
+html[data-theme="light"] .dashboard-status-strip span,
+html[data-theme="light"] .dashboard-dual-bars h4 {
+  color: #64748b;
+}
+
+html[data-theme="light"] .dashboard-signal-card strong,
+html[data-theme="light"] .dashboard-smart-panel-head h3,
+html[data-theme="light"] .dashboard-smart-panel-head > strong {
+  color: #071a35;
+}
+
+html[data-theme="light"] .dashboard-hologram-inner {
+  background: rgba(248, 250, 252, 0.88);
+}
+
+html[data-theme="light"] .dashboard-hologram-inner strong {
+  color: #071a35;
+}
+
+html[data-theme="light"] .dashboard-hologram-inner span {
+  color: #0f766e;
+}
+
+html[data-theme="light"] .dashboard-hologram-inner small {
+  color: #475569;
+}
+
+@media (max-width: 1180px) {
+  .dashboard-command-center {
+    grid-template-columns: minmax(0, 1fr) minmax(210px, 0.72fr);
+  }
+
+  .dashboard-command-side {
+    grid-column: 1 / -1;
+  }
+
+  .dashboard-readiness-matrix,
+  .dashboard-condition-matrix,
+  .dashboard-operations-matrix {
+    grid-column: span 6;
+  }
+
+  .dashboard-operations-matrix {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 860px) {
+  .dashboard-command-center,
+  .dashboard-signal-grid,
+  .dashboard-dual-bars {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-hologram-core {
+    max-width: 220px;
+  }
+
+  .dashboard-readiness-matrix,
+  .dashboard-condition-matrix,
+  .dashboard-operations-matrix,
+  .dashboard-distribution-matrix {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 560px) {
+  .dashboard-command-center {
+    padding: 18px;
+  }
+
+  .dashboard-live-chips,
+  .dashboard-command-mini-grid,
+  .dashboard-condition-core,
+  .dashboard-status-strip,
+  .dashboard-operations-matrix .column-chart {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-hologram-inner strong {
+    font-size: 2.35rem;
+  }
+
+  .dashboard-signal-card p {
+    min-height: 0;
   }
 }

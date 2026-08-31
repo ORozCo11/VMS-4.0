@@ -5,8 +5,10 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use App\Models\ActivityLog;
 use App\Models\Barangay;
+use App\Models\RegistrationSetting;
 use App\Models\User;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Validation\Rule;
 
 class AuthController extends Controller
 {
@@ -16,6 +18,18 @@ class AuthController extends Controller
      * (activate) it via the existing Users management screen before it can
      * log in, the same gate `login()` already enforces for any deactivated
      * account.
+     *
+     * Barangays are independent tenants (see BelongsToBarangay/
+     * ScopedThroughVehicle) — every barangay gets its own bootstrap, not
+     * just the very first account system-wide:
+     * - The first account to register under a GIVEN barangay becomes that
+     *   barangay's Admin immediately, active, no approval needed — there's
+     *   nobody else there yet who could review them. This can happen once
+     *   per barangay, whenever it happens to get its first registrant.
+     * - Everyone else registering under a barangay that already has
+     *   someone must supply THAT barangay's own Staff Registration Code —
+     *   the actual gate against a stranger reaching that barangay Admin's
+     *   approval queue at all, checked before an account is even created.
      */
     public function register(Request $request)
     {
@@ -48,6 +62,41 @@ class AuthController extends Controller
             'phone.regex' => 'Phone number must be 11 digits starting with 09 (e.g. 09171234567).',
         ]);
 
+        // No barangay picked from a dropdown (the city has no seeded list
+        // yet) — turn the free-typed name into a real Barangay row, scoped
+        // to this city, so it shows up as an option for the next person
+        // registering under the same city instead of staying a one-off
+        // string. This also resolves the concrete barangay_id every
+        // registrant needs before we can know whose "first" they'd be.
+        $barangayId = $data['barangay_id'] ?? null;
+        if (!$barangayId && !empty($data['barangay_name'])) {
+            $barangayId = Barangay::findOrCreateForCity((int) $data['city_id'], $data['barangay_name'])->id;
+        }
+
+        // Deliberately unscoped (User carries no global scope) and looks
+        // across every barangay — this is the one place that's supposed to.
+        $isFirstForBarangay = !User::where('barangay_id', $barangayId)->exists();
+
+        $roleData = $request->validate([
+            // The first-for-this-barangay account has no role choice (it's
+            // always Admin) and no code to check — there's nothing to gate yet.
+            'requested_role' => [$isFirstForBarangay ? 'nullable' : 'required', Rule::in(['Custodian', 'Maintenance Personnel'])],
+            'staff_code' => [$isFirstForBarangay ? 'nullable' : 'required', 'string'],
+        ], [
+            'requested_role.required' => 'Please select whether you are a Custodian or Maintenance Personnel.',
+            'staff_code.required' => 'Please enter the staff registration code given to you by your barangay office.',
+        ]);
+
+        if (!$isFirstForBarangay) {
+            abort_unless(
+                hash_equals(RegistrationSetting::for($barangayId)->staff_code, strtoupper(trim($roleData['staff_code']))),
+                422,
+                'That staff registration code is not correct. Ask your barangay office for the current code.'
+            );
+        }
+
+        $role = $isFirstForBarangay ? 'Admin' : $roleData['requested_role'];
+
         $user = User::create([
             'name' => $data['name'],
             'email' => $data['email'],
@@ -55,21 +104,52 @@ class AuthController extends Controller
             'phone' => $data['phone'],
             'address' => $data['address'],
             'city_id' => $data['city_id'],
-            'barangay_id' => $data['barangay_id'] ?? null,
+            'barangay_id' => $barangayId,
             'barangay_name' => $data['barangay_name'] ?? null,
-            'role' => 'Custodian',
-            'roles' => ['Custodian'],
-            'is_active' => false,
+            'role' => $role,
+            'roles' => [$role],
+            'is_active' => $isFirstForBarangay,
+            'approved_at' => $isFirstForBarangay ? now() : null,
         ]);
 
         return response()->json([
-            'message' => 'Registration submitted. An administrator must approve your account before you can sign in.',
+            'message' => $isFirstForBarangay
+                ? 'Admin account created for your barangay. You can sign in now.'
+                : 'Registration submitted. An administrator must approve your account before you can sign in.',
             'user' => [
                 'id' => $user->id,
                 'name' => $user->name,
                 'email' => $user->email,
             ],
         ], 201);
+    }
+
+    /**
+     * Public, side-effect-free preview for the Register form: "if I submit
+     * with this barangay, will I become its first Admin?" Lets the
+     * frontend show that up front instead of only after submitting.
+     * Never creates anything — a free-typed barangay that doesn't exist
+     * yet is trivially "first" without touching the database.
+     */
+    public function registrationStatus(Request $request)
+    {
+        $data = $request->validate([
+            'city_id' => ['required', 'exists:cities,id'],
+            'barangay_id' => ['nullable', 'exists:barangays,id'],
+            'barangay_name' => ['nullable', 'string', 'max:255'],
+        ]);
+
+        $barangayId = $data['barangay_id'] ?? null;
+
+        if (!$barangayId && !empty($data['barangay_name'])) {
+            $barangayId = Barangay::where('city_id', $data['city_id'])
+                ->whereRaw('LOWER(name) = ?', [strtolower(trim($data['barangay_name']))])
+                ->value('id');
+        }
+
+        $isFirst = !$barangayId || !User::where('barangay_id', $barangayId)->exists();
+
+        return response()->json(['is_first' => $isFirst]);
     }
 
     /**
@@ -119,42 +199,98 @@ class AuthController extends Controller
     }
 
     /**
-     * DEV-ONLY. Returns 404 outside local/testing, so it does not exist in a
-     * deployed app and can never become a privilege-escalation hole.
+     * DEV-ONLY for an Admin: returns 404 outside local/testing, so an
+     * ordinary barangay Admin's shortcut never exists in a deployed app.
+     * A Super Admin is exempt — production impersonation, for real account
+     * support/recovery, is exactly what that role is for; every use is
+     * still logged (see impersonate() below).
      */
-    private function assertImpersonationEnabled(): void
+    private function assertImpersonationEnabled(Request $request): void
     {
+        if ($request->user()?->hasRole('Super Admin')) {
+            return;
+        }
         abort_unless(app()->environment(['local', 'testing']), 404);
     }
 
     /**
-     * DEV-ONLY: list accounts an authenticated user can jump into for testing.
+     * True for the real Admin/Super Admin who kicked off impersonation, AND
+     * for every account they've since jumped into — the 'impersonated'
+     * ability travels with the token so switching accounts (or back to
+     * yourself) mid-session doesn't require logging out. A genuine
+     * Custodian's normal login token never carries this ability, since it's
+     * only ever added by impersonate() below, which itself requires the
+     * caller to already pass this same check — a real Custodian has no way
+     * to obtain it.
      */
-    public function impersonationCandidates(Request $request)
+    private function canImpersonate(Request $request): bool
     {
-        $this->assertImpersonationEnabled();
-
-        return User::orderBy('name')->get(['id', 'name', 'email', 'role', 'roles', 'is_active']);
+        return $request->user()?->hasRole('Admin')
+            || $request->user()?->hasRole('Super Admin')
+            || (bool) $request->user()?->currentAccessToken()?->can('impersonated');
     }
 
     /**
-     * DEV-ONLY: issue a token for another account so a developer can switch
-     * roles without logging out and back in. Guarded by environment (404 in
-     * production) AND, on the client, by import.meta.env.DEV — both must hold.
+     * List accounts an authenticated user can jump into. For an Admin this
+     * is DEV-ONLY (see assertImpersonationEnabled); for a Super Admin it
+     * works in production too — that's the real account-recovery path.
+     *
+     * Deliberately spans every barangay, not just the caller's own — an
+     * Admin's use of this is dev-only and never exists in production, so
+     * the usual "don't leak other tenants' data" concern doesn't apply to
+     * them; a Super Admin is explicitly meant to see across every barangay.
+     * The frontend groups the result by province/barangay so the caller can
+     * jump to any staff account in any barangay.
+     */
+    public function impersonationCandidates(Request $request)
+    {
+        $this->assertImpersonationEnabled($request);
+        abort_unless($this->canImpersonate($request), 403, 'Only an Admin or Super Admin can impersonate another account.');
+
+        return User::with('barangay.city.province')
+            ->orderBy('name')
+            ->get(['id', 'name', 'email', 'role', 'roles', 'is_active', 'barangay_id'])
+            ->map(fn ($u) => [
+                'id' => $u->id,
+                'name' => $u->name,
+                'email' => $u->email,
+                'role' => $u->role,
+                'roles' => $u->roles,
+                'is_active' => $u->is_active,
+                'barangay_id' => $u->barangay_id,
+                'province_id' => $u->barangay?->city?->province?->id,
+                'province_name' => $u->barangay?->city?->province?->name,
+                'city_name' => $u->barangay?->city?->name,
+                'barangay_name' => $u->barangay?->name,
+            ]);
+    }
+
+    /**
+     * Issue a token for another account so the caller can switch roles
+     * without logging out and back in. For an Admin: DEV-ONLY, guarded by
+     * environment (404 in production), the canImpersonate check, AND, on
+     * the client, by import.meta.env.DEV — all three must hold. For a
+     * Super Admin: works in production too, for real account support —
+     * every use is logged below.
      */
     public function impersonate(Request $request, User $user)
     {
-        $this->assertImpersonationEnabled();
+        $this->assertImpersonationEnabled($request);
+        abort_unless($this->canImpersonate($request), 403, 'Only an Admin or Super Admin can impersonate another account.');
+        // Deliberately allowed to cross barangays — see impersonationCandidates
+        // above.
         abort_if(!$user->is_active, 422, 'That account is deactivated.');
 
-        $token = $user->createToken('impersonation_token', $user->allRoles())->plainTextToken;
+        $token = $user->createToken('impersonation_token', [...$user->allRoles(), 'impersonated'])->plainTextToken;
 
+        $actingAsSuperAdmin = $request->user()?->hasRole('Super Admin');
         ActivityLog::create([
             'user_id' => $request->user()?->id,
             'role'    => $request->user()?->role,
             'action'  => 'Impersonate',
-            'module'  => 'Dev Tools',
-            'details' => ($request->user()?->name ?? 'A developer') . " impersonated {$user->name} (dev only).",
+            'module'  => $actingAsSuperAdmin ? 'Super Admin' : 'Dev Tools',
+            'details' => ($request->user()?->name ?? 'Someone') . " impersonated {$user->name}"
+                . ($actingAsSuperAdmin ? '.' : ' (dev only).'),
         ]);
 
         return response()->json([

@@ -2,10 +2,13 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\ScopedThroughVehicle;
 use Illuminate\Database\Eloquent\Model;
 
 class VehicleConditionCheck extends Model
 {
+    use ScopedThroughVehicle;
+
     protected $primaryKey = 'condition_check_id';
 
     protected $fillable = [

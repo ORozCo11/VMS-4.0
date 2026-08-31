@@ -23,7 +23,7 @@ const vehiclePin = L.divIcon({
   tooltipAnchor: [0, -38],
 });
 
-export default function VehicleLocationMap({ lat, lng, label }) {
+export default function VehicleLocationMap({ lat, lng, label, scrollWheelZoom = false }) {
   const [basemap, setBasemap] = useState('satellite'); // 'map' | 'satellite'
   const hasCoords = lat != null && lng != null && !Number.isNaN(Number(lat)) && !Number.isNaN(Number(lng));
 
@@ -38,7 +38,7 @@ export default function VehicleLocationMap({ lat, lng, label }) {
       key={`${lat},${lng}`}
       center={center}
       zoom={16}
-      scrollWheelZoom={false}
+      scrollWheelZoom={scrollWheelZoom}
       className="veh-map-canvas"
       attributionControl={false}
     >

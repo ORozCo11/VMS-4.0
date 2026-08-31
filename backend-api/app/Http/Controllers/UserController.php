@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Http\Controllers\Concerns\UploadsImages;
+use App\Models\RegistrationSetting;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -17,6 +18,18 @@ class UserController extends Controller
     private function requireAdmin(Request $request): void
     {
         abort_unless($request->user()->hasRole('Admin'), 403, 'Only Admins can manage users.');
+    }
+
+    /**
+     * Cross-tenant guard for the User model, which — unlike Vehicle/Hub —
+     * deliberately does NOT carry a global scope (see BelongsToBarangay's
+     * docblock: scoping User itself recurses into Sanctum's own auth
+     * resolution). 404, not 403, so this reads the same as "no such user"
+     * rather than confirming a user with that id exists in another barangay.
+     */
+    private function requireSameBarangay(Request $request, User $target): void
+    {
+        abort_if($target->barangay_id !== $request->user()->barangay_id, 404);
     }
 
     /**
@@ -41,7 +54,7 @@ class UserController extends Controller
     {
         $this->requireAdmin($request);
 
-        $query = User::query();
+        $query = User::where('barangay_id', $request->user()->barangay_id);
 
         if ($request->filled('q')) {
             $search = $request->string('q');
@@ -80,6 +93,9 @@ class UserController extends Controller
         $data = $this->normalizeRoles($request, $data);
         $data['password'] = Hash::make($data['password']);
         $data['is_active'] = true;
+        // Always the creating Admin's own barangay — never client-supplied,
+        // so an Admin can't plant a user into a barangay they don't manage.
+        $data['barangay_id'] = $request->user()->barangay_id;
 
         if ($request->hasFile('photo')) {
             $data['photo_url'] = $this->storeUploadedImage($request->file('photo'), 'profile-photos');
@@ -94,6 +110,7 @@ class UserController extends Controller
     public function update(Request $request, User $user)
     {
         $this->requireAdmin($request);
+        $this->requireSameBarangay($request, $user);
 
         $data = $request->validate([
             'name' => ['sometimes', 'required', 'string', 'max:255'],
@@ -128,6 +145,7 @@ class UserController extends Controller
     public function deactivate(Request $request, User $user)
     {
         $this->requireAdmin($request);
+        $this->requireSameBarangay($request, $user);
         abort_if($user->id === $request->user()->id, 422, 'You cannot deactivate your own account.');
 
         $user->update(['is_active' => false]);
@@ -141,14 +159,47 @@ class UserController extends Controller
     public function activate(Request $request, User $user)
     {
         $this->requireAdmin($request);
+        $this->requireSameBarangay($request, $user);
 
-        $user->update([
+        $data = $request->validate([
+            // Only meaningful on a FIRST approval — Admin reviewing a
+            // self-registered role request can confirm it or pick a
+            // different one before it actually takes effect. Re-activating
+            // an already-approved account never needs this; the frontend
+            // only sends it the first time around.
+            'role' => ['nullable', Rule::in(self::ROLES)],
+        ]);
+
+        $update = [
             'is_active' => true,
             // Only stamp on the FIRST approval — re-activating an account
             // that was already approved before shouldn't touch it.
             'approved_at' => $user->approved_at ?? now(),
-        ]);
+        ];
+
+        if (!empty($data['role'])) {
+            $update['role'] = $data['role'];
+            $update['roles'] = [$data['role']];
+        }
+
+        $user->update($update);
 
         return response()->json(['message' => 'User activated.']);
+    }
+
+    public function registrationSettings(Request $request)
+    {
+        $this->requireAdmin($request);
+
+        return response()->json(['staff_code' => RegistrationSetting::for($request->user()->barangay_id)->staff_code]);
+    }
+
+    public function regenerateRegistrationCode(Request $request)
+    {
+        $this->requireAdmin($request);
+
+        $setting = RegistrationSetting::regenerateFor($request->user()->barangay_id);
+
+        return response()->json(['staff_code' => $setting->staff_code]);
     }
 }

@@ -2,10 +2,13 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\ScopedThroughVehicle;
 use Illuminate\Database\Eloquent\Model;
 
 class VehicleIssueReport extends Model
 {
+    use ScopedThroughVehicle;
+
     protected $primaryKey = 'issue_report_id';
 
     protected $fillable = [

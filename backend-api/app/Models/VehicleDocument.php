@@ -5,19 +5,18 @@ namespace App\Models;
 use App\Models\Concerns\ScopedThroughVehicle;
 use Illuminate\Database\Eloquent\Model;
 
-class VehicleHistory extends Model
+class VehicleDocument extends Model
 {
     use ScopedThroughVehicle;
 
-    protected $primaryKey = 'history_id';
+    protected $primaryKey = 'document_id';
 
     protected $fillable = [
         'vehicle_id',
-        'activity_type',
-        'description',
-        'related_table',
-        'related_record_id',
-        'updated_by',
+        'title',
+        'category',
+        'file_url',
+        'added_by',
     ];
 
     public function vehicle()
@@ -25,8 +24,8 @@ class VehicleHistory extends Model
         return $this->belongsTo(Vehicle::class, 'vehicle_id', 'vehicle_id');
     }
 
-    public function updatedBy()
+    public function addedBy()
     {
-        return $this->belongsTo(User::class, 'updated_by');
+        return $this->belongsTo(User::class, 'added_by');
     }
 }
