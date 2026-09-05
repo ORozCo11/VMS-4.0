@@ -1,7 +1,8 @@
-import { useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import api from '../api/axios';
 import Icon from '../components/Icon';
 import WorkspaceFooter from '../components/WorkspaceFooter';
+import ConfirmDialog from '../components/ConfirmDialog';
 import { AuthContext } from '../context/AuthContextObject';
 
 // Kept separate from every other role's landing route — a Super Admin never
@@ -21,8 +22,15 @@ const TABS = [
   ['users', 'All Users'],
   ['codes', 'Registration Codes'],
   ['impersonate', 'Impersonate'],
+  ['concerns', 'Concern Reports'],
   ['activity', 'Activity Log'],
 ];
+
+const CONCERN_TYPE_LABELS = {
+  'Barangay Inactive': "Barangay seems inactive",
+  'Suspected Fake Staff': "Suspected fake staff",
+  'Other': 'Other',
+};
 
 function UsersIcon() {
   return (
@@ -41,6 +49,7 @@ const TAB_ICONS = {
   users: <UsersIcon />,
   codes: <Icon name="key" size={18} className="nav-icon" />,
   impersonate: <Icon name="link" size={18} className="nav-icon" />,
+  concerns: <Icon name="mail" size={18} className="nav-icon" />,
   activity: <Icon name="clipboard" size={18} className="nav-icon" />,
   settings: <Icon name="key" size={18} className="nav-icon" />,
 };
@@ -269,14 +278,14 @@ function BarangaysTab({ barangays, users, onPromote }) {
 function UsersTab({ users, onChangeRole, onToggleActive }) {
   const [search, setSearch] = useState('');
 
+  // `users` here is already the Super-Admin-excluded list computed once at
+  // the parent (see `visibleUsers` in SuperAdminWorkspace) — DashboardTab
+  // consumes the same filtered list so its counts never drift from this
+  // tab's count badge.
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return users
-      .filter((u) => u.role !== 'Super Admin')
-      .filter((u) => {
-        if (!q) return true;
-        return [u.name, u.email, u.barangay_name].filter(Boolean).some((v) => v.toLowerCase().includes(q));
-      });
+    if (!q) return users;
+    return users.filter((u) => [u.name, u.email, u.barangay_name].filter(Boolean).some((v) => v.toLowerCase().includes(q)));
   }, [users, search]);
 
   const columns = [
@@ -313,34 +322,52 @@ function UsersTab({ users, onChangeRole, onToggleActive }) {
   );
 }
 
-function RegistrationCodesTab({ barangays }) {
+function RegistrationCodesTab({ barangays, onRequestConfirmation, setNotice }) {
   const [barangayId, setBarangayId] = useState('');
   const [code, setCode] = useState(null);
   const [loadingCode, setLoadingCode] = useState(false);
+  // Guards against out-of-order responses: switching barangays quickly can
+  // leave an earlier, slower request resolving after a later one — this
+  // tracks which barangay is the CURRENT request so a stale response (for a
+  // barangay we've since navigated away from) is ignored instead of
+  // clobbering what's on screen.
+  const requestedIdRef = useRef(null);
 
   const loadCode = useCallback(async (id) => {
+    requestedIdRef.current = id;
     if (!id) { setCode(null); return; }
     setLoadingCode(true);
     try {
       const res = await api.get(`/superadmin/barangays/${id}/registration-code`);
+      if (requestedIdRef.current !== id) return; // a newer request has since been made
       setCode(res.data.staff_code);
     } catch {
+      if (requestedIdRef.current !== id) return;
       setCode(null);
     } finally {
-      setLoadingCode(false);
+      if (requestedIdRef.current === id) setLoadingCode(false);
     }
   }, []);
 
-  const regenerate = async () => {
+  const regenerate = () => {
     if (!barangayId) return;
-    if (!window.confirm('Regenerate this code? The old one stops working immediately.')) return;
-    setLoadingCode(true);
-    try {
-      const res = await api.post(`/superadmin/barangays/${barangayId}/registration-code/regenerate`);
-      setCode(res.data.staff_code);
-    } finally {
-      setLoadingCode(false);
-    }
+    onRequestConfirmation({
+      title: 'Regenerate Registration Code',
+      message: 'Regenerate this code? The old one stops working immediately.',
+      confirmLabel: 'Regenerate',
+      variant: 'danger',
+      onConfirm: async () => {
+        setLoadingCode(true);
+        try {
+          const res = await api.post(`/superadmin/barangays/${barangayId}/registration-code/regenerate`);
+          setCode(res.data.staff_code);
+        } catch (error) {
+          setNotice({ type: 'error', text: error.response?.data?.message ?? 'Could not regenerate that code.' });
+        } finally {
+          setLoadingCode(false);
+        }
+      },
+    });
   };
 
   return (
@@ -431,6 +458,68 @@ function ImpersonateTab({ candidates, onImpersonate }) {
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function ConcernReportsTab({ reports, onResolve, onReopen, onDelete, onRequestConfirmation }) {
+  const [scope, setScope] = useState('open');
+  const visible = scope === 'open' ? reports.filter((r) => r.status !== 'Resolved') : reports;
+
+  const requestDelete = (report) => {
+    onRequestConfirmation({
+      title: 'Delete Concern Report',
+      message: 'Delete this concern report permanently? This cannot be undone.',
+      confirmLabel: 'Delete',
+      variant: 'danger',
+      onConfirm: () => onDelete(report),
+    });
+  };
+
+  const columns = [
+    { label: 'Type', render: (r) => CONCERN_TYPE_LABELS[r.concern_type] ?? r.concern_type },
+    { label: 'Barangay', render: (r) => r.barangay_name || '-' },
+    { label: 'Description', render: (r) => (
+      <span style={{ display: 'block', maxWidth: 340, whiteSpace: 'normal' }}>{r.description}</span>
+    ) },
+    { label: 'Reported By', render: (r) => (
+      <div>
+        <div>{r.reporter_name || 'Anonymous'}</div>
+        {r.reporter_contact && <div className="muted" style={{ fontSize: '0.76rem' }}>{r.reporter_contact}</div>}
+      </div>
+    ) },
+    { label: 'Submitted', render: (r) => formatDate(r.created_at) },
+    { label: 'Status', render: (r) => <StatusBadge value={r.status} /> },
+    { label: 'Action', render: (r) => (
+      <div style={{ display: 'flex', gap: 8 }}>
+        {r.status === 'Resolved' ? (
+          <button type="button" className="ghost-button" onClick={() => onReopen(r)}>Reopen</button>
+        ) : (
+          <button type="button" className="ghost-button" onClick={() => onResolve(r)}>Mark Resolved</button>
+        )}
+        <button type="button" className="ghost-button" onClick={() => requestDelete(r)}>Delete</button>
+      </div>
+    ) },
+  ];
+
+  return (
+    <div>
+      <div className="locations-tab-bar">
+        <button className={`locations-tab-button ${scope === 'open' ? 'active' : ''}`} onClick={() => setScope('open')} type="button">
+          <Icon name="alert" size={16} /> Open
+        </button>
+        <button className={`locations-tab-button ${scope === 'all' ? 'active' : ''}`} onClick={() => setScope('all')} type="button">
+          <Icon name="grid" size={16} /> All Reports
+        </button>
+      </div>
+      <div className="panel-header-bar">
+        <h3>Concern Reports <span className="count-badge">{visible.length}</span></h3>
+      </div>
+      <PaginatedTable
+        columns={columns}
+        rows={visible}
+        emptyMessage={scope === 'open' ? 'No open concerns — all clear.' : 'No concern reports have been submitted yet.'}
+      />
     </div>
   );
 }
@@ -531,10 +620,25 @@ export default function SuperAdminWorkspace() {
   });
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [notice, setNotice] = useState(null);
+  const [confirmDialog, setConfirmDialog] = useState(null);
+  const [confirmBusy, setConfirmBusy] = useState(false);
+  const handleConfirmDialog = async () => {
+    if (!confirmDialog?.onConfirm || confirmBusy) return;
+    setConfirmBusy(true);
+    try {
+      await confirmDialog.onConfirm();
+      setConfirmDialog(null);
+    } catch (error) {
+      setNotice({ type: 'error', text: error.response?.data?.message ?? 'Something went wrong. Please try again.' });
+    } finally {
+      setConfirmBusy(false);
+    }
+  };
 
   const [barangays, setBarangays] = useState([]);
   const [users, setUsers] = useState([]);
   const [candidates, setCandidates] = useState([]);
+  const [concernReports, setConcernReports] = useState([]);
   const [activityLog, setActivityLog] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -556,15 +660,17 @@ export default function SuperAdminWorkspace() {
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [b, u, c, a] = await Promise.all([
+      const [b, u, c, r, a] = await Promise.all([
         api.get('/superadmin/barangays'),
         api.get('/superadmin/users'),
         api.get('/impersonate/candidates'),
+        api.get('/superadmin/concern-reports'),
         api.get('/superadmin/activity-log'),
       ]);
       setBarangays(b.data);
       setUsers(u.data);
       setCandidates(c.data);
+      setConcernReports(r.data);
       setActivityLog(a.data);
     } catch {
       setNotice({ type: 'error', text: 'Could not load Super Admin data.' });
@@ -574,6 +680,12 @@ export default function SuperAdminWorkspace() {
   }, []);
 
   useEffect(() => { loadAll(); }, [loadAll]);
+
+  // Computed once here and handed to both DashboardTab and UsersTab so the
+  // "Total Users"/"Pending Registrations" counts on the dashboard can never
+  // drift from the "All Users" tab's own count badge — both read the same
+  // Super-Admin-excluded list instead of each filtering independently.
+  const visibleUsers = useMemo(() => users.filter((u) => u.role !== 'Super Admin'), [users]);
 
   const promoteToAdmin = async (target) => {
     if (!target) return;
@@ -610,13 +722,44 @@ export default function SuperAdminWorkspace() {
     }
   };
 
+  const resolveConcern = async (report) => {
+    try {
+      await api.put(`/superadmin/concern-reports/${report.id}/resolve`);
+      setNotice({ type: 'success', text: 'Concern report marked resolved.' });
+      await loadAll();
+    } catch (error) {
+      setNotice({ type: 'error', text: error.response?.data?.message ?? 'Could not update that report.' });
+    }
+  };
+
+  const reopenConcern = async (report) => {
+    try {
+      await api.put(`/superadmin/concern-reports/${report.id}/reopen`);
+      setNotice({ type: 'success', text: 'Concern report reopened.' });
+      await loadAll();
+    } catch (error) {
+      setNotice({ type: 'error', text: error.response?.data?.message ?? 'Could not update that report.' });
+    }
+  };
+
   const doImpersonate = async (userId) => {
     try {
       const res = await api.post(`/impersonate/${userId}`);
       localStorage.setItem('token', res.data.access_token);
+      sessionStorage.removeItem('token');
       window.location.assign(roleRoutes[res.data.user?.role] ?? '/admin');
-    } catch {
-      setNotice({ type: 'error', text: 'Could not impersonate that account.' });
+    } catch (error) {
+      setNotice({ type: 'error', text: error.response?.data?.message ?? 'Could not impersonate that account.' });
+    }
+  };
+
+  const deleteConcern = async (report) => {
+    try {
+      await api.delete(`/superadmin/concern-reports/${report.id}`);
+      setNotice({ type: 'success', text: 'Concern report deleted.' });
+      await loadAll();
+    } catch (error) {
+      setNotice({ type: 'error', text: error.response?.data?.message ?? 'Could not delete that report.' });
     }
   };
 
@@ -721,15 +864,17 @@ export default function SuperAdminWorkspace() {
             {loading ? (
               <p className="muted">Loading…</p>
             ) : activeTab === 'dashboard' ? (
-              <DashboardTab barangays={barangays} users={users} />
+              <DashboardTab barangays={barangays} users={visibleUsers} />
             ) : activeTab === 'barangays' ? (
               <BarangaysTab barangays={barangays} users={users} onPromote={promoteToAdmin} />
             ) : activeTab === 'users' ? (
-              <UsersTab users={users} onChangeRole={changeRole} onToggleActive={toggleActive} />
+              <UsersTab users={visibleUsers} onChangeRole={changeRole} onToggleActive={toggleActive} />
             ) : activeTab === 'codes' ? (
-              <RegistrationCodesTab barangays={barangays} />
+              <RegistrationCodesTab barangays={barangays} onRequestConfirmation={setConfirmDialog} setNotice={setNotice} />
             ) : activeTab === 'impersonate' ? (
               <ImpersonateTab candidates={candidates} onImpersonate={doImpersonate} />
+            ) : activeTab === 'concerns' ? (
+              <ConcernReportsTab reports={concernReports} onResolve={resolveConcern} onReopen={reopenConcern} onDelete={deleteConcern} onRequestConfirmation={setConfirmDialog} />
             ) : activeTab === 'activity' ? (
               <ActivityLogTab entries={activityLog} />
             ) : (
@@ -740,6 +885,12 @@ export default function SuperAdminWorkspace() {
       </main>
 
       <WorkspaceFooter />
+      <ConfirmDialog
+        busy={confirmBusy}
+        dialog={confirmDialog}
+        onCancel={() => setConfirmDialog(null)}
+        onConfirm={handleConfirmDialog}
+      />
     </>
   );
 }

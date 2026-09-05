@@ -1,5 +1,5 @@
 import { useContext, useState } from 'react';
-import { Link, Navigate, useNavigate } from 'react-router-dom';
+import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import api from '../api/axios';
 import Icon from '../components/Icon';
 import Aurora from '../components/Aurora';
@@ -16,6 +16,7 @@ const roleRoutes = {
 
 function Login() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { login, token, user } = useContext(AuthContext);
   const [credentials, setCredentials] = useState({
     email: '',
@@ -40,6 +41,7 @@ function Login() {
 
   const handleSubmit = async (event) => {
     event.preventDefault();
+    if (submitting) return;
     setError('');
 
     if (!credentials.email || !credentials.password) {
@@ -54,7 +56,14 @@ function Login() {
       const { user: authenticatedUser, access_token: accessToken } = response.data;
 
       login(authenticatedUser, accessToken, rememberMe);
-      navigate(roleRoutes[authenticatedUser.role] ?? '/unauthorized', { replace: true });
+      // Return to wherever ProtectedRoute bounced them from, if anywhere —
+      // only unauthenticated redirects land here with `from` set, so this
+      // can never send someone to a page their role doesn't allow (a wrong
+      // role goes to /unauthorized instead, not back through /login).
+      const destination = location.state?.from
+        ? `${location.state.from.pathname}${location.state.from.search ?? ''}`
+        : (roleRoutes[authenticatedUser.role] ?? '/unauthorized');
+      navigate(destination, { replace: true });
     } catch (requestError) {
       setError(
         requestError.response?.data?.message ??

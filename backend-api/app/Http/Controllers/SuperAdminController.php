@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\ActivityLog;
 use App\Models\Barangay;
+use App\Models\ConcernReport;
 use App\Models\RegistrationSetting;
 use App\Models\User;
 use Illuminate\Http\Request;
@@ -22,6 +23,20 @@ use Illuminate\Validation\Rule;
 class SuperAdminController extends Controller
 {
     private const ROLES = ['Admin', 'Custodian', 'Maintenance Personnel'];
+
+    /**
+     * `activity_logs.module` values that represent account/administrative-
+     * level activity — the only entries activityLog() may return, per this
+     * class's docblock. Every other module string in that table is fleet-
+     * operational detail logged by FleetController/TicketController for a
+     * barangay's own Admin audit trail (e.g. 'Vehicle Management', 'Vehicle
+     * Maintenance Records', 'Vehicle Maintenance Schedule', 'Vehicle
+     * Condition Monitoring', 'Vehicle Issue Reports', 'Vehicle Documents',
+     * 'Vehicle Categories', 'Reports', 'Maintenance Tickets') and must never
+     * surface here. Using an allowlist (rather than excluding fleet modules
+     * by name) means a newly added fleet module is excluded by default.
+     */
+    private const ACCOUNT_MODULES = ['Super Admin', 'Dev Tools', 'Profile'];
 
     private function requireSuperAdmin(Request $request): void
     {
@@ -121,6 +136,8 @@ class SuperAdminController extends Controller
     public function updateUserRole(Request $request, User $user)
     {
         $this->requireSuperAdmin($request);
+        abort_if($user->id === $request->user()->id, 422, 'You cannot change your own role.');
+        abort_if($user->hasRole('Super Admin'), 422, 'Super Admin roles cannot be changed through this endpoint.');
 
         $data = $request->validate([
             'role' => ['required', Rule::in(self::ROLES)],
@@ -154,11 +171,74 @@ class SuperAdminController extends Controller
      * query when the VIEWER has a barangay_id, which a Super Admin never
      * does. Every barangay's own Admin still only ever sees their own
      * barangay's entries through the same model, unchanged.
+     *
+     * Restricted to ACCOUNT_MODULES so fleet-detail entries (vehicles,
+     * tickets, maintenance, etc.) logged by FleetController/TicketController
+     * never leak through this endpoint — see this class's docblock.
      */
     public function activityLog(Request $request)
     {
         $this->requireSuperAdmin($request);
 
-        return ActivityLog::with('user')->latest('log_id')->limit(200)->get();
+        return ActivityLog::with('user')
+            ->whereIn('module', self::ACCOUNT_MODULES)
+            ->latest('log_id')
+            ->limit(200)
+            ->get();
+    }
+
+    /**
+     * Public "Report a Concern" submissions from the Support Center page —
+     * a barangay that looks unmanaged, or a suspected fake-staff account.
+     * This is the inbox that closes the loop: the Super Admin reads a
+     * report here, then acts using the tools above (promote/recover a
+     * barangay, deactivate a suspicious account) and marks it resolved.
+     */
+    public function concernReports(Request $request)
+    {
+        $this->requireSuperAdmin($request);
+
+        return ConcernReport::with('resolvedBy')->latest('id')->get();
+    }
+
+    public function resolveConcernReport(Request $request, ConcernReport $concernReport)
+    {
+        $this->requireSuperAdmin($request);
+
+        $concernReport->update([
+            'status' => 'Resolved',
+            'resolved_by' => $request->user()->id,
+            'resolved_at' => now(),
+        ]);
+        $this->log($request, 'Edit', "Marked concern report #{$concernReport->id} resolved.");
+
+        return $concernReport->fresh('resolvedBy');
+    }
+
+    public function reopenConcernReport(Request $request, ConcernReport $concernReport)
+    {
+        $this->requireSuperAdmin($request);
+
+        $concernReport->update(['status' => 'Open', 'resolved_by' => null, 'resolved_at' => null]);
+        $this->log($request, 'Edit', "Reopened concern report #{$concernReport->id}.");
+
+        return $concernReport->fresh();
+    }
+
+    /**
+     * Permanently removes a concern report — the only way to clear out
+     * obvious spam, since resolve/reopen only ever toggle status and never
+     * delete. Submission is already rate-limited (see /concern-reports in
+     * routes/api.php); this is the cleanup side of that.
+     */
+    public function destroyConcernReport(Request $request, ConcernReport $concernReport)
+    {
+        $this->requireSuperAdmin($request);
+
+        $id = $concernReport->id;
+        $concernReport->delete();
+        $this->log($request, 'Delete', "Deleted concern report #{$id}.");
+
+        return response()->json(['message' => 'Concern report deleted.']);
     }
 }

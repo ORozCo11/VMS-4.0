@@ -24,7 +24,18 @@ class MaintenanceType extends Model
 
         $existing = static::whereRaw('LOWER(name) = ?', [mb_strtolower($name)])->first();
 
-        return $existing ?: static::create(['name' => $name]);
+        if ($existing) {
+            return $existing;
+        }
+
+        try {
+            return static::create(['name' => $name]);
+        } catch (\Illuminate\Database\QueryException $e) {
+            // Another request created the same type between our lookup and
+            // our insert — use theirs instead of throwing a 500.
+            return static::whereRaw('LOWER(name) = ?', [mb_strtolower($name)])
+                ->firstOr(fn () => throw $e);
+        }
     }
 
     /** Same lookup, but just the canonical name — for callers that only

@@ -68,4 +68,83 @@ class AccountDeactivationTest extends TestCase
             'password' => 'secret123',
         ])->assertStatus(403);
     }
+
+    /**
+     * Same self-lockout family as the deactivation guards above, but for
+     * stripping one's own "Admin" role via UserController::update() — the
+     * normal Users-management form, not deactivate(). A sole barangay Admin
+     * unchecking their own Admin box there would lock themselves (and the
+     * whole barangay) out of user management with no other way back in.
+     */
+    #[Test]
+    public function an_admin_cannot_remove_their_own_admin_role_via_roles_array(): void
+    {
+        $admin = User::factory()->create(['role' => 'Admin', 'roles' => ['Admin']]);
+
+        Sanctum::actingAs($admin, ['*']);
+        $this->putJson("/api/users/{$admin->id}", [
+            'roles' => ['Custodian'],
+        ])->assertStatus(422);
+
+        $this->assertTrue($admin->fresh()->hasRole('Admin'));
+    }
+
+    #[Test]
+    public function an_admin_cannot_remove_their_own_admin_role_via_single_role_field(): void
+    {
+        $admin = User::factory()->create(['role' => 'Admin', 'roles' => ['Admin']]);
+
+        Sanctum::actingAs($admin, ['*']);
+        $this->putJson("/api/users/{$admin->id}", [
+            'role' => 'Maintenance Personnel',
+        ])->assertStatus(422);
+
+        $this->assertTrue($admin->fresh()->hasRole('Admin'));
+    }
+
+    #[Test]
+    public function an_admin_can_still_edit_their_own_other_fields_while_keeping_admin(): void
+    {
+        $admin = User::factory()->create(['role' => 'Admin', 'roles' => ['Admin']]);
+
+        Sanctum::actingAs($admin, ['*']);
+        $this->putJson("/api/users/{$admin->id}", [
+            'name' => 'Updated Name',
+            'roles' => ['Admin', 'Custodian'],
+        ])->assertOk();
+
+        $this->assertSame('Updated Name', $admin->fresh()->name);
+        $this->assertTrue($admin->fresh()->hasRole('Admin'));
+    }
+
+    /**
+     * Same self-lockout gap, one tier up: SuperAdminController::updateUserRole()
+     * previously had no guard at all, unlike deactivateUser() right above it.
+     */
+    #[Test]
+    public function a_super_admin_cannot_change_their_own_role(): void
+    {
+        $superAdmin = User::factory()->create(['role' => 'Super Admin', 'roles' => ['Super Admin']]);
+
+        Sanctum::actingAs($superAdmin, ['*']);
+        $this->putJson("/api/superadmin/users/{$superAdmin->id}/role", [
+            'role' => 'Admin',
+        ])->assertStatus(422);
+
+        $this->assertTrue($superAdmin->fresh()->hasRole('Super Admin'));
+    }
+
+    #[Test]
+    public function a_super_admin_cannot_change_another_super_admins_role(): void
+    {
+        $superAdmin = User::factory()->create(['role' => 'Super Admin', 'roles' => ['Super Admin']]);
+        $otherSuperAdmin = User::factory()->create(['role' => 'Super Admin', 'roles' => ['Super Admin']]);
+
+        Sanctum::actingAs($superAdmin, ['*']);
+        $this->putJson("/api/superadmin/users/{$otherSuperAdmin->id}/role", [
+            'role' => 'Admin',
+        ])->assertStatus(422);
+
+        $this->assertTrue($otherSuperAdmin->fresh()->hasRole('Super Admin'));
+    }
 }

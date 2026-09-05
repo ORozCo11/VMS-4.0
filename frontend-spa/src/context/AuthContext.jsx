@@ -24,10 +24,10 @@ export const AuthProvider = ({ children }) => {
     const checkUserSession = async () => {
       if (token) {
         try {
-          const response = await api.get('/user'); 
+          const response = await api.get('/user');
           setUser(response.data);
         } catch {
-          logout(); 
+          logout();
         }
       }
       setLoading(false);

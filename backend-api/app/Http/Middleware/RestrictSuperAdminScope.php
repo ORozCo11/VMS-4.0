@@ -20,7 +20,7 @@ use Symfony\Component\HttpFoundation\Response;
 class RestrictSuperAdminScope
 {
     private const ALLOWED_PREFIXES = ['superadmin', 'impersonate'];
-    private const ALLOWED_EXACT = ['logout', 'user', 'profile/password'];
+    private const ALLOWED_EXACT = ['logout', 'user', 'profile', 'profile/password', 'greeting'];
 
     public function handle(Request $request, Closure $next): Response
     {

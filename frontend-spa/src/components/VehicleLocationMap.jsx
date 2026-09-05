@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { MapContainer, Marker, TileLayer, Tooltip } from 'react-leaflet';
+import { useEffect, useState } from 'react';
+import { MapContainer, Marker, TileLayer, Tooltip, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
@@ -23,6 +23,30 @@ const vehiclePin = L.divIcon({
   tooltipAnchor: [0, -38],
 });
 
+// This map has no other resize handling — it only gets sized correctly on
+// mount/coordinate change via the `key`-based remount below. A ResizeObserver
+// on the map's own container catches every other layout-driven resize (e.g.
+// a collapsing sidebar widening the panel this map sits in) and tells
+// Leaflet to recalculate its tile layout so the map doesn't render into a
+// stale, wrongly-sized canvas.
+function ResizeMapOnContainerResize() {
+  const map = useMap();
+
+  useEffect(() => {
+    const container = map.getContainer();
+    if (!container || typeof ResizeObserver === 'undefined') return undefined;
+
+    const observer = new ResizeObserver(() => {
+      map.invalidateSize();
+    });
+    observer.observe(container);
+
+    return () => observer.disconnect();
+  }, [map]);
+
+  return null;
+}
+
 export default function VehicleLocationMap({ lat, lng, label, scrollWheelZoom = false }) {
   const [basemap, setBasemap] = useState('satellite'); // 'map' | 'satellite'
   const hasCoords = lat != null && lng != null && !Number.isNaN(Number(lat)) && !Number.isNaN(Number(lng));
@@ -42,6 +66,7 @@ export default function VehicleLocationMap({ lat, lng, label, scrollWheelZoom = 
       className="veh-map-canvas"
       attributionControl={false}
     >
+      <ResizeMapOnContainerResize />
       {basemap === 'satellite' ? (
         <>
           <TileLayer url={ESRI_IMAGERY_URL} attribution={ESRI_ATTRIBUTION} maxZoom={19} />

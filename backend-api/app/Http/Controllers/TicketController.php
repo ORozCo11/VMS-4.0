@@ -12,6 +12,7 @@ use App\Models\TicketArchiveLog;
 use App\Models\TicketSubIssue;
 use App\Models\User;
 use App\Models\Vehicle;
+use App\Models\VehicleConditionCheck;
 use App\Models\VehicleIssueReport;
 use App\Models\VehicleMaintenanceRecord;
 use Illuminate\Http\Request;
@@ -162,6 +163,7 @@ class TicketController extends Controller
         $data = $request->validate([
             'vehicle_id'            => ['required', 'exists:vehicles,vehicle_id'],
             'issue_report_id'       => ['nullable', 'exists:vehicle_issue_reports,issue_report_id'],
+            'condition_check_id'    => ['nullable', 'exists:vehicle_condition_checks,condition_check_id'],
             'ticket_title'          => ['required', 'string', 'max:255'],
             'fault_category'        => ['nullable', 'string', 'max:150'],
             'ticket_description'    => ['required', 'string'],
@@ -204,11 +206,10 @@ class TicketController extends Controller
             'Cannot open a ticket on an archived or decommissioned vehicle.'
         );
 
-        // A brand-new ticket is only blocked when an open ticket for the
-        // SAME Main Issue already exists on this vehicle — a different
-        // Main Issue (or a Closed/Cancelled ticket for the same one) is
-        // always allowed to open as its own ticket. Compared after
-        // normalizing away any "[Issue #N] " prefix (see normalizeTicketTitle).
+        // The "no duplicate open Main Issue on this vehicle" check happens
+        // again, for real, inside the transaction below under a row lock —
+        // this is just a fast, friendly precheck so the common case gets an
+        // immediate, well-formed error without waiting on a lock.
         $normalizedIncomingTitle = $this->normalizeTicketTitle($data['ticket_title']);
         $duplicateMainIssue = MaintenanceTicket::where('vehicle_id', $data['vehicle_id'])
             ->whereNotIn('status', ['Closed', 'Cancelled'])
@@ -241,8 +242,25 @@ class TicketController extends Controller
         $recurrenceInfo = $this->checkRecurrence((int) $data['vehicle_id'], $faultCategory, $data['ticket_title']);
         $recurrence = $recurrenceInfo['count'];
 
-        $ticket = DB::transaction(function () use ($data, $request, $recurrence, $recurrenceInfo, $preDiagnosed, $faultCategory) {
-            $vehicle = Vehicle::findOrFail($data['vehicle_id']);
+        $ticket = DB::transaction(function () use ($data, $request, $recurrence, $recurrenceInfo, $preDiagnosed, $faultCategory, $normalizedIncomingTitle) {
+            // Lock the vehicle row first — serializes concurrent createTicket
+            // calls for the SAME vehicle so two requests can't both pass the
+            // "no duplicate Main Issue" check before either has inserted.
+            // Same TOCTOU class, same fix, as AuthController::register()'s
+            // Barangay lock: registrations/tickets for a DIFFERENT vehicle
+            // lock a different row and proceed independently.
+            $vehicle = Vehicle::where('vehicle_id', $data['vehicle_id'])->lockForUpdate()->first();
+
+            $duplicateMainIssue = MaintenanceTicket::where('vehicle_id', $data['vehicle_id'])
+                ->whereNotIn('status', ['Closed', 'Cancelled'])
+                ->get(['ticket_id', 'ticket_title'])
+                ->first(fn ($t) => $this->normalizeTicketTitle($t->ticket_title) === $normalizedIncomingTitle);
+
+            abort_if(
+                $duplicateMainIssue,
+                422,
+                "This vehicle already has an open ticket for \"{$data['ticket_title']}\" (Ticket #{$duplicateMainIssue?->ticket_id}). Add this as a sub-issue on that ticket instead of opening a new one."
+            );
 
             $ticket = MaintenanceTicket::create([
                 'vehicle_id'            => $data['vehicle_id'],
@@ -295,6 +313,15 @@ class TicketController extends Controller
             if (!empty($data['issue_report_id'])) {
                 VehicleIssueReport::where('issue_report_id', $data['issue_report_id'])->update([
                     'status' => 'In Maintenance',
+                ]);
+            }
+
+            // Set once, never touched again — Condition Monitoring reads the
+            // linked ticket's live status through this instead of a snapshot,
+            // so the historical check row itself never has to change.
+            if (!empty($data['condition_check_id'])) {
+                VehicleConditionCheck::where('condition_check_id', $data['condition_check_id'])->update([
+                    'resulting_ticket_id' => $ticket->ticket_id,
                 ]);
             }
 
@@ -509,6 +536,11 @@ class TicketController extends Controller
         abort_unless($mechanic->barangay_id === $ticket->vehicle->barangay_id, 422, 'The selected mechanic does not belong to this barangay.');
 
         DB::transaction(function () use ($ticket, $subIssue, $data, $request) {
+            // Lock the sub-issue row for the duration of this assignment so
+            // two concurrent work-order dispatches on the same sub-issue
+            // serialize instead of racing.
+            TicketSubIssue::where('sub_issue_id', $subIssue->sub_issue_id)->lockForUpdate()->first();
+
             $subIssue->update([
                 'status'               => 'Under Repair',
                 'assigned_mechanic_id' => $data['assigned_mechanic_id'],
@@ -791,6 +823,11 @@ class TicketController extends Controller
         }
 
         DB::transaction(function () use ($ticket, $subIssue, $data, $request, $approved) {
+            // Lock the sub-issue row for the duration of this verification
+            // so it can't race a concurrent verify/confirm on the same
+            // sub-issue.
+            TicketSubIssue::where('sub_issue_id', $subIssue->sub_issue_id)->lockForUpdate()->first();
+
             $subIssue->update([
                 'status'               => $approved ? 'For Confirmation' : 'Under Repair',
                 'verification_verdict' => $data['verification_verdict'],
@@ -846,46 +883,16 @@ class TicketController extends Controller
         ]);
 
         DB::transaction(function () use ($ticket, $subIssue, $data, $request) {
+            // Lock the sub-issue row for the duration of this confirmation
+            // so it can't race a concurrent confirm/reopen on the same
+            // sub-issue (e.g. closeTicket() finalizing it at the same time).
+            TicketSubIssue::where('sub_issue_id', $subIssue->sub_issue_id)->lockForUpdate()->first();
+
             $confirmed = $data['confirmation_verdict'] === 'Confirmed';
             $vehicleName = $ticket->vehicle->vehicle_name;
 
             if ($confirmed) {
-                $subIssue->update([
-                    'status'               => 'Done',
-                    'confirmation_verdict' => 'Confirmed',
-                    'confirmation_notes'   => $data['confirmation_notes'] ?? null,
-                    'confirmed_by'         => $request->user()->id,
-                    'confirmed_at'         => now(),
-                ]);
-
-                if ($subIssue->issue_report_id) {
-                    VehicleIssueReport::where('issue_report_id', $subIssue->issue_report_id)->update(['status' => 'Resolved']);
-                }
-
-                // Unify ledger: every confirmed sub-issue is a line in the
-                // single complete maintenance history, same as before.
-                if ($subIssue->assigned_mechanic_id) {
-                    VehicleMaintenanceRecord::create([
-                        'vehicle_id'               => $ticket->vehicle_id,
-                        'issue_report_id'          => $subIssue->issue_report_id,
-                        'maintenance_type'         => $subIssue->maintenance_type ?? 'Repair',
-                        'problem_reason'           => $ticket->ticket_title . ': ' . $subIssue->title,
-                        'date_started'             => $subIssue->repair_started_at,
-                        'date_completed'           => $subIssue->repair_completed_at ?? now()->toDateString(),
-                        'maintenance_personnel_id' => $subIssue->assigned_mechanic_id,
-                        'action_taken'             => $subIssue->repair_logs ?? 'No logs provided.',
-                        'parts_used'               => $subIssue->parts_used,
-                        'maintenance_cost'         => $subIssue->maintenance_cost,
-                        'progress_status'          => 'Completed',
-                        'remarks'                  => $subIssue->confirmation_notes ?? "Confirmed through Ticket #{$ticket->ticket_id}",
-                        'verification_result'      => 'Passed',
-                        'verification_notes'       => $subIssue->verification_notes,
-                        'verified_by'              => $subIssue->verified_by,
-                        'verified_at'              => $subIssue->verified_at,
-                        'confirmed_by'             => $subIssue->confirmed_by,
-                        'confirmed_at'             => $subIssue->confirmed_at,
-                    ]);
-                }
+                $this->finalizeConfirmedSubIssue($ticket, $subIssue, $request->user()->id, $data['confirmation_notes'] ?? null);
 
                 $progress = $ticket->fresh()->progress;
                 $this->log($request, 'Sub-Issue Confirmed', "Ticket #{$ticket->ticket_id} — sub-issue \"{$subIssue->title}\" confirmed Done. Progress {$progress['done']}/{$progress['total']}.");
@@ -953,17 +960,27 @@ class TicketController extends Controller
 
         DB::transaction(function () use ($ticket, $subIssue, $data, $request) {
             $subIssue->update([
-                'status'               => 'For Inspection',
-                'verification_verdict' => null,
-                'verification_notes'   => null,
-                'verified_by'          => null,
-                'verified_at'          => null,
-                'confirmation_verdict' => null,
-                'confirmation_notes'   => $data['reopen_reason'] ?? null,
-                'confirmed_by'         => null,
-                'confirmed_at'         => null,
-                'reopened_by'          => $request->user()->id,
-                'reopened_at'          => now(),
+                'status'                   => 'For Inspection',
+                // Re-stamp to the ticket's CURRENT custodian — not whoever
+                // was custodian back when this sub-issue first reached
+                // Done. Without this, a custodian reassigned off the
+                // ticket while a sub-issue sat Done/Confirmed leaves that
+                // stale id here, and verifyRepair() checks only against
+                // verification_assigned_to, so the real current custodian
+                // gets blocked from re-verifying (see reassignCustodian(),
+                // which cascades the same field for pending 'For
+                // Inspection' sub-issues at reassignment time).
+                'verification_assigned_to' => $ticket->assigned_custodian_id,
+                'verification_verdict'     => null,
+                'verification_notes'       => null,
+                'verified_by'              => null,
+                'verified_at'              => null,
+                'confirmation_verdict'     => null,
+                'confirmation_notes'       => $data['reopen_reason'] ?? null,
+                'confirmed_by'             => null,
+                'confirmed_at'             => null,
+                'reopened_by'              => $request->user()->id,
+                'reopened_at'              => now(),
             ]);
 
             $this->log($request, 'Confirmed Sub-Issue Reopened', "Ticket #{$ticket->ticket_id} — sub-issue \"{$subIssue->title}\" reopened by Admin. Reason: {$data['reopen_reason']}");
@@ -1006,8 +1023,18 @@ class TicketController extends Controller
         // unfinished (not Done, not already Deferred). The Admin is choosing
         // to end the ticket anyway — so the leftovers become Deferred, and
         // the Admin must justify it AND make the fit-for-service call.
+        //
+        // A sub-issue already sitting at For Confirmation is NOT part of
+        // that "unfinished" bucket: the Custodian already ran the
+        // functional test and Approved it (that's the only way to reach
+        // this status — see verifyRepair()), so there's nothing left to
+        // decide. Closing the ticket finalizes it exactly like an Admin
+        // hitting "Confirm" would — see finalizeConfirmedSubIssue(). Only
+        // genuinely open/in-progress sub-issues get deferred.
         $unresolved = $ticket->unresolvedSubIssues();
-        $isDecisionClose = $unresolved->isNotEmpty();
+        $toFinalize = $unresolved->filter(fn ($s) => $s->status === 'For Confirmation');
+        $toDefer = $unresolved->reject(fn ($s) => $s->status === 'For Confirmation');
+        $isDecisionClose = $toDefer->isNotEmpty();
 
         if ($isDecisionClose) {
             abort_if(
@@ -1027,13 +1054,26 @@ class TicketController extends Controller
         // Admin's explicit fit-for-service answer.
         $returnToService = $isDecisionClose ? (bool) $data['returned_to_service'] : true;
 
-        DB::transaction(function () use ($ticket, $data, $request, $unresolved, $returnToService, $isDecisionClose) {
+        DB::transaction(function () use ($ticket, $data, $request, $toDefer, $toFinalize, $returnToService, $isDecisionClose) {
+            // Lock the ticket row for the duration of this close so a
+            // concurrent action on the same ticket (another close, a
+            // confirm, a defer) serializes behind this one instead of
+            // racing it.
+            MaintenanceTicket::where('ticket_id', $ticket->ticket_id)->lockForUpdate()->first();
+
             $vehicleName = $ticket->vehicle->vehicle_name;
 
-            // Sweep every still-unfinished sub-issue into Deferred, each with
-            // the shared reason and its own forget-me-not breadcrumb.
+            // Already-verified-and-approved sub-issues finalize exactly like
+            // an explicit Confirm would — see the comment above.
+            foreach ($toFinalize as $subIssue) {
+                $this->finalizeConfirmedSubIssue($ticket, $subIssue, $request->user()->id, $data['closing_notes'] ?? null);
+            }
+
+            // Sweep every still-unfinished (and non-confirmable) sub-issue
+            // into Deferred, each with the shared reason and its own
+            // forget-me-not breadcrumb.
             $deferredReportIds = [];
-            foreach ($unresolved as $subIssue) {
+            foreach ($toDefer as $subIssue) {
                 $rid = $this->deferOneSubIssue($ticket, $subIssue, $data['deferral_reason'], $request->user()->id);
                 if ($rid) {
                     $deferredReportIds[] = $rid;
@@ -1143,6 +1183,16 @@ class TicketController extends Controller
         $this->requireRole($request, ['Admin']);
 
         abort_unless(!in_array($ticket->status, ['Closed', 'Cancelled'], true), 422, 'This ticket is already closed and cannot be cancelled.');
+
+        // Every sub-issue already resolved (fixed or deferred) — this is
+        // real, confirmed repair work on record, not something to void.
+        // Close it instead; cancel is for abandoning a ticket, not for
+        // discarding finished work.
+        abort_if(
+            $ticket->subIssues->isNotEmpty() && $ticket->unresolvedSubIssues()->isEmpty(),
+            422,
+            'This ticket\'s repairs are already complete — close it instead of cancelling.'
+        );
 
         $data = $request->validate([
             'closing_notes' => ['nullable', 'string'],
@@ -1331,6 +1381,54 @@ class TicketController extends Controller
                 'status'                => 'Available',
                 'condition'             => 'Good',
                 'estimated_return_date' => null,
+            ]);
+        }
+    }
+
+    /**
+     * Shared "Confirmed" finalization for a sub-issue — marks it Done,
+     * resolves its linked Issue Report, and writes the permanent
+     * VehicleMaintenanceRecord ledger line. Used by confirmSubIssue()'s
+     * Confirmed branch AND by closeTicket(), which must finalize (not
+     * defer) a sub-issue that's already sitting at For Confirmation with
+     * an Approved verdict when the ticket is closed.
+     */
+    private function finalizeConfirmedSubIssue(MaintenanceTicket $ticket, TicketSubIssue $subIssue, int $userId, ?string $confirmationNotes = null): void
+    {
+        $subIssue->update([
+            'status'               => 'Done',
+            'confirmation_verdict' => 'Confirmed',
+            'confirmation_notes'   => $confirmationNotes,
+            'confirmed_by'         => $userId,
+            'confirmed_at'         => now(),
+        ]);
+
+        if ($subIssue->issue_report_id) {
+            VehicleIssueReport::where('issue_report_id', $subIssue->issue_report_id)->update(['status' => 'Resolved']);
+        }
+
+        // Unify ledger: every confirmed sub-issue is a line in the
+        // single complete maintenance history, same as before.
+        if ($subIssue->assigned_mechanic_id) {
+            VehicleMaintenanceRecord::create([
+                'vehicle_id'               => $ticket->vehicle_id,
+                'issue_report_id'          => $subIssue->issue_report_id,
+                'maintenance_type'         => $subIssue->maintenance_type ?? 'Repair',
+                'problem_reason'           => $ticket->ticket_title . ': ' . $subIssue->title,
+                'date_started'             => $subIssue->repair_started_at,
+                'date_completed'           => $subIssue->repair_completed_at ?? now()->toDateString(),
+                'maintenance_personnel_id' => $subIssue->assigned_mechanic_id,
+                'action_taken'             => $subIssue->repair_logs ?? 'No logs provided.',
+                'parts_used'               => $subIssue->parts_used,
+                'maintenance_cost'         => $subIssue->maintenance_cost,
+                'progress_status'          => 'Completed',
+                'remarks'                  => $subIssue->confirmation_notes ?? "Confirmed through Ticket #{$ticket->ticket_id}",
+                'verification_result'      => 'Passed',
+                'verification_notes'       => $subIssue->verification_notes,
+                'verified_by'              => $subIssue->verified_by,
+                'verified_at'              => $subIssue->verified_at,
+                'confirmed_by'             => $subIssue->confirmed_by,
+                'confirmed_at'             => $subIssue->confirmed_at,
             ]);
         }
     }

@@ -8,6 +8,7 @@ use App\Models\TicketSubIssue;
 use App\Models\User;
 use App\Models\Vehicle;
 use App\Models\VehicleCategory;
+use App\Models\VehicleConditionCheck;
 use App\Models\VehicleIssueReport;
 use App\Models\VehicleMaintenanceRecord;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -610,6 +611,101 @@ class TicketWorkflowTest extends TestCase
     }
 
     #[Test]
+    public function closing_a_ticket_finalizes_an_approved_awaiting_confirmation_sub_issue_instead_of_deferring_it(): void
+    {
+        // Regression for: closeTicket() used to sweep EVERY unresolved
+        // sub-issue into Deferred, including one that was already
+        // repaired and Custodian-Approved (sitting at For Confirmation) —
+        // silently discarding a verified repair the Admin just hadn't
+        // gotten around to clicking "Confirm" on. It must be finalized
+        // (Done/Confirmed, with a maintenance record) instead.
+        $vehicle = $this->vehicle();
+        $ticket = $this->createTicket($vehicle);
+        $ticket = $this->inspectWithSubIssues($ticket, ['Low coolant level', 'Faulty radiator']);
+        [$coolant, $radiator] = $ticket->subIssues;
+
+        // First sub-issue goes all the way to Done (fully confirmed).
+        $this->driveSubIssueToDone($ticket, $coolant);
+
+        // Second sub-issue is repaired and Custodian-approved, but never
+        // explicitly Confirmed by the Admin before the ticket is closed.
+        $this->driveSubIssueToInspection($ticket, $radiator);
+
+        Sanctum::actingAs($this->custodian, ['*']);
+        $this->putJson("/api/tickets/{$ticket->ticket_id}/sub-issues/{$radiator->sub_issue_id}/verify", [
+            'verification_verdict' => 'Approved',
+            'test_attested'        => true,
+            'functional_test'      => [
+                ['item' => 'Engine starts / powers on', 'passed' => true],
+            ],
+        ])->assertOk();
+        $this->assertSame('For Confirmation', $radiator->fresh()->status);
+
+        // Nothing is genuinely unfinished, so this is NOT a decision-close —
+        // no deferral_reason/returned_to_service should be required.
+        Sanctum::actingAs($this->admin, ['*']);
+        $this->putJson("/api/tickets/{$ticket->ticket_id}/close", [])->assertOk();
+
+        $fresh = $radiator->fresh();
+        $this->assertSame('Done', $fresh->status);
+        $this->assertSame('Confirmed', $fresh->confirmation_verdict);
+        $this->assertNotNull($fresh->confirmed_at);
+
+        $this->assertSame('Closed', $ticket->fresh()->status);
+        $this->assertSame(['done' => 2, 'deferred' => 0, 'total' => 2], $ticket->fresh()->progress);
+        $this->assertSame(2, VehicleMaintenanceRecord::where('vehicle_id', $vehicle->vehicle_id)->where('progress_status', 'Completed')->count());
+    }
+
+    #[Test]
+    public function reopening_a_confirmed_sub_issue_re_stamps_verification_to_the_current_custodian(): void
+    {
+        // Regression for: reopenConfirmedSubIssue() cleared the verification
+        // fields but never re-pointed verification_assigned_to at the
+        // ticket's CURRENT custodian. If the custodian was reassigned while
+        // this sub-issue was already Done (reassignCustodian only cascades
+        // sub-issues currently For Inspection), reopening it for
+        // re-verification left the stale former custodian's id in place —
+        // and verifyRepair() checks only that exact id, blocking the real
+        // current custodian.
+        $vehicle = $this->vehicle();
+        $ticket = $this->createTicket($vehicle);
+        $ticket = $this->inspectWithSubIssues($ticket, ['Low coolant level']);
+        $subIssue = $ticket->subIssues->first();
+
+        $this->driveSubIssueToDone($ticket, $subIssue);
+        $this->assertSame('Done', $subIssue->fresh()->status);
+        $this->assertSame($this->custodian->id, $subIssue->fresh()->verification_assigned_to);
+
+        // Reassign the ticket's Custodian AFTER this sub-issue is already
+        // Done — it is deliberately left stamped with the old custodian.
+        $newCustodian = User::factory()->create(['role' => 'Custodian']);
+        Sanctum::actingAs($this->admin, ['*']);
+        $this->putJson("/api/tickets/{$ticket->ticket_id}/reassign-custodian", [
+            'assigned_custodian_id' => $newCustodian->id,
+            'reassign_reason'       => 'Original custodian left the barangay.',
+        ])->assertOk();
+        $this->assertSame($this->custodian->id, $subIssue->fresh()->verification_assigned_to);
+
+        $this->putJson("/api/tickets/{$ticket->ticket_id}/sub-issues/{$subIssue->sub_issue_id}/reopen-confirmed", [
+            'reopen_reason' => 'Found a leak after all.',
+        ])->assertOk();
+
+        $fresh = $subIssue->fresh();
+        $this->assertSame('For Inspection', $fresh->status);
+        $this->assertSame($newCustodian->id, $fresh->verification_assigned_to);
+
+        // The current custodian can now actually verify it.
+        Sanctum::actingAs($newCustodian, ['*']);
+        $this->putJson("/api/tickets/{$ticket->ticket_id}/sub-issues/{$subIssue->sub_issue_id}/verify", [
+            'verification_verdict' => 'Approved',
+            'test_attested'        => true,
+            'functional_test'      => [
+                ['item' => 'Engine starts / powers on', 'passed' => true],
+            ],
+        ])->assertOk();
+    }
+
+    #[Test]
     public function only_admin_can_defer_a_sub_issue(): void
     {
         $vehicle = $this->vehicle();
@@ -701,6 +797,73 @@ class TicketWorkflowTest extends TestCase
                 'reassign_reason' => 'x',
             ])->assertForbidden();
         }
+    }
+
+    #[Test]
+    public function a_ticket_with_every_sub_issue_already_resolved_cannot_be_cancelled(): void
+    {
+        // Real, confirmed repair work is on record here — cancelling would
+        // void it instead of just abandoning an unstarted/unfinished ticket.
+        // Close it instead.
+        $vehicle = $this->vehicle();
+        $ticket = $this->createTicket($vehicle);
+        $ticket = $this->inspectWithSubIssues($ticket, ['Low coolant level']);
+        $this->driveSubIssueToDone($ticket, $ticket->subIssues[0]);
+
+        Sanctum::actingAs($this->admin, ['*']);
+        $this->putJson("/api/tickets/{$ticket->ticket_id}/cancel", [])->assertUnprocessable();
+
+        $this->assertSame('Active', $ticket->fresh()->status);
+    }
+
+    #[Test]
+    public function creating_a_ticket_from_a_condition_check_links_it_and_stays_live(): void
+    {
+        $vehicle = $this->vehicle();
+        $condition = VehicleConditionCheck::create([
+            'vehicle_id' => $vehicle->vehicle_id,
+            'condition_result' => 'Needs Repair',
+            'observations' => 'Brakes feel soft.',
+            'checked_by' => $this->custodian->id,
+        ]);
+
+        Sanctum::actingAs($this->admin, ['*']);
+        $response = $this->postJson('/api/tickets', [
+            'vehicle_id' => $vehicle->vehicle_id,
+            'ticket_title' => 'Condition Check: Needs Repair',
+            'ticket_description' => 'From condition check.',
+            'priority' => 'High',
+            'assigned_custodian_id' => $this->custodian->id,
+            'entry_mode' => 'prediagnosed',
+            'condition_check_id' => $condition->condition_check_id,
+            'sub_issues' => [['title' => 'Brakes feel soft.']],
+        ])->assertCreated();
+        $ticketId = $response->json('ticket_id');
+
+        // The link is set once, immediately...
+        $this->assertSame($ticketId, $condition->fresh()->resulting_ticket_id);
+
+        // ...and the listing endpoint reads the ticket's LIVE status through
+        // it, not a snapshot — no change to the condition check itself.
+        Sanctum::actingAs($this->admin, ['*']);
+        $listed = $this->getJson('/api/conditions')->assertOk()->json();
+        $row = collect($listed)->firstWhere('condition_check_id', $condition->condition_check_id);
+        $this->assertSame($ticketId, $row['resulting_ticket']['ticket_id']);
+        $this->assertSame('Active', $row['resulting_ticket']['status']);
+        // The historical entry is untouched by any of this.
+        $this->assertSame('Needs Repair', $row['condition_result']);
+        $this->assertSame('Brakes feel soft.', $row['observations']);
+
+        // Close the ticket — the SAME condition check row now reflects the
+        // new status automatically, no extra step.
+        $ticket = MaintenanceTicket::findOrFail($ticketId);
+        $this->driveSubIssueToDone($ticket, $ticket->subIssues[0]);
+        $this->putJson("/api/tickets/{$ticketId}/close", [])->assertOk();
+
+        $listedAfterClose = $this->getJson('/api/conditions')->assertOk()->json();
+        $rowAfterClose = collect($listedAfterClose)->firstWhere('condition_check_id', $condition->condition_check_id);
+        $this->assertSame('Closed', $rowAfterClose['resulting_ticket']['status']);
+        $this->assertSame('Needs Repair', $rowAfterClose['condition_result']);
     }
 
     #[Test]
