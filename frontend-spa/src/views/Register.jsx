@@ -2,10 +2,11 @@ import { useContext, useEffect, useState } from 'react';
 import { Link, Navigate } from 'react-router-dom';
 import api from '../api/axios';
 import Icon from '../components/Icon';
-import Aurora from '../components/Aurora';
 import AuthHeader from '../components/AuthHeader';
 import AuthFooter from '../components/AuthFooter';
 import { AuthContext } from '../context/AuthContextObject';
+import registerHero from '../assets/register-hero.png';
+import vmsLogo from '../assets/vms-logo.png';
 
 const roleRoutes = {
   Admin: '/admin',
@@ -39,12 +40,19 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // PH mobile format: 09 + 9 digits = 11 digits total.
 const PHONE_PATTERN = /^09\d{9}$/;
 
+// The form is split into these steps so the panel never grows taller than
+// one screen — each step only asks for a handful of fields instead of the
+// whole registration at once.
+const STEP_LABELS = ['Information', 'Location', 'Role', 'Password'];
+const TOTAL_STEPS = STEP_LABELS.length;
+
 function Register() {
   const { token, user } = useContext(AuthContext);
   const [form, setForm] = useState(emptyForm);
   const [provinces, setProvinces] = useState([]);
   const [cities, setCities] = useState([]);
   const [barangays, setBarangays] = useState([]);
+  const [step, setStep] = useState(1);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
@@ -146,64 +154,64 @@ function Register() {
     setForm((current) => ({ ...current, phone: digits }));
   };
 
+  // One validator per step — each returns an error string, or '' when that
+  // step's fields are all good.
+  const validateStep1 = () => {
+    if (!NAME_PATTERN.test(form.first_name.trim())) return 'First name may only contain letters.';
+    if (form.middle_name.trim() && !NAME_PATTERN.test(form.middle_name.trim())) return 'Middle name may only contain letters.';
+    if (!NAME_PATTERN.test(form.last_name.trim())) return 'Last name may only contain letters.';
+    if (!EMAIL_PATTERN.test(form.email.trim())) return 'Please enter a valid email address.';
+    if (!PHONE_PATTERN.test(form.phone)) return 'Phone number must be 11 digits starting with 09 (e.g. 09171234567).';
+    return '';
+  };
+
+  const validateStep2 = () => {
+    if (!form.province_id) return 'Please select your province.';
+    if (!form.city_id) return 'Please select your city/municipality.';
+    if (!form.barangay_id && !form.barangay_name.trim()) return 'Please enter or select your barangay.';
+    if (!form.address.trim()) return 'Street address is required.';
+    return '';
+  };
+
+  const validateStep3 = () => {
+    if (!isFirstForBarangay && !form.requested_role) return 'Please select whether you are a Custodian or Maintenance Personnel.';
+    if (!form.staff_code.trim()) return 'Please enter the staff registration code given to you by your barangay office.';
+    return '';
+  };
+
+  const validateStep4 = () => {
+    if (form.password.length < 8) return 'Password must be at least 8 characters.';
+    if (form.password !== form.password_confirmation) return 'Password and confirmation do not match.';
+    return '';
+  };
+
+  const STEP_VALIDATORS = [validateStep1, validateStep2, validateStep3, validateStep4];
+
+  const goNext = () => {
+    const message = STEP_VALIDATORS[step - 1]();
+    if (message) {
+      setError(message);
+      return;
+    }
+    setError('');
+    setStep((current) => Math.min(current + 1, TOTAL_STEPS));
+  };
+
+  const goBack = () => {
+    setError('');
+    setStep((current) => Math.max(current - 1, 1));
+  };
+
   const handleSubmit = async (event) => {
     event.preventDefault();
     if (submitting) return;
+
+    const message = validateStep4();
+    if (message) {
+      setError(message);
+      return;
+    }
     setError('');
-
-    if (!NAME_PATTERN.test(form.first_name.trim())) {
-      setError('First name may only contain letters.');
-      return;
-    }
-    if (form.middle_name.trim() && !NAME_PATTERN.test(form.middle_name.trim())) {
-      setError('Middle name may only contain letters.');
-      return;
-    }
-    if (!NAME_PATTERN.test(form.last_name.trim())) {
-      setError('Last name may only contain letters.');
-      return;
-    }
-    if (!EMAIL_PATTERN.test(form.email.trim())) {
-      setError('Please enter a valid email address.');
-      return;
-    }
-    if (!PHONE_PATTERN.test(form.phone)) {
-      setError('Phone number must be 11 digits starting with 09 (e.g. 09171234567).');
-      return;
-    }
-    if (!form.province_id) {
-      setError('Please select your province.');
-      return;
-    }
-    if (!form.city_id) {
-      setError('Please select your city/municipality.');
-      return;
-    }
-    if (!form.barangay_id && !form.barangay_name.trim()) {
-      setError('Please enter or select your barangay.');
-      return;
-    }
-    if (!form.address.trim()) {
-      setError('Street address is required.');
-      return;
-    }
-    if (!isFirstForBarangay && !form.requested_role) {
-      setError('Please select whether you are a Custodian or Maintenance Personnel.');
-      return;
-    }
-    if (!form.staff_code.trim()) {
-      setError('Please enter the staff registration code given to you by your barangay office.');
-      return;
-    }
-    if (form.password.length < 8) {
-      setError('Password must be at least 8 characters.');
-      return;
-    }
-    if (form.password !== form.password_confirmation) {
-      setError('Password and confirmation do not match.');
-      return;
-    }
-
     setSubmitting(true);
 
     try {
@@ -224,6 +232,9 @@ function Register() {
       // status rather than just assuming.
       if (isFirstForBarangay && messages && (messages.requested_role || messages.staff_code)) {
         setIsFirstForBarangay(false);
+        // The field this error is actually about lives on step 3 — jump
+        // back there instead of leaving the message stranded on step 4.
+        setStep(3);
         setError('Someone else just registered as this barangay\'s first Administrator. Please select your role and enter the staff registration code below, then submit again.');
         const params = { city_id: form.city_id };
         if (form.barangay_id) params.barangay_id = form.barangay_id;
@@ -264,7 +275,20 @@ function Register() {
             </Link>
           </div>
         ) : (
-          <form className="auth-form auth-form-grid" autoComplete="off" onSubmit={handleSubmit} noValidate>
+          <>
+            <div className="auth-step-indicator">
+              {STEP_LABELS.map((label, i) => (
+                <span
+                  key={label}
+                  className={`auth-step-dot${step === i + 1 ? ' is-active' : ''}${step > i + 1 ? ' is-done' : ''}`}
+                />
+              ))}
+            </div>
+            <p className="auth-step-label">Step {step} of {TOTAL_STEPS}: {STEP_LABELS[step - 1]}</p>
+
+            <form className="auth-form auth-form-grid" autoComplete="off" onSubmit={handleSubmit} noValidate>
+            {step === 1 && (
+              <>
             <label className="auth-field">
               <span>First Name</span>
               <div className="auth-input-wrapper auth-input-plain">
@@ -343,7 +367,11 @@ function Register() {
                 />
               </div>
             </label>
+              </>
+            )}
 
+            {step === 2 && (
+              <>
             <label className="auth-field">
               <span>Province</span>
               <div className="auth-input-wrapper auth-input-plain">
@@ -431,7 +459,11 @@ function Register() {
                 />
               </div>
             </label>
+              </>
+            )}
 
+            {step === 3 && (
+              <>
             {isFirstForBarangay !== true && (
               <label className="auth-field">
                 <span>I am a...</span>
@@ -464,7 +496,11 @@ function Register() {
                 />
               </div>
             </label>
+              </>
+            )}
 
+            {step === 4 && (
+              <>
             <label className="auth-field">
               <span>Password</span>
               <div className="auth-input-wrapper auth-input-plain">
@@ -503,18 +539,34 @@ function Register() {
                 />
               </div>
             </label>
+              </>
+            )}
 
             {error ? <p className="notice error auth-field-full">{error}</p> : null}
 
-            <button className="primary-button auth-submit-btn auth-field-full" disabled={submitting} type="submit">
-              {submitting ? (
-                <span className="btn-loading">
-                  <span className="btn-spinner" aria-hidden="true" />
-                  Submitting…
-                </span>
-              ) : 'Create account'}
-            </button>
-          </form>
+            <div className="auth-step-actions auth-field-full">
+              {step > 1 && (
+                <button type="button" className="auth-step-back-btn" onClick={goBack}>
+                  ← Back
+                </button>
+              )}
+              {step < TOTAL_STEPS ? (
+                <button type="button" className="primary-button auth-step-next-btn" onClick={goNext}>
+                  Next
+                </button>
+              ) : (
+                <button className="primary-button auth-step-next-btn" disabled={submitting} type="submit">
+                  {submitting ? (
+                    <span className="btn-loading">
+                      <span className="btn-spinner" aria-hidden="true" />
+                      Submitting…
+                    </span>
+                  ) : 'Create account'}
+                </button>
+              )}
+            </div>
+            </form>
+          </>
         )}
 
         <p className="auth-legal">
@@ -523,8 +575,9 @@ function Register() {
       </section>
 
       <div className="auth-split-hero">
-        <Aurora colorStops={['#0b1220', '#1e3a5f', '#0f172a']} amplitude={0.6} blend={0.55} />
+        <div className="auth-split-hero-bg" style={{ backgroundImage: `url(${registerHero})` }} />
         <div className="auth-split-hero-content">
+          <img src={vmsLogo} alt="VMS" className="auth-split-hero-logo" />
           <h2>Join Your Barangay's Fleet Team</h2>
           <p>
             Create an account to help track vehicle readiness, report

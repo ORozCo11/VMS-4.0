@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { MapContainer, Marker, Polygon, Popup, TileLayer, Tooltip, useMap, ZoomControl } from 'react-leaflet';
@@ -393,6 +394,12 @@ function LocationDensityMap({
   const [resetViewRequest, setResetViewRequest] = useState(0);
   const [isMaximized, setIsMaximized] = useState(false);
   const [basemap, setBasemap] = useState('satellite'); // 'map' | 'satellite'
+  // Which hub's vehicle list the slide-in drawer shows. Kept separate from
+  // drawerOpen so the content stays visible while the drawer animates shut,
+  // instead of blanking out mid-slide.
+  const [drawerHubGroup, setDrawerHubGroup] = useState(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerSearch, setDrawerSearch] = useState('');
   const mapShellRef = useRef(null);
   const nameInputRef = useRef(null);
 
@@ -519,6 +526,29 @@ function LocationDensityMap({
       setMapNotice({ type: 'error', text: 'Failed to restore hubs.' });
     }
   }, [fetchHubs, hubRecords]);
+
+  const openVehicleDrawer = useCallback((group) => {
+    setDrawerHubGroup(group);
+    setDrawerOpen(true);
+    setDrawerSearch('');
+  }, []);
+
+  const closeVehicleDrawer = useCallback(() => {
+    setDrawerOpen(false);
+  }, []);
+
+  const drawerSearchQuery = drawerSearch.trim().toLowerCase();
+  const drawerFilteredVehicles = useMemo(() => {
+    const vehicles = drawerHubGroup?.vehicles ?? [];
+    if (!drawerSearchQuery) return vehicles;
+    return vehicles.filter((vehicle) => [
+      vehicle.vehicle_name,
+      vehicle.plate_number,
+      vehicle.category?.category_name,
+      vehicle.status,
+      vehicle.condition,
+    ].filter(Boolean).some((field) => field.toLowerCase().includes(drawerSearchQuery)));
+  }, [drawerHubGroup, drawerSearchQuery]);
 
   const cancelFocusMode = useCallback(() => {
     setResetViewRequest((value) => value + 1);
@@ -839,6 +869,7 @@ function LocationDensityMap({
             key={`vehicles-${hub.id}`}
             position={[hub.lat, hub.lng]}
             zIndexOffset={1400}
+            eventHandlers={{ click: () => openVehicleDrawer({ hub, vehicles: hubVehicles }) }}
           >
             <Tooltip
               className="location-density-vehicle-tooltip"
@@ -847,26 +878,6 @@ function LocationDensityMap({
             >
               {hubVehicles.length} vehicle{hubVehicles.length === 1 ? '' : 's'} at {hub.name}
             </Tooltip>
-            <Popup className="location-density-vehicle-popup">
-              <div className="location-density-vehicle-popup-content">
-                <strong>{hub.name}</strong>
-                <span>{hub.address}</span>
-                <span>Latitude: {hub.lat}</span>
-                <span>Longitude: {hub.lng}</span>
-                <div className="location-density-vehicle-list">
-                  {hubVehicles.map((vehicle) => (
-                    <article className="location-density-vehicle-item" key={vehicle.vehicle_id}>
-                      <b>{vehicle.vehicle_name}</b>
-                      <span>Plate: {vehicle.plate_number}</span>
-                      <span>Type: {vehicle.category?.category_name ?? '-'}</span>
-                      <span>Status: {vehicle.status}</span>
-                      <span>Condition: {vehicle.condition ?? '-'}</span>
-                      <span>Current Location: {vehicle.current_location}</span>
-                    </article>
-                  ))}
-                </div>
-              </div>
-            </Popup>
           </Marker>
         ))}
         {selectedVehicleGroup && (
@@ -998,6 +1009,89 @@ Built-in hubs are hidden for every user and can be restored later.
             </div>
           </div>
         </div>
+      )}
+
+      {createPortal(
+        <>
+          <div
+            className={`location-density-drawer-overlay${drawerOpen ? ' is-open' : ''}`}
+            onClick={closeVehicleDrawer}
+            aria-hidden="true"
+          />
+          <aside
+            className={`location-density-drawer${drawerOpen ? ' is-open' : ''}`}
+            role="dialog"
+            aria-modal="true"
+            aria-label={drawerHubGroup ? `Vehicles at ${drawerHubGroup.hub.name}` : 'Vehicles at hub'}
+          >
+            {drawerHubGroup && (
+              <>
+                <div className="location-density-drawer-header">
+                  <div>
+                    <strong>{drawerHubGroup.hub.name}</strong>
+                    <span>{drawerHubGroup.hub.address}</span>
+                    <span>Latitude: {Number(drawerHubGroup.hub.lat).toFixed(6)}</span>
+                    <span>Longitude: {Number(drawerHubGroup.hub.lng).toFixed(6)}</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="location-density-drawer-close"
+                    onClick={closeVehicleDrawer}
+                    aria-label="Close"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="18" y1="6" x2="6" y2="18" />
+                      <line x1="6" y1="6" x2="18" y2="18" />
+                    </svg>
+                  </button>
+                </div>
+                {drawerHubGroup.vehicles.length > 0 && (
+                  <div className="location-density-drawer-search">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="11" cy="11" r="7" />
+                      <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                    </svg>
+                    <input
+                      type="text"
+                      value={drawerSearch}
+                      onChange={(e) => setDrawerSearch(e.target.value)}
+                      placeholder="Search vehicles at this hub..."
+                      aria-label="Search vehicles at this hub"
+                    />
+                    {drawerSearch && (
+                      <button type="button" onClick={() => setDrawerSearch('')} aria-label="Clear search">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                          <line x1="18" y1="6" x2="6" y2="18" />
+                          <line x1="6" y1="6" x2="18" y2="18" />
+                        </svg>
+                      </button>
+                    )}
+                  </div>
+                )}
+                <p className="location-density-drawer-subhead">
+                  {drawerFilteredVehicles.length} of {drawerHubGroup.vehicles.length} vehicle{drawerHubGroup.vehicles.length === 1 ? '' : 's'} at this hub
+                </p>
+                <div className="location-density-drawer-list">
+                  {drawerFilteredVehicles.length === 0 ? (
+                    <p className="location-density-drawer-empty">No vehicles match "{drawerSearch}".</p>
+                  ) : (
+                    drawerFilteredVehicles.map((vehicle) => (
+                      <article className="location-density-vehicle-item" key={vehicle.vehicle_id}>
+                        <b>{vehicle.vehicle_name}</b>
+                        <span>Plate: {vehicle.plate_number}</span>
+                        <span>Type: {vehicle.category?.category_name ?? '-'}</span>
+                        <span>Status: {vehicle.status}</span>
+                        <span>Condition: {vehicle.condition ?? '-'}</span>
+                        <span>Current Location: {vehicle.current_location}</span>
+                      </article>
+                    ))
+                  )}
+                </div>
+              </>
+            )}
+          </aside>
+        </>,
+        document.body,
       )}
     </div>
   );

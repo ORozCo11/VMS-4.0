@@ -1,8 +1,8 @@
 import { Link } from 'react-router-dom';
 import Aurora from '../components/Aurora';
-import Icon from '../components/Icon';
 import AuthHeader from '../components/AuthHeader';
 import AuthFooter from '../components/AuthFooter';
+import vmsLogo from '../assets/vms-logo.png';
 
 export default function Terms() {
   return (
@@ -13,8 +13,7 @@ export default function Terms() {
       <section className="auth-card policy-card" style={{ maxWidth: 680, width: '100%', textAlign: 'left', gap: '1rem' }}>
 
         <div className="policy-card-logo">
-          <Icon name="gear" size={28} className="topbar-gear-icon" filled />
-          <span className="vms-wordmark vms-wordmark-sm policy-card-logo-wordmark">vms</span>
+          <img src={vmsLogo} alt="VMS" className="policy-card-logo-img" />
         </div>
 
         <h1 className="auth-login-heading" style={{ marginBottom: '0.25rem' }}>Terms of Service</h1>

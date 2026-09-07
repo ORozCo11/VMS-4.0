@@ -4,6 +4,7 @@ import AuthHeader from '../components/AuthHeader';
 import AuthFooter from '../components/AuthFooter';
 import Icon from '../components/Icon';
 import api from '../api/axios';
+import activeSupportIllustration from '../assets/active-support.svg';
 
 const FAQ = [
   {
@@ -61,16 +62,16 @@ export default function Support() {
   });
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState(null);
+  // null = the FAQ / Report a Concern choice screen; 'faq' or 'concern' once
+  // picked. Keeps the page short (one card group, not both long sections
+  // stacked) so the visitor rarely needs to scroll.
+  const [view, setView] = useState(null);
   const location = useLocation();
 
   useEffect(() => {
-    if (location.hash !== '#contact') return;
-    // Wait a tick for layout to settle before scrolling — the target sits
-    // well below the fold, past the hero.
-    const id = setTimeout(() => {
-      document.getElementById('contact')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }, 50);
-    return () => clearTimeout(id);
+    // A direct "Contact Us" link (e.g. from the workspace footer) jumps
+    // straight to the concern form instead of the choice screen.
+    if (location.hash === '#contact') setView('concern');
   }, [location.hash]);
 
   const handleChange = (e) => {
@@ -101,32 +102,72 @@ export default function Support() {
       <AuthHeader />
 
       <main className="auth-hero is-compact">
-        <div className="auth-hero-inner">
-          <p className="auth-hero-eyebrow">Barangay VMS</p>
-          <h1 className="auth-hero-title">Support Center</h1>
-          <p className="auth-hero-subtitle">
-            Answers to common questions, and a way to flag a real concern — like a
-            barangay account that's gone unmanaged, or someone who doesn't seem to
-            actually be barangay staff.
-          </p>
+        <div className="auth-hero-inner support-hero-inner">
+          <div className="support-hero-text">
+            <p className="auth-hero-eyebrow">Barangay VMS</p>
+            <h1 className="auth-hero-title">Support Center</h1>
+            <p className="auth-hero-subtitle">
+              Answers to common questions, and a way to flag a real concern — like a
+              barangay account that's gone unmanaged, or someone who doesn't seem to
+              actually be barangay staff.
+            </p>
+          </div>
+          <img
+            src={activeSupportIllustration}
+            alt=""
+            aria-hidden="true"
+            className="support-hero-illustration"
+          />
         </div>
       </main>
 
       <section className="support-body">
         <div className="support-body-inner">
-          <h2 className="support-section-title">Frequently Asked Questions</h2>
-          <div className="faq-list">
-            {FAQ.map((item) => <FaqItem key={item.q} {...item} />)}
-          </div>
+          {!view && (
+            <div className="support-choice-grid">
+              <button type="button" className="support-choice-card" onClick={() => setView('faq')}>
+                <Icon name="list" size={26} className="support-choice-icon" />
+                <span className="support-choice-title">Frequently Asked Questions</span>
+                <span className="support-choice-desc">
+                  Quick answers to common questions about using the system.
+                </span>
+              </button>
+              <button type="button" className="support-choice-card" onClick={() => setView('concern')}>
+                <Icon name="flag" size={26} className="support-choice-icon" />
+                <span className="support-choice-title">Report a Concern</span>
+                <span className="support-choice-desc">
+                  Flag an unmanaged barangay account or someone who doesn't seem
+                  to be real staff.
+                </span>
+              </button>
+            </div>
+          )}
 
-          <h2 className="support-section-title" id="contact">Report a Concern</h2>
-          <p className="support-section-subtitle">
-            Use this if a barangay's account seems dead, or you suspect someone
-            isn't really barangay staff. A platform administrator reviews every
-            submission.
-          </p>
+          {view === 'faq' && (
+            <>
+              <button type="button" className="support-back-btn" onClick={() => setView(null)}>
+                <Icon name="arrowLeft" size={16} /> Back
+              </button>
+              <h2 className="support-section-title">Frequently Asked Questions</h2>
+              <div className="faq-list">
+                {FAQ.map((item) => <FaqItem key={item.q} {...item} />)}
+              </div>
+            </>
+          )}
 
-          <form className="auth-form auth-form-grid support-form" onSubmit={handleSubmit} noValidate>
+          {view === 'concern' && (
+            <>
+              <button type="button" className="support-back-btn" onClick={() => setView(null)}>
+                <Icon name="arrowLeft" size={16} /> Back
+              </button>
+              <h2 className="support-section-title" id="contact">Report a Concern</h2>
+              <p className="support-section-subtitle">
+                Use this if a barangay's account seems dead, or you suspect someone
+                isn't really barangay staff. A platform administrator reviews every
+                submission.
+              </p>
+
+              <form className="auth-form auth-form-grid support-form" onSubmit={handleSubmit} noValidate>
             <label className="auth-field auth-field-full">
               <span>What's the concern?</span>
               <div className="auth-input-wrapper auth-input-plain">
@@ -184,7 +225,9 @@ export default function Support() {
             <button className="primary-button auth-submit-btn auth-field-full" type="submit" disabled={submitting}>
               {submitting ? 'Submitting…' : 'Submit Concern'}
             </button>
-          </form>
+              </form>
+            </>
+          )}
         </div>
       </section>
 

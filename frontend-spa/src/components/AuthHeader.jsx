@@ -1,7 +1,7 @@
 import { useContext } from 'react';
 import { Link } from 'react-router-dom';
-import Icon from './Icon';
 import { AuthContext } from '../context/AuthContextObject';
+import vmsLogo from '../assets/vms-logo.png';
 
 const roleRoutes = {
   Admin: '/admin',
@@ -24,11 +24,7 @@ export default function AuthHeader() {
     <header className="auth-page-header">
       <div className="auth-page-header-inner">
         <Link to={dashboardPath ?? '/login'} className="auth-page-header-brand">
-          <Icon name="gear" size={46} className="auth-page-header-gear" filled />
-          <div className="auth-page-header-brand-text">
-            <span className="vms-wordmark auth-page-header-wordmark">vms</span>
-            <span className="auth-page-header-subtext">vehicle management system</span>
-          </div>
+          <img src={vmsLogo} alt="VMS" className="auth-page-header-logo" />
         </Link>
         <div className="auth-page-header-right">
           <nav className="auth-page-nav">

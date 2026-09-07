@@ -10,15 +10,22 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@react-three/drei": "^10.7.8",
+    "@react-three/fiber": "^9.7.0",
+    "apexcharts": "^7.1.0",
     "axios": "^1.17.0",
+    "echarts": "^6.1.0",
     "gsap": "^3.15.0",
     "html-to-image": "^1.11.13",
     "leaflet": "^1.9.4",
+    "lottie-react": "^2.4.2",
     "ogl": "^1.0.11",
     "react": "^19.2.6",
+    "react-apexcharts": "^2.1.1",
     "react-dom": "^19.2.6",
     "react-leaflet": "^5.0.0",
-    "react-router-dom": "^7.17.0"
+    "react-router-dom": "^7.17.0",
+    "three": "^0.185.1"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

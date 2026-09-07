@@ -1,9 +1,13 @@
 import { useContext, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
+import Lottie from 'lottie-react';
 import api from '../api/axios';
 import Icon from '../components/Icon';
+import AuthHeader from '../components/AuthHeader';
 import { AuthContext } from '../context/AuthContextObject';
 import loginFleetImage from '../assets/login-fleet.png';
+import loginLoadingAnimation from '../assets/login-wrench-loading.json';
 import vmsLogo from '../assets/login-vms-logo.png';
 
 const roleRoutes = {
@@ -64,7 +68,24 @@ function Login() {
   };
 
   return (
-    <main className="vms-login-page">
+    <div className="auth-page-shell login-page-shell">
+      <AuthHeader />
+      <main className="vms-login-page">
+      {submitting && createPortal(
+        <div className="loading-overlay" role="status" aria-live="polite" aria-label="Signing in">
+          <div className="loading-overlay-card">
+            <Lottie
+              animationData={loginLoadingAnimation}
+              loop
+              autoplay
+              className="loading-overlay-lottie"
+              aria-hidden="true"
+            />
+            <span>Signing in…</span>
+          </div>
+        </div>,
+        document.body,
+      )}
       <div
         className="vms-login-backdrop"
         style={{ backgroundImage: `url(${loginFleetImage})` }}
@@ -88,7 +109,7 @@ function Login() {
               Keep every response vehicle ready, accountable, and moving when
               your community needs it most.
             </p>
-            <strong>Track. Maintain. Respond.</strong>
+            <strong>Manage. Maintain. Respond.</strong>
           </div>
 
           <nav className="vms-login-hero-links" aria-label="Legal links">
@@ -179,7 +200,8 @@ function Login() {
           </div>
         </div>
       </section>
-    </main>
+      </main>
+    </div>
   );
 }
 

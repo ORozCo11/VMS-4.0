@@ -101,6 +101,7 @@ class FleetController extends Controller
 
         if ($user->hasRole('Admin')) {
             $metrics[] = ['label' => 'Inactive Vehicles', 'value' => Vehicle::where('status', 'Inactive')->count()];
+            $metrics[] = ['label' => 'Decommissioned Vehicles', 'value' => Vehicle::where('status', 'Decommissioned')->count()];
             $metrics[] = ['label' => 'Reported Issues', 'value' => $activeIssues];
             $metrics[] = ['label' => 'Upcoming Maintenance', 'value' => $upcomingMaintenance];
             $metrics[] = ['label' => 'Overdue Maintenance', 'value' => $overdueMaintenance];
@@ -972,7 +973,7 @@ class FleetController extends Controller
      */
     public function storeReadinessCheck(Request $request, Vehicle $vehicle)
     {
-        $this->requireRole($request, ['Admin', 'Custodian']);
+        $this->requireRole($request, ['Custodian']);
         abort_if(
             in_array($vehicle->status, ['Inactive', 'Decommissioned'], true),
             422,

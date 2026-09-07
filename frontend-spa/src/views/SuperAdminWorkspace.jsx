@@ -4,6 +4,7 @@ import Icon from '../components/Icon';
 import WorkspaceFooter from '../components/WorkspaceFooter';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { AuthContext } from '../context/AuthContextObject';
+import vmsLogo from '../assets/vms-logo.png';
 
 // Kept separate from every other role's landing route — a Super Admin never
 // lands on the fleet-oriented Workspace.jsx shell, since RestrictSuperAdminScope
@@ -206,6 +207,7 @@ function DashboardTab({ barangays, users }) {
 function BarangaysTab({ barangays, users, onPromote }) {
   const [recoveryId, setRecoveryId] = useState(null);
   const [pickedUserId, setPickedUserId] = useState('');
+  const [promoting, setPromoting] = useState(false);
 
   const columns = [
     { label: 'Barangay', render: (b) => b.name },
@@ -257,14 +259,19 @@ function BarangaysTab({ barangays, users, onPromote }) {
                 <button
                   type="button"
                   className="primary-button"
-                  disabled={!pickedUserId}
+                  disabled={!pickedUserId || promoting}
                   onClick={async () => {
-                    const target = candidateUsers.find((u) => String(u.id) === String(pickedUserId));
-                    await onPromote(target);
-                    setRecoveryId(null);
+                    setPromoting(true);
+                    try {
+                      const target = candidateUsers.find((u) => String(u.id) === String(pickedUserId));
+                      await onPromote(target);
+                      setRecoveryId(null);
+                    } finally {
+                      setPromoting(false);
+                    }
                   }}
                 >
-                  Promote to Admin
+                  {promoting ? 'Promoting…' : 'Promote to Admin'}
                 </button>
               </div>
             </>
@@ -277,6 +284,11 @@ function BarangaysTab({ barangays, users, onPromote }) {
 
 function UsersTab({ users, onChangeRole, onToggleActive }) {
   const [search, setSearch] = useState('');
+  // Tracks which single row has a request in flight (only one row can be
+  // busy at a time from one click) — without this, clicking Deactivate or
+  // changing a role gave zero visual feedback until the network round-trip
+  // finished, and nothing stopped a second click/change in the meantime.
+  const [busyId, setBusyId] = useState(null);
 
   // `users` here is already the Super-Admin-excluded list computed once at
   // the parent (see `visibleUsers` in SuperAdminWorkspace) — DashboardTab
@@ -288,6 +300,24 @@ function UsersTab({ users, onChangeRole, onToggleActive }) {
     return users.filter((u) => [u.name, u.email, u.barangay_name].filter(Boolean).some((v) => v.toLowerCase().includes(q)));
   }, [users, search]);
 
+  const handleRoleChange = async (u, role) => {
+    setBusyId(u.id);
+    try {
+      await onChangeRole(u, role);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleToggleActive = async (u) => {
+    setBusyId(u.id);
+    try {
+      await onToggleActive(u);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   const columns = [
     { label: 'Name', render: (u) => (
       <div>
@@ -296,7 +326,7 @@ function UsersTab({ users, onChangeRole, onToggleActive }) {
       </div>
     ) },
     { label: 'Role', render: (u) => (
-      <select value={u.role} onChange={(e) => onChangeRole(u, e.target.value)}>
+      <select value={u.role} disabled={busyId === u.id} onChange={(e) => handleRoleChange(u, e.target.value)}>
         {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
       </select>
     ) },
@@ -305,8 +335,8 @@ function UsersTab({ users, onChangeRole, onToggleActive }) {
       <StatusBadge value={!u.approved_at ? 'Pending' : (u.is_active ? 'Active' : 'Inactive')} />
     ) },
     { label: 'Action', render: (u) => (
-      <button type="button" className="ghost-button" onClick={() => onToggleActive(u)}>
-        {u.is_active ? 'Deactivate' : 'Activate'}
+      <button type="button" className="ghost-button" disabled={busyId === u.id} onClick={() => handleToggleActive(u)}>
+        {busyId === u.id ? 'Saving…' : (u.is_active ? 'Deactivate' : 'Activate')}
       </button>
     ) },
   ];
@@ -412,6 +442,7 @@ function ImpersonateTab({ candidates, onImpersonate }) {
   const [provinceKey, setProvinceKey] = useState('');
   const [barangayKey, setBarangayKey] = useState('');
   const [userId, setUserId] = useState('');
+  const [impersonating, setImpersonating] = useState(false);
 
   const groups = useMemo(() => {
     const byProvince = new Map();
@@ -453,8 +484,24 @@ function ImpersonateTab({ candidates, onImpersonate }) {
               <option key={u.id} value={u.id} disabled={!u.is_active}>{u.name} · {u.role}{u.is_active ? '' : ' (inactive)'}</option>
             ))}
           </select>
-          <button type="button" className="primary-button" disabled={!userId} onClick={() => onImpersonate(userId)}>
-            Impersonate
+          <button
+            type="button"
+            className="primary-button"
+            disabled={!userId || impersonating}
+            onClick={async () => {
+              setImpersonating(true);
+              try {
+                await onImpersonate(userId);
+              } finally {
+                // On success, onImpersonate already kicked off
+                // window.location.assign — the page navigates away right
+                // around when this runs, so re-enabling the button here is
+                // harmless either way.
+                setImpersonating(false);
+              }
+            }}
+          >
+            {impersonating ? 'Switching…' : 'Impersonate'}
           </button>
         </div>
       </div>
@@ -464,6 +511,7 @@ function ImpersonateTab({ candidates, onImpersonate }) {
 
 function ConcernReportsTab({ reports, onResolve, onReopen, onDelete, onRequestConfirmation }) {
   const [scope, setScope] = useState('open');
+  const [busyId, setBusyId] = useState(null);
   const visible = scope === 'open' ? reports.filter((r) => r.status !== 'Resolved') : reports;
 
   const requestDelete = (report) => {
@@ -474,6 +522,24 @@ function ConcernReportsTab({ reports, onResolve, onReopen, onDelete, onRequestCo
       variant: 'danger',
       onConfirm: () => onDelete(report),
     });
+  };
+
+  const handleReopen = async (report) => {
+    setBusyId(report.id);
+    try {
+      await onReopen(report);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleResolve = async (report) => {
+    setBusyId(report.id);
+    try {
+      await onResolve(report);
+    } finally {
+      setBusyId(null);
+    }
   };
 
   const columns = [
@@ -493,11 +559,11 @@ function ConcernReportsTab({ reports, onResolve, onReopen, onDelete, onRequestCo
     { label: 'Action', render: (r) => (
       <div style={{ display: 'flex', gap: 8 }}>
         {r.status === 'Resolved' ? (
-          <button type="button" className="ghost-button" onClick={() => onReopen(r)}>Reopen</button>
+          <button type="button" className="ghost-button" disabled={busyId === r.id} onClick={() => handleReopen(r)}>{busyId === r.id ? 'Reopening…' : 'Reopen'}</button>
         ) : (
-          <button type="button" className="ghost-button" onClick={() => onResolve(r)}>Mark Resolved</button>
+          <button type="button" className="ghost-button" disabled={busyId === r.id} onClick={() => handleResolve(r)}>{busyId === r.id ? 'Saving…' : 'Mark Resolved'}</button>
         )}
-        <button type="button" className="ghost-button" onClick={() => requestDelete(r)}>Delete</button>
+        <button type="button" className="ghost-button" disabled={busyId === r.id} onClick={() => requestDelete(r)}>Delete</button>
       </div>
     ) },
   ];
@@ -615,6 +681,10 @@ export default function SuperAdminWorkspace() {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(
     () => localStorage.getItem('vms_sidebar_collapsed') === '1'
   );
+  // Separate transient flag for the phone-width off-canvas drawer — see the
+  // matching state/comment in Workspace.jsx for why this isn't reused with
+  // isSidebarCollapsed (a persisted desktop rail-width preference).
+  const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
   const [theme, setTheme] = useState(() => {
     try { return localStorage.getItem('theme') || 'light'; } catch { return 'light'; }
   });
@@ -650,6 +720,27 @@ export default function SuperAdminWorkspace() {
   useEffect(() => {
     try { localStorage.setItem('vms_sidebar_collapsed', isSidebarCollapsed ? '1' : '0'); } catch { /* ignore */ }
   }, [isSidebarCollapsed]);
+
+  // Allow ESC to close the mobile drawer, lock body scroll while it's open,
+  // and auto-close it if the window is widened past the phone breakpoint.
+  useEffect(() => {
+    if (!isMobileNavOpen) return undefined;
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') setIsMobileNavOpen(false);
+    };
+    const handleResize = () => {
+      if (!window.matchMedia('(max-width: 768px)').matches) setIsMobileNavOpen(false);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('resize', handleResize);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('resize', handleResize);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [isMobileNavOpen]);
 
   useEffect(() => {
     if (!notice) return;
@@ -778,14 +869,19 @@ export default function SuperAdminWorkspace() {
             <button
               aria-label={isSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
               className="sidebar-toggle-btn"
-              onClick={() => setIsSidebarCollapsed((v) => !v)}
+              onClick={() => {
+                if (window.matchMedia('(max-width: 768px)').matches) {
+                  setIsMobileNavOpen((v) => !v);
+                  return;
+                }
+                setIsSidebarCollapsed((v) => !v);
+              }}
               title={isSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
               type="button"
             >
               <Icon name="menu" size={24} />
             </button>
-            <Icon name="gear" size={28} className="topbar-gear-icon" filled />
-            <span className="vms-wordmark vms-wordmark-sm">vms</span>
+            <img src={vmsLogo} alt="VMS" className="topbar-brand-logo" />
           </div>
         </div>
 
@@ -821,14 +917,20 @@ export default function SuperAdminWorkspace() {
       </header>
 
       <main className={`workspace${isSidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
-        <aside className={`sidebar${isSidebarCollapsed ? ' collapsed' : ''}`}>
+        {isMobileNavOpen && (
+          <div className="mobile-nav-backdrop" onClick={() => setIsMobileNavOpen(false)} aria-hidden="true" />
+        )}
+        <aside className={`sidebar${isSidebarCollapsed ? ' collapsed' : ''}${isMobileNavOpen ? ' mobile-open' : ''}`}>
           <nav className="module-nav" aria-label="Super Admin modules">
             <div className="module-nav-group">
               {TABS.map(([key, label]) => (
                 <button
                   key={key}
                   className={key === activeTab ? 'active' : ''}
-                  onClick={() => setActiveTab(key)}
+                  onClick={() => {
+                    setActiveTab(key);
+                    setIsMobileNavOpen(false);
+                  }}
                   title={isSidebarCollapsed ? label : undefined}
                   type="button"
                 >
