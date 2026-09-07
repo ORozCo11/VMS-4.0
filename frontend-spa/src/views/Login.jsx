@@ -2,10 +2,9 @@ import { useContext, useState } from 'react';
 import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import api from '../api/axios';
 import Icon from '../components/Icon';
-import Aurora from '../components/Aurora';
-import AuthHeader from '../components/AuthHeader';
-import AuthFooter from '../components/AuthFooter';
 import { AuthContext } from '../context/AuthContextObject';
+import loginFleetImage from '../assets/login-fleet.png';
+import vmsLogo from '../assets/login-vms-logo.png';
 
 const roleRoutes = {
   Admin: '/admin',
@@ -18,10 +17,7 @@ function Login() {
   const navigate = useNavigate();
   const location = useLocation();
   const { login, token, user } = useContext(AuthContext);
-  const [credentials, setCredentials] = useState({
-    email: '',
-    password: '',
-  });
+  const [credentials, setCredentials] = useState({ email: '', password: '' });
   const [rememberMe, setRememberMe] = useState(true);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -33,10 +29,7 @@ function Login() {
 
   const handleChange = (event) => {
     const { name, value } = event.target;
-    setCredentials((current) => ({
-      ...current,
-      [name]: value,
-    }));
+    setCredentials((current) => ({ ...current, [name]: value }));
   };
 
   const handleSubmit = async (event) => {
@@ -56,10 +49,6 @@ function Login() {
       const { user: authenticatedUser, access_token: accessToken } = response.data;
 
       login(authenticatedUser, accessToken, rememberMe);
-      // Return to wherever ProtectedRoute bounced them from, if anywhere —
-      // only unauthenticated redirects land here with `from` set, so this
-      // can never send someone to a page their role doesn't allow (a wrong
-      // role goes to /unauthorized instead, not back through /login).
       const destination = location.state?.from
         ? `${location.state.from.pathname}${location.state.from.search ?? ''}`
         : (roleRoutes[authenticatedUser.role] ?? '/unauthorized');
@@ -75,87 +64,122 @@ function Login() {
   };
 
   return (
-    <div className="auth-page-shell">
-      <AuthHeader />
+    <main className="vms-login-page">
+      <div
+        className="vms-login-backdrop"
+        style={{ backgroundImage: `url(${loginFleetImage})` }}
+        aria-hidden="true"
+      />
 
-      <main className="auth-page">
-      <Aurora colorStops={['#0b1220', '#1e3a5f', '#0f172a']} amplitude={0.6} blend={0.55} />
-      <section className="auth-card" aria-labelledby="login-title">
-        <div className="auth-logo-header">
-          <h1 id="login-title" className="auth-login-heading">Login</h1>
+      <section className="vms-login-card" aria-labelledby="login-title">
+        <div
+          className="vms-login-hero"
+          style={{ backgroundImage: `url(${loginFleetImage})` }}
+        >
+          <div className="vms-login-hero-shade" aria-hidden="true" />
+          <div className="vms-login-brand">
+            <img src={vmsLogo} alt="Vehicle Management System" />
+          </div>
+
+          <div className="vms-login-message">
+            <p className="vms-login-kicker">Barangay fleet operations</p>
+            <h2>One fleet.<br />A safer tomorrow.</h2>
+            <p>
+              Keep every response vehicle ready, accountable, and moving when
+              your community needs it most.
+            </p>
+            <strong>Track. Maintain. Respond.</strong>
+          </div>
+
+          <nav className="vms-login-hero-links" aria-label="Legal links">
+            <Link to="/terms">Terms of Service</Link>
+            <Link to="/privacy">Privacy Policy</Link>
+            <Link to="/support">Contact Us</Link>
+          </nav>
         </div>
 
-        <form className="auth-form" autoComplete="off" onSubmit={handleSubmit} noValidate>
-          <label className="auth-field">
-            <span>Email Address</span>
-            <div className="auth-input-wrapper auth-input-plain">
-              <input
-                autoComplete="off"
-                name="email"
-                onChange={handleChange}
-                placeholder="Email address"
-                required
-                type="email"
-                value={credentials.email}
-              />
-            </div>
-          </label>
+        <div className="vms-login-panel">
+          <span className="vms-login-accent-line" aria-hidden="true" />
+          <div className="vms-login-panel-content">
+            <p className="vms-login-eyebrow">Secure fleet access</p>
+            <h1 id="login-title">Welcome back</h1>
+            <p className="vms-login-intro">
+              Sign in to manage your barangay's vehicles and operations.
+            </p>
 
-          <label className="auth-field">
-            <span>Password</span>
-            <div className="auth-input-wrapper auth-input-plain">
-              <input
-                autoComplete="new-password"
-                name="password"
-                onChange={handleChange}
-                placeholder="Password"
-                required
-                type={showPassword ? 'text' : 'password'}
-                value={credentials.password}
-              />
-              <button
-                type="button"
-                className="password-toggle-btn"
-                onClick={() => setShowPassword((v) => !v)}
-                aria-label={showPassword ? 'Hide password' : 'Show password'}
-                title={showPassword ? 'Hide password' : 'Show password'}
-              >
-                <Icon name={showPassword ? 'eyeOff' : 'eye'} size={18} />
+            <form className="vms-login-form" onSubmit={handleSubmit} noValidate>
+              <label className="vms-login-field" htmlFor="login-email">
+                <span>Email address</span>
+                <input
+                  autoComplete="email"
+                  id="login-email"
+                  name="email"
+                  onChange={handleChange}
+                  placeholder="you@example.com"
+                  required
+                  type="email"
+                  value={credentials.email}
+                />
+              </label>
+
+              <label className="vms-login-field" htmlFor="login-password">
+                <span>Password</span>
+                <div className="vms-login-password">
+                  <input
+                    autoComplete="current-password"
+                    id="login-password"
+                    name="password"
+                    onChange={handleChange}
+                    placeholder="Enter your password"
+                    required
+                    type={showPassword ? 'text' : 'password'}
+                    value={credentials.password}
+                  />
+                  <button
+                    type="button"
+                    className="vms-login-password-toggle"
+                    onClick={() => setShowPassword((visible) => !visible)}
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    title={showPassword ? 'Hide password' : 'Show password'}
+                  >
+                    <Icon name={showPassword ? 'eyeOff' : 'eye'} size={19} />
+                  </button>
+                </div>
+              </label>
+
+              <label className="vms-login-remember">
+                <input
+                  type="checkbox"
+                  checked={rememberMe}
+                  onChange={(event) => setRememberMe(event.target.checked)}
+                />
+                <span>Remember me</span>
+              </label>
+
+              {error ? <p className="vms-login-error" role="alert">{error}</p> : null}
+
+              <button className="vms-login-submit" disabled={submitting} type="submit">
+                {submitting ? (
+                  <span className="btn-loading">
+                    <span className="btn-spinner" aria-hidden="true" />
+                    Signing in…
+                  </span>
+                ) : 'Sign in'}
               </button>
-            </div>
-          </label>
+            </form>
 
-          <label className="auth-remember">
-            <input
-              type="checkbox"
-              checked={rememberMe}
-              onChange={(e) => setRememberMe(e.target.checked)}
-            />
-            Remember Me
-          </label>
-
-          {error ? <p className="notice error">{error}</p> : null}
-
-          <button className="primary-button auth-submit-btn" disabled={submitting} type="submit">
-            {submitting ? (
-              <span className="btn-loading">
-                <span className="btn-spinner" aria-hidden="true" />
-                Signing in…
-              </span>
-            ) : 'Sign in'}
-          </button>
-        </form>
-
-        <p className="auth-legal">
-          <Link to="/privacy">Privacy</Link>
-          {' · '}
-          <Link to="/terms">Terms</Link>
-        </p>
+            <p className="vms-login-register">
+              Need an account? <Link to="/register">Register here</Link>
+            </p>
+            <nav className="vms-login-mobile-links" aria-label="Legal links">
+              <Link to="/terms">Terms</Link>
+              <Link to="/privacy">Privacy</Link>
+              <Link to="/support">Support</Link>
+            </nav>
+          </div>
+        </div>
       </section>
-      </main>
-
-      <AuthFooter />
-    </div>
+    </main>
   );
 }
 
