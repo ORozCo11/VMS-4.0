@@ -52,38 +52,10 @@
   text-decoration: none;
   flex-shrink: 0;
 }
-.auth-page-header-gear {
-  stroke: #ffffff;
-  color: #ffffff;
+.auth-page-header-logo {
+  height: 56px;
+  width: auto;
   flex-shrink: 0;
-  animation: vms-gear-spin 4s linear infinite;
-  /* White gear on the blue header — draw the center ring in the header's own
-     blue so the cutout hole actually shows instead of blending into the gear. */
-  --gear-ring: #1d4ed8;
-}
-/* Big — matches the reference's prominent wordmark scale, sized well above
-   the app's usual small/medium wordmark variants. Scoped under the brand
-   link (2 classes) so it reliably beats the base .vms-wordmark's blue color
-   rule (1 class) regardless of which one is declared later in this file —
-   plain equal-specificity color:#fff here was losing that fight, rendering
-   invisible blue-on-blue against the header. */
-.auth-page-header-brand-text {
-  display: flex;
-  flex-direction: column;
-  line-height: 1;
-}
-.auth-page-header-brand .vms-wordmark {
-  color: #ffffff;
-  font-size: 2.9rem;
-  line-height: 1;
-}
-.auth-page-header-subtext {
-  margin-top: 3px;
-  font-size: 0.68rem;
-  font-weight: 700;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.82);
 }
 /* vms brand pinned far left (via space-between on the parent row); nav +
    Login button grouped together and pinned far right as one unit. */
@@ -152,11 +124,18 @@
 /* The card itself always stays a clean white, regardless of the in-app
    light/dark theme cascade further down this file — !important because
    several later theme-scoped rules of equal-or-higher specificity would
-   otherwise flip it dark depending on the persisted theme preference. */
+   otherwise flip it dark depending on the persisted theme preference. Text
+   colors need the same treatment: h1/.auth-subtitle/.auth-legal otherwise
+   inherit var(--text-strong)/var(--text-muted), which resolve to near-white
+   in dark theme and become unreadable on this always-white card. */
 .auth-page .auth-card {
   background: #ffffff !important;
   border: none !important;
 }
+.auth-page .auth-card h1 { color: #0f172a !important; }
+.auth-page .auth-card .auth-subtitle,
+.auth-page .auth-card .auth-legal { color: #64748b !important; }
+.auth-page .auth-card .auth-legal a { color: #94a3b8 !important; }
 .sr-only {
   position: absolute;
   width: 1px; height: 1px;
@@ -371,6 +350,52 @@
   .auth-form-grid { grid-template-columns: 1fr; }
 }
 
+/* Register's multi-step indicator — keeps each step to a handful of fields
+   so the panel never grows tall enough to need scrolling. */
+.auth-step-indicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0 0;
+}
+.auth-step-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e2e8f0;
+  transition: background 0.2s ease, width 0.2s ease, border-radius 0.2s ease;
+}
+.auth-step-dot.is-active { width: 22px; border-radius: 4px; background: #1d4ed8; }
+.auth-step-dot.is-done { background: #93c5fd; }
+.auth-step-label {
+  margin: 8px 0 18px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #94a3b8;
+}
+.auth-step-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 4px;
+}
+.auth-step-back-btn {
+  padding: 0;
+  border: none;
+  background: none;
+  color: #1d4ed8;
+  font-size: 0.86rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.auth-step-back-btn:hover { text-decoration: underline; }
+.auth-step-next-btn {
+  margin-left: auto;
+  min-width: 150px;
+}
+
 /* Register page split layout — a left-docked white form panel (roughly
    half the viewport) beside a right-hand Aurora hero, instead of a small
    centered card. Reads like a typical signup screen rather than the
@@ -396,18 +421,37 @@
 .auth-split-hero {
   position: relative;
   flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 40px;
   overflow: hidden;
+}
+.auth-split-hero-bg {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center;
+}
+.auth-split-hero::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(5, 7, 13, 0.72);
 }
 .auth-split-hero-content {
   position: relative;
   z-index: 1;
-  max-width: 420px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   text-align: center;
+  padding: 40px;
   color: #ffffff;
+}
+.auth-split-hero-logo {
+  width: clamp(120px, 14vw, 180px);
+  height: auto;
+  margin-bottom: 24px;
+  filter: drop-shadow(0 4px 14px rgba(0, 0, 0, 0.4));
 }
 .auth-split-hero-content h2 {
   font-size: 1.9rem;
@@ -415,6 +459,7 @@
   margin: 0 0 14px;
 }
 .auth-split-hero-content p {
+  max-width: 420px;
   font-size: 0.95rem;
   line-height: 1.65;
   color: rgba(255, 255, 255, 0.82);
@@ -438,9 +483,9 @@
   gap: 8px;
   color: #2563eb;
 }
-.policy-card-logo-wordmark { color: #2563eb; }
-@media (max-width: 480px) {
-  .policy-card-logo-wordmark { display: none; }
+.policy-card-logo-img {
+  height: 38px;
+  width: auto;
 }
 
 /* Filled counterpart to .auth-page-header-login-btn, placed beside it so
@@ -480,6 +525,90 @@
   height: 16px;
   accent-color: #2563eb;
   cursor: pointer;
+}
+
+/* About page — auto-advancing carousel between the intro card and the
+   feature grid below, instead of both stacked in one long scroll. */
+.about-slider {
+  position: relative;
+  overflow: hidden;
+}
+.about-slider-track {
+  display: flex;
+  width: 500%;
+  transition: transform 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.about-slide {
+  width: 20%;
+  flex-shrink: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+@media (prefers-reduced-motion: reduce) {
+  .about-slider-track { transition: none; }
+}
+.about-slider-dots {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  padding: 20px 0;
+  background: #ffffff;
+}
+.about-slider-dot {
+  width: 8px;
+  height: 8px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: #cbd5e1;
+  cursor: pointer;
+  transition: background 0.2s ease, width 0.2s ease, border-radius 0.2s ease;
+}
+.about-slider-dot:hover { background: #93c5fd; }
+.about-slider-dot.is-active { width: 22px; border-radius: 4px; background: #1d4ed8; }
+
+/* Maintenance-workflow slide — a numbered step list on the dark hero,
+   styled to match .about-hero-body's headings without reusing its layout. */
+.about-workflow-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  width: min(100%, 760px);
+  margin: 28px auto 0;
+  text-align: left;
+}
+.about-workflow-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+.about-workflow-step-number {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: rgba(147, 197, 253, 0.16);
+  border: 1px solid rgba(147, 197, 253, 0.4);
+  color: #93c5fd;
+  font-weight: 800;
+  font-size: 0.9rem;
+}
+.about-workflow-step-title {
+  margin: 0 0 2px;
+  color: #ffffff;
+  font-weight: 700;
+  font-size: 0.98rem;
+}
+.about-workflow-step-desc {
+  margin: 0;
+  color: rgba(226, 232, 240, 0.78);
+  font-size: 0.88rem;
+  line-height: 1.55;
 }
 
 /* About page — plain white "what the system can do" feature grid below the
@@ -586,6 +715,61 @@
 }
 .support-form { margin-top: 4px; }
 
+.support-choice-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 20px;
+}
+.support-choice-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 28px 24px;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  background: #ffffff;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+.support-choice-card:hover {
+  border-color: #93c5fd;
+  box-shadow: 0 12px 30px rgba(29, 78, 216, 0.12);
+  transform: translateY(-2px);
+}
+.support-choice-icon {
+  color: #1d4ed8;
+  background: #eff6ff;
+  border-radius: 10px;
+  padding: 10px;
+  box-sizing: content-box;
+}
+.support-choice-title {
+  font-size: 1.05rem;
+  font-weight: 800;
+  color: #0f172a;
+}
+.support-choice-desc {
+  font-size: 0.86rem;
+  color: #64748b;
+  line-height: 1.55;
+}
+.support-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 20px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: #1d4ed8;
+  font-size: 0.86rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.support-back-btn:hover { text-decoration: underline; }
+
 /* Shared full-width blue gradient hero — used by Developers (team carousel)
    and About (system overview). Privacy/Terms use their own .policy-card
    instead, unaffected by this. */
@@ -611,28 +795,32 @@
   width: min(100%, 1040px);
   text-align: center;
 }
-/* Purely decorative arrow graphics flanking the hero (see DecoArrow in
-   Developers.jsx) — staggered top-left / lower-right like the reference,
-   sitting behind the content and never intercepting clicks. */
-.dev-team-deco-arrow {
+/* Support page hero — text on the left, illustration on the right, instead
+   of the centered single-column layout every other .auth-hero page uses. */
+.support-hero-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 40px;
+  text-align: left;
+}
+.support-hero-text { flex: 1; min-width: 0; }
+.support-hero-illustration {
+  width: 260px;
+  max-width: 40%;
+  height: auto;
+  flex-shrink: 0;
+}
+@media (max-width: 720px) {
+  .support-hero-inner { flex-direction: column; text-align: center; }
+  .support-hero-illustration { max-width: 55%; }
+}
+.dev-hero-beams {
   position: absolute;
-  width: 130px;
-  pointer-events: none;
+  inset: 0;
   z-index: 0;
-  opacity: 0.7;
-}
-.dev-team-deco-arrow-left {
-  left: 8px;
-  top: 8px;
-  height: 78%;
-}
-.dev-team-deco-arrow-right {
-  right: 8px;
-  bottom: 8px;
-  height: 72%;
-}
-@media (max-width: 900px) {
-  .dev-team-deco-arrow { display: none; }
+  overflow: hidden;
+  pointer-events: none;
 }
 .auth-hero-eyebrow {
   font-size: 0.78rem;
@@ -687,102 +875,15 @@
   margin-bottom: 6px;
 }
 .about-hero-body strong { color: #ffffff; }
-.dev-team-carousel {
+.dev-team-banner {
   display: flex;
-  align-items: center;
-  gap: 18px;
-}
-.dev-team-arrow {
-  flex-shrink: 0;
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  border: none;
-  background: rgba(255, 255, 255, 0.14);
-  color: #ffffff;
-  display: flex;
-  align-items: center;
   justify-content: center;
-  cursor: pointer;
-  transition: background 0.15s ease;
 }
-.dev-team-arrow:hover { background: rgba(255, 255, 255, 0.26); }
-.dev-team-arrow svg { width: 18px; height: 18px; }
-.dev-team-grid {
-  flex: 1;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 24px;
-  min-width: 0;
-}
-.dev-team-photo {
-  position: relative;
-  aspect-ratio: 3 / 4;
-  border-radius: 14px;
-  overflow: hidden;
-  background: linear-gradient(135deg, #1e293b, #334155);
-  box-shadow: 0 14px 30px rgba(2, 6, 23, 0.35);
-}
-.dev-team-photo img {
+.dev-team-banner img {
   width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
+  max-width: 1040px;
+  height: auto;
 }
-.dev-team-photo-placeholder {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding-top: 26%;
-  font-size: 2rem;
-  font-weight: 800;
-  color: rgba(255, 255, 255, 0.85);
-}
-.dev-team-caption {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  padding: 22px 12px 12px;
-  text-align: left;
-  background: linear-gradient(180deg, transparent, rgba(2, 6, 23, 0.92) 55%);
-}
-.dev-team-caption .dev-team-name {
-  font-size: 0.92rem;
-  font-weight: 700;
-  color: #ffffff;
-  margin: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.dev-team-caption .dev-team-role {
-  font-size: 0.76rem;
-  color: #93c5fd;
-  margin: 2px 0 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.dev-team-dots {
-  display: flex;
-  justify-content: center;
-  gap: 6px;
-  margin-top: 22px;
-}
-.dev-team-dot {
-  width: 7px;
-  height: 7px;
-  padding: 0;
-  border: none;
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.32);
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-.dev-team-dot.is-active { width: 18px; background: #ffffff; }
 
 .primary-link {
   display: inline-flex; align-items: center; justify-content: center;
@@ -930,6 +1031,50 @@
 .module-nav button.active .module-nav-badge {
   background: #ef4444;
   color: #ffffff;
+}
+
+/* My Work Orders — sub-issues grouped under their shared ticket, instead of
+   repeating the Ticket ID/Title/Vehicle columns on every sub-issue row. */
+.work-order-ticket-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.work-order-ticket-group {
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.work-order-ticket-group-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 16px;
+  background: var(--surface-2, #f8fafc);
+  cursor: pointer;
+}
+.work-order-ticket-group-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-right: auto;
+  min-width: 0;
+}
+.work-order-ticket-id {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--text-muted, #64748b);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.work-order-ticket-group-title strong {
+  font-size: 0.9rem;
+  color: var(--text-strong, #0f172a);
+}
+.work-order-ticket-group .table-shell {
+  border-radius: 0;
+  border: none;
+  border-top: 1px solid var(--border, #e2e8f0);
 }
 
 /* SIDEBAR — collapsed state (icons only, hidden labels) */
@@ -1182,13 +1327,9 @@
   align-items: center;
   gap: 8px;
 }
-.workspace-footer-gear-icon {
-  color: #ffffff;
-  /* White gear on the blue footer — draw the center ring in the footer blue so it stays visible */
-  --gear-ring: #2563eb;
-}
-.workspace-footer-wordmark .vms-wordmark {
-  color: #ffffff;
+.workspace-footer-logo {
+  height: 48px;
+  width: auto;
 }
 .workspace-footer-tagline {
   font-style: italic;
@@ -1196,56 +1337,11 @@
   color: rgba(255, 255, 255, 0.88);
   margin: 0;
 }
-.workspace-footer-social {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
-.workspace-footer-social a {
-  display: inline-flex;
-  color: #ffffff;
-  opacity: 0.9;
-  transition: opacity 0.15s;
-}
-.workspace-footer-social a:hover {
-  opacity: 1;
-}
 .workspace-footer-actions {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
   gap: 14px;
-}
-.workspace-footer-buttons {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.workspace-footer-btn {
-  display: inline-block;
-  padding: 10px 20px;
-  border-radius: 8px;
-  font-size: 0.85rem;
-  font-weight: 700;
-  text-decoration: none;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-.workspace-footer-btn-light {
-  background: #ffffff;
-  border: 1px solid #ffffff;
-  color: #2563eb;
-}
-.workspace-footer-btn-light:hover {
-  background: rgba(255, 255, 255, 0.9);
-}
-.workspace-footer-btn-dark {
-  background: rgba(15, 23, 42, 0.25);
-  border: 1px solid rgba(255, 255, 255, 0.6);
-  color: #ffffff;
-}
-.workspace-footer-btn-dark:hover {
-  background: rgba(15, 23, 42, 0.4);
 }
 .workspace-footer-links {
   display: flex;
@@ -1276,7 +1372,6 @@
     align-items: center;
     min-width: 0;
   }
-  .workspace-footer-buttons,
   .workspace-footer-links {
     flex-wrap: wrap;
     justify-content: center;
@@ -1286,64 +1381,13 @@
   }
 }
 
-/* AuthFooter — public-page footer (Login, About, Developers). No logo
-   (the header already carries the brand); a large tagline + socials on the
-   left, real site links on the right, copyright/legal along the bottom. */
+/* AuthFooter — public-page footer (Login, About, Developers). Just the
+   copyright/legal bar; no logo (the header already carries the brand). */
 .auth-footer {
   margin-top: auto;
   background: #1d4ed8;
-  padding: 48px 40px 0;
+  padding: 0 40px;
 }
-.auth-footer-main {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 32px;
-  flex-wrap: wrap;
-  max-width: 1180px;
-  margin: 0 auto;
-  padding-bottom: 32px;
-}
-.auth-footer-brand { max-width: 420px; }
-.auth-footer-tagline {
-  font-size: 1.5rem;
-  font-weight: 800;
-  line-height: 1.3;
-  color: #ffffff;
-  margin: 0 0 20px;
-}
-.auth-footer-social {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.auth-footer-social a {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.14);
-  color: #ffffff;
-  transition: background 0.15s ease, transform 0.12s ease;
-}
-.auth-footer-social a:hover { background: rgba(255, 255, 255, 0.26); transform: translateY(-2px); }
-.auth-footer-social a:active { transform: scale(0.92); }
-.auth-footer-links {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.auth-footer-links a {
-  font-size: 0.9rem;
-  font-weight: 600;
-  color: rgba(255, 255, 255, 0.85);
-  display: inline-block;
-  transition: color 0.15s ease, transform 0.12s ease;
-}
-.auth-footer-links a:hover { color: #ffffff; text-decoration: underline; transform: translateX(3px); }
-.auth-footer-links a:active { transform: scale(0.95); }
 .auth-footer-bottom {
   display: flex;
   align-items: center;
@@ -1352,8 +1396,7 @@
   flex-wrap: wrap;
   max-width: 1180px;
   margin: 0 auto;
-  padding: 20px 0;
-  border-top: 1px solid rgba(255, 255, 255, 0.22);
+  padding: 24px 0;
 }
 .auth-footer-copyright {
   margin: 0;
@@ -1371,7 +1414,6 @@
 }
 .auth-footer-legal a:hover { text-decoration: underline; }
 @media (max-width: 720px) {
-  .auth-footer-main { flex-direction: column; }
   .auth-footer-bottom { justify-content: center; text-align: center; }
 }
 
@@ -1445,7 +1487,12 @@
   border: none;
   cursor: pointer;
   opacity: 0.7;
-  padding: 2px;
+  /* 13px icon + 2px padding left an effective ~17x17 hit target, under the
+     24x24 WCAG 2.2 AA minimum — fix the box size directly instead of
+     relying on padding so it stays 24x24 regardless of the icon's own size. */
+  width: 24px;
+  height: 24px;
+  padding: 0;
   border-radius: 50%;
   color: inherit;
 }
@@ -1588,9 +1635,9 @@ html[data-theme="light"] .toast-notice.error {
   font-size: 0.9rem;
   box-shadow: 0 20px 44px rgba(15, 23, 42, 0.28);
 }
-.loading-overlay-gear {
-  color: #2563eb;
-  animation: vms-gear-spin 4s linear infinite;
+.loading-overlay-lottie {
+  width: 90px;
+  height: 90px;
 }
 
 /* --- Trendy module loader (spinner + shimmer skeleton) --- */
@@ -2306,7 +2353,8 @@ table a:hover {
   gap: 4px;
 }
 .field-hint {
-  font-size: 0.72rem;
+  /* Was 0.72rem (11.5px) — under the 12px body-text floor. */
+  font-size: 0.75rem;
   font-weight: 400;
   text-transform: none;
   letter-spacing: normal;
@@ -2315,11 +2363,17 @@ table a:hover {
 }
 .smart-form label span {
   font-family: 'Space Grotesk', sans-serif;
-  font-size: 0.68rem;
+  /* Was 0.68rem (10.9px) — under the 12px floor for what is, on every form
+     in the app, the actual field label (not a decorative eyebrow). */
+  font-size: 0.75rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: #64748b;
+  /* Was a bare #64748b with no dark-theme override — ~3.9:1 against the
+     real dark-theme surface, under the 4.5:1 AA floor. var(--text-muted)
+     resolves to this exact value in light theme (no visible change there)
+     and to a lighter, dark-theme-appropriate tone by default. */
+  color: var(--text-muted, #64748b);
   transition: color 0.15s ease;
 }
 .smart-form .required-asterisk {
@@ -3139,63 +3193,103 @@ table button.icon-btn svg,
 .report-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; gap: 16px; }
 .report-heading h3 { font-size: 1.2rem; font-weight: 800; }
 .report-heading p { font-size: 0.9rem; color: #64748b; margin-top: 3px; }
+.report-heading-count { color: var(--text-faint, #94a3b8); }
+.report-heading-actions { display: flex; gap: 8px; }
+.report-heading-actions .ghost-button { gap: 6px; }
 
-.report-catalog { display: flex; flex-direction: column; gap: 10px; }
-.report-category {
-  border: 1px solid var(--border, #e2e8f0);
-  border-radius: 10px;
-  overflow: hidden;
-}
-.report-category-header {
-  width: 100%;
+.report-catalog { display: flex; flex-direction: column; gap: 16px; }
+
+.report-category-tabs {
   display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.report-category-tab {
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 14px 16px;
-  background: var(--surface-2, #f8fafc);
-  border: none;
-  color: var(--text-strong, #0f172a);
-  font-size: 0.88rem;
+  gap: 7px;
+  padding: 9px 16px;
+  border-radius: 999px;
+  border: 1px solid var(--border, #e2e8f0);
+  background: var(--surface, #fff);
+  color: var(--text-muted, #64748b);
+  font-size: 0.82rem;
   font-weight: 700;
   cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
 }
-.report-category-header span { display: flex; align-items: center; gap: 8px; }
-.report-category-body {
-  display: flex;
-  flex-direction: column;
-  padding: 6px;
-  gap: 4px;
+.report-category-tab:hover {
+  background: var(--surface-2, #f8fafc);
+  color: var(--text-strong, #0f172a);
 }
-.report-type-item {
+.report-category-tab.active {
+  background: linear-gradient(135deg, #2563eb, #1d4ed8);
+  border-color: transparent;
+  color: #ffffff;
+  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.28);
+}
+
+.report-type-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+}
+.report-type-card {
+  position: relative;
   display: flex;
-  flex-direction: column;
   align-items: flex-start;
-  gap: 2px;
+  gap: 12px;
   text-align: left;
-  padding: 10px 12px;
-  border-radius: 8px;
-  border: 1px solid transparent;
-  background: transparent;
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
-}
-.report-type-item:hover { background: rgba(37, 99, 235, 0.06); }
-.report-type-item.active { background: rgba(37, 99, 235, 0.1); border-color: rgba(37, 99, 235, 0.28); }
-.report-type-item strong { font-size: 0.85rem; color: var(--text-strong, #0f172a); }
-.report-type-item span { font-size: 0.78rem; color: var(--text-muted, #64748b); }
-.report-generator-panel {
-  margin-top: 8px;
-  padding: 18px;
+  padding: 14px;
+  border-radius: 12px;
   border: 1px solid var(--border, #e2e8f0);
-  border-radius: 10px;
   background: var(--surface, #fff);
+  cursor: pointer;
+  transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+}
+.report-type-card:hover {
+  border-color: rgba(37, 99, 235, 0.35);
+  transform: translateY(-2px);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+}
+.report-type-card.active {
+  background: rgba(37, 99, 235, 0.08);
+  border-color: rgba(37, 99, 235, 0.4);
+}
+.report-type-card-icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #2563eb, #1d4ed8);
+  color: #ffffff;
+}
+.report-type-card-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.report-type-card-body strong { font-size: 0.86rem; color: var(--text-strong, #0f172a); }
+.report-type-card-body span { font-size: 0.76rem; color: var(--text-muted, #64748b); line-height: 1.4; }
+.report-type-card-check { position: absolute; top: 10px; right: 10px; color: #2563eb; }
+
+.report-generator-panel {
+  margin-top: 4px;
+  padding: 20px;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 14px;
+  background: var(--surface, #fff);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
 }
 .report-generator-panel h4 {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 0.9rem;
-  margin-bottom: 14px;
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: var(--text-strong, #0f172a);
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border, #e2e8f0);
 }
 
 /* ANIMATIONS */
@@ -4258,7 +4352,11 @@ html section.ticket-process-hero .ticket-detail-title { margin-bottom: 8px; colo
 }
 .notifications-dropdown {
   position: absolute; top: 48px; right: 0;
-  width: 380px; max-height: 480px;
+  /* Fixed 380px with no responsive override forced horizontal scroll (or
+     clipped off the left edge) on any phone viewport narrower than that —
+     max-width caps it to the actual viewport minus a small margin on both
+     sides, on top of the existing width so nothing changes on wider screens. */
+  width: 380px; max-width: calc(100vw - 32px); max-height: 480px;
   background: #ffffff; border: 1px solid #e2e8f0;
   border-radius: 12px; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.05);
   z-index: 100; display: flex; flex-direction: column; overflow: hidden;
@@ -4586,7 +4684,10 @@ html section.ticket-process-hero .ticket-detail-title { margin-bottom: 8px; colo
 }
 .notification-close-btn {
   background: none; border: none; color: #94a3b8; font-size: 0.85rem; cursor: pointer;
-  width: 20px; height: 20px; display: flex; align-items: center; justify-content: center;
+  /* 24x24 is the WCAG 2.2 AA minimum pointer target — this sat at 20x20
+     right next to the notification row's own full-row click handler, so a
+     mis-tap near the edge landed on the wrong action. */
+  width: 24px; height: 24px; display: flex; align-items: center; justify-content: center;
   border-radius: 4px; transition: all 0.15s;
 }
 .notification-close-btn:hover { background: #fee2e2; color: #ef4444; }
@@ -4673,6 +4774,38 @@ html section.ticket-process-hero .ticket-detail-title { margin-bottom: 8px; colo
   object-fit: cover;
 }
 
+/* Vehicle Management's card view — a full-bleed photo header instead of
+   the small side-by-side thumbnail MaintenanceRecordCard uses, since a
+   vehicle photo is the primary way to recognize one at a glance. */
+.vehicle-card-photo {
+  margin: -18px -18px 12px;
+  height: 140px;
+  overflow: hidden;
+  border-radius: 13px 13px 0 0;
+  background: linear-gradient(135deg, #1d4ed8, #2563eb);
+}
+.vehicle-card-photo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.vehicle-card-photo-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.85);
+}
+.vehicle-card-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 0 12px;
+}
+
 .ticket-detail-label {
   display: block;
   font-size: 0.66rem;
@@ -4705,15 +4838,158 @@ html section.ticket-process-hero .ticket-detail-title { margin-bottom: 8px; colo
 .vehicle-detail-specs dd { font-size: 0.85rem; font-weight: 600; margin-top: 2px; }
 .vehicle-detail-status-hint { margin-top: 10px; }
 
-/* --- Vehicle Profile Page header --- */
+/* --- Vehicle Profile Page header ---
+   Used to be just a bar of right-aligned action buttons with no vehicle
+   identity in it at all — you had to look inside the "Vehicle Information"
+   card below to even confirm which vehicle you were on. Now the left side
+   carries a Back button + name/plate/status so the header itself answers
+   "where am I", and the actions stay right-aligned. */
 .vehicle-profile-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 18px;
   margin-bottom: 20px;
   padding-bottom: 18px;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid var(--border, #e2e8f0);
   flex-wrap: wrap;
+}
+.vehicle-profile-identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.vehicle-profile-back-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  border-radius: 9px;
+  border: 1px solid var(--border, #e2e8f0);
+  background: var(--surface, #fff);
+  color: var(--text, #334155);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.vehicle-profile-back-btn:hover {
+  background: var(--primary, #2563eb);
+  border-color: var(--primary, #2563eb);
+  color: #fff;
+}
+.vehicle-profile-identity-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 auto;
+  border-radius: 10px;
+  background: var(--primary-soft, #eff6ff);
+  color: var(--primary, #2563eb);
+}
+.vehicle-profile-identity-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.vehicle-profile-identity-text h3 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 800;
+  color: var(--text-strong, #0f172a);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.vehicle-profile-identity-text span {
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--text-muted, #64748b);
+  letter-spacing: 0.02em;
+}
+@media (max-width: 640px) {
+  .vehicle-profile-identity-text h3 { max-width: 44vw; }
+}
+
+/* Decommissioned banner — was inline-styled with the light-notice palette
+   (#fef2f2/#fecaca/#991b1b) baked in directly, which read fine on the light
+   theme but turned into a jarring pale-pink box on the dark theme. Reusing
+   the app's actual notice tokens (see .notice.error) makes it theme-correct
+   for free, the same way every other status surface on this page already is. */
+.vehicle-profile-decommissioned-banner {
+  margin: 0 0 16px;
+  padding: 14px 18px;
+  border-radius: 12px;
+  background: rgba(255, 92, 92, 0.12);
+  border: 1px solid rgba(255, 92, 92, 0.3);
+  color: #ffa3a3;
+}
+html[data-theme="light"] .vehicle-profile-decommissioned-banner {
+  background: linear-gradient(90deg, #fef2f2, #fee2e2);
+  border: 1px solid #fca5a5;
+  color: #991b1b;
+}
+.vehicle-profile-decommissioned-banner-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+.vehicle-profile-decommissioned-banner p {
+  margin: 4px 0 0;
+}
+.vehicle-profile-decommissioned-banner-meta {
+  font-size: 0.82rem;
+  opacity: 0.85;
+}
+
+/* Response Readiness pill — same problem as the banner above: it used to
+   carry READINESS_BADGE's inline bg/color/border straight from JS (a
+   pastel-mint/pastel-red palette tuned for a white card), which can't be
+   touched by a stylesheet at all since it's an inline style. Swapping to a
+   data-attribute + these classes lets the dark theme get its own legible
+   tones (mirrors the .notice.success/.warning/.error treatment) while light
+   mode keeps the original pastel look via the override below. */
+.vehicle-profile-readiness-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 0.76rem; font-weight: 700; padding: 3px 10px; border-radius: 999px;
+}
+.vehicle-profile-readiness-badge[data-readiness="ready"] {
+  background: rgba(54, 198, 109, 0.14); border: 1px solid rgba(54, 198, 109, 0.32); color: #8ee7ad;
+}
+.vehicle-profile-readiness-badge[data-readiness="stale"] {
+  background: rgba(245, 158, 11, 0.16); border: 1px solid rgba(245, 158, 11, 0.35); color: #fbbf24;
+}
+.vehicle-profile-readiness-badge[data-readiness="not_ready"] {
+  background: rgba(255, 92, 92, 0.14); border: 1px solid rgba(255, 92, 92, 0.32); color: #ffa3a3;
+}
+.vehicle-profile-readiness-badge[data-readiness="unchecked"],
+.vehicle-profile-readiness-badge[data-readiness="retired"] {
+  background: rgba(148, 163, 184, 0.16); border: 1px solid rgba(148, 163, 184, 0.32); color: #cbd5e1;
+}
+.vehicle-profile-readiness-badge[data-readiness="in_maintenance"] {
+  background: rgba(249, 115, 22, 0.16); border: 1px solid rgba(249, 115, 22, 0.35); color: #fdba74;
+}
+html[data-theme="light"] .vehicle-profile-readiness-badge[data-readiness="ready"] {
+  background: #ecfdf5; border-color: #a7f3d0; color: #065f46;
+}
+html[data-theme="light"] .vehicle-profile-readiness-badge[data-readiness="stale"] {
+  background: #fef3c7; border-color: #fde68a; color: #92400e;
+}
+html[data-theme="light"] .vehicle-profile-readiness-badge[data-readiness="not_ready"] {
+  background: #fee2e2; border-color: #fecaca; color: #b91c1c;
+}
+html[data-theme="light"] .vehicle-profile-readiness-badge[data-readiness="unchecked"],
+html[data-theme="light"] .vehicle-profile-readiness-badge[data-readiness="retired"] {
+  background: #f1f5f9; border-color: #cbd5e1; color: #475569;
+}
+html[data-theme="light"] .vehicle-profile-readiness-badge[data-readiness="in_maintenance"] {
+  background: #fff7ed; border-color: #fed7aa; color: #9a3412;
 }
 .vehicle-profile-photo {
   width: 88px;
@@ -4846,11 +5122,31 @@ html section.ticket-process-hero .ticket-detail-title { margin-bottom: 8px; colo
 
 /* Add/Edit Vehicle Type — just 2 short fields + a textarea; letting it
    stretch across the same width as the big multi-section forms (Vehicle,
-   User) left it looking sparse and unfinished. Capped and centered instead
-   of filling the whole panel. */
+   User) left it looking sparse and unfinished, sitting in the same flat
+   gray box every other plain form uses with no title of its own. Capped
+   and centered, and re-styled as its own white card with a banded header
+   (the same veh-card-head look used on the Vehicle Profile page) instead. */
 .form-grid-2col.category-form-grid {
   max-width: 640px;
   margin: 0 auto;
+  padding: 0;
+  overflow: hidden;
+  background: var(--surface, #fff);
+  border-radius: 12px;
+  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.12);
+}
+.category-form-grid .smart-form {
+  padding: 20px 24px 24px;
+}
+.category-form-grid .smart-form > h3 {
+  grid-column: 1 / -1;
+  margin: -20px -24px 12px;
+  padding: 14px 24px;
+  font-family: inherit;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-strong, #0f172a);
+  border-bottom: 1px solid var(--border, #e2e8f0);
 }
 
 /* Create Ticket form — sectioned card layout instead of one long vertical
@@ -5178,15 +5474,15 @@ html section.ticket-process-hero .ticket-detail-title { margin-bottom: 8px; colo
    .veh-print-report, hidden until a print is actually requested. */
 .veh-reports-body { display: flex; gap: 10px; padding: 14px 18px; align-items: center; }
 .veh-reports-select {
-  flex: 1; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 8px;
-  font-size: 0.85rem; font-weight: 600; color: #2563eb; background: #fff;
+  flex: 1; padding: 8px 10px; border: 1px solid var(--border, #cbd5e1); border-radius: 8px;
+  font-size: 0.85rem; font-weight: 600; color: var(--primary, #2563eb); background: var(--surface, #fff);
 }
 .veh-reports-print-btn {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 38px; height: 38px; flex-shrink: 0; border: 1px solid #2563eb; border-radius: 8px;
-  background: #fff; color: #2563eb; cursor: pointer; transition: background 0.15s ease;
+  width: 38px; height: 38px; flex-shrink: 0; border: 1px solid var(--primary, #2563eb); border-radius: 8px;
+  background: var(--surface, #fff); color: var(--primary, #2563eb); cursor: pointer; transition: background 0.15s ease;
 }
-.veh-reports-print-btn:hover { background: #eff6ff; }
+.veh-reports-print-btn:hover { background: var(--primary-soft, #eff6ff); }
 
 /* Current Location map — moved out of the narrow left column entirely so
    it spans the full page width instead of being squeezed to ~380px. */
@@ -5601,18 +5897,31 @@ button.file-card-icon-btn:disabled { opacity: 0.4; cursor: not-allowed; pointer-
 .filter-bar-container {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: 10px 12px;
   align-items: center;
   margin-top: 14px;
   margin-bottom: 6px;
   width: 100%;
   animation: fadeSlide 0.2s ease;
 }
+/* Filter/Clear/trailing get their own row — `flex-basis: 100%` on a flex-
+   wrap container forces everything after this point onto a new line,
+   however many (or few) dropdowns preceded it wrapped onto their own. */
+.filter-bar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  flex-basis: 100%;
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border, #e2e8f0);
+}
 .filter-bar-trailing {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-left: auto;
+  margin-right: auto;
 }
 .module-filter-panel {
   padding: 16px 22px;
@@ -5641,10 +5950,14 @@ button.file-card-icon-btn:disabled { opacity: 0.4; cursor: not-allowed; pointer-
 }
 
 /* Checkbox multi-select dropdown — replaces the native <select> in filter
-   rows so a filter can hold zero, one, or many values. */
+   rows so a filter can hold zero, one, or many values. A fixed width
+   (rather than each trigger sizing to its own label text) is what actually
+   makes a row of 5-7 of these read as a tidy grid instead of a ragged,
+   unevenly-sized row. */
 .multi-select-dropdown {
   position: relative;
   display: inline-block;
+  width: 190px;
 }
 .filter-bar-container > .filter-date-group {
   display: inline-flex;
@@ -7794,23 +8107,36 @@ table button,
 
 table {
   color: var(--text);
+  font-size: 0.73rem;
 }
 
+/* Sizing here (padding/font-size/white-space/text-align/text-transform)
+   deliberately mirrors html[data-theme="light"]'s thead th/tbody td exactly
+   — only colors should differ between themes; a table that reflows to a
+   different size when switching theme was the actual bug being fixed. */
 thead th {
   background: #111214;
   border-right: none;
   border-bottom: 1px solid var(--border);
   color: var(--text-muted);
-  font-size: 0.76rem;
+  font-size: 0.7rem;
   font-weight: 800;
-  padding: 13px 16px;
+  line-height: 1.25;
+  padding: 8px 10px;
+  text-align: center;
+  text-transform: none;
+  white-space: normal;
 }
 
 tbody td {
   border-right: none;
   border-bottom: 1px solid var(--border-subtle);
   color: #d8d1c7;
-  padding: 13px 16px;
+  font-size: 0.72rem;
+  font-weight: 500;
+  line-height: 1.35;
+  padding: 8px 10px;
+  vertical-align: middle;
 }
 
 tbody tr:hover,
@@ -7956,8 +8282,12 @@ table a:hover,
 }
 
 .smart-form label span {
-  color: #64748b;
-  font-size: 0.68rem;
+  /* This later rule wins the cascade over the one near the top of the file
+     (same selector) — kept in sync with the same fixes: 12px floor instead
+     of 10.9px, and a theme-aware color instead of a dark-theme-illegible
+     hardcoded gray. */
+  color: var(--text-muted, #64748b);
+  font-size: 0.75rem;
   font-weight: 700;
 }
 
@@ -8312,6 +8642,19 @@ button.btn-view-action svg {
   color: var(--text);
   font-size: 0.92rem;
   line-height: 1.55;
+}
+
+/* CreatableSelect's inline delete-error text used a hardcoded dark red
+   (#b91c1c) meant for a white page — illegible against this dialog's real
+   background (var(--bg-elevated), near-black by default). Same color pair
+   as .notice.error's dark/light split. */
+.confirm-dialog-error-text {
+  color: #ffa3a3;
+  font-weight: 600;
+  margin-top: 8px;
+}
+html[data-theme="light"] .confirm-dialog-error-text {
+  color: #991b1b;
 }
 
 .confirm-dialog-actions {
@@ -9179,6 +9522,152 @@ button.btn-view-action svg {
   line-height: 1.3;
 }
 
+/* Vehicle-count marker click opens this instead of a Leaflet popup — a
+   slide-in drawer reads better than a small floating box for a whole hub's
+   vehicle list, especially once it grows past a few entries. */
+.location-density-drawer-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 4000;
+  background: rgba(2, 6, 16, 0.5);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+}
+.location-density-drawer-overlay.is-open {
+  opacity: 1;
+  pointer-events: auto;
+}
+.location-density-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 4001;
+  width: min(360px, 100%);
+  background: #101218;
+  border-left: 1px solid #22c55e;
+  box-shadow: -12px 0 40px rgba(0, 0, 0, 0.5);
+  color: #f7f8fb;
+  display: flex;
+  flex-direction: column;
+  transform: translateX(100%);
+  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.location-density-drawer.is-open {
+  transform: translateX(0);
+}
+.location-density-drawer-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 18px 14px;
+  border-bottom: 1px solid rgba(134, 239, 172, 0.18);
+}
+.location-density-drawer-header > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.location-density-drawer-header strong {
+  color: #86efac;
+  font-size: 0.95rem;
+}
+.location-density-drawer-header span {
+  color: #cfd4df;
+  font-size: 0.74rem;
+  line-height: 1.4;
+}
+.location-density-drawer-close {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  border: 1px solid rgba(134, 239, 172, 0.25);
+  background: rgba(134, 239, 172, 0.08);
+  color: #cfd4df;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.location-density-drawer-close:hover {
+  background: rgba(134, 239, 172, 0.16);
+  color: #f7f8fb;
+}
+.location-density-drawer-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 14px 18px 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(134, 239, 172, 0.25);
+  background: rgba(134, 239, 172, 0.06);
+  color: #8f929a;
+  transition: border-color 0.15s ease;
+}
+.location-density-drawer-search:focus-within {
+  border-color: #22c55e;
+  color: #cfd4df;
+}
+.location-density-drawer-search input {
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: none;
+  color: #f7f8fb;
+  font-size: 0.82rem;
+}
+.location-density-drawer-search input::placeholder {
+  color: #8f929a;
+}
+.location-density-drawer-search input:focus {
+  outline: none;
+}
+.location-density-drawer-search button {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: none;
+  color: #8f929a;
+  cursor: pointer;
+}
+.location-density-drawer-search button:hover {
+  color: #f7f8fb;
+}
+.location-density-drawer-subhead {
+  margin: 0;
+  padding: 14px 18px 0;
+  color: #8f929a;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.location-density-drawer-empty {
+  margin: 0;
+  padding: 24px 4px;
+  color: #8f929a;
+  font-size: 0.82rem;
+  text-align: center;
+}
+.location-density-drawer-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 18px 18px;
+}
+
 .location-density-map .leaflet-control-zoom {
   border: 1px solid #2a2f3a;
   border-radius: 8px;
@@ -9393,33 +9882,6 @@ button.btn-view-action svg {
   gap: 10px;
 }
 
-.vms-wordmark {
-  font-family: 'Poppins', 'Inter', "Trebuchet MS", Helvetica, sans-serif;
-  font-weight: 800;
-  color: #2563eb;
-  letter-spacing: -0.5px;
-  line-height: 1;
-  text-transform: lowercase;
-  /* Lowercase-only text has no ascenders/descenders, so its ink sits low
-     within its own line box compared to an icon that fills its box
-     edge-to-edge — nudge it up a touch so it lines up with the gear icon
-     beside it. */
-  position: relative;
-  top: -0.05em;
-}
-
-.vms-wordmark-md {
-  font-size: 2.3rem;
-}
-
-.vms-wordmark-xl {
-  font-size: 2.4rem;
-}
-
-.vms-wordmark-sm {
-  font-size: 1.5rem;
-}
-
 .topbar-brand-cluster {
   display: flex;
   align-items: center;
@@ -9444,8 +9906,7 @@ button.btn-view-action svg {
   color: #1d4ed8;
 }
 
-.topbar-brand-cluster .sidebar-toggle-btn svg,
-.topbar-gear-icon {
+.topbar-brand-cluster .sidebar-toggle-btn svg {
   stroke-width: 2.4;
 }
 
@@ -9454,9 +9915,15 @@ button.btn-view-action svg {
   to { transform: rotate(360deg); }
 }
 
-.topbar-gear-icon {
-  color: #2563eb;
-  animation: vms-gear-spin 4s linear infinite;
+.topbar-brand-logo {
+  height: 42px;
+  width: auto;
+  flex-shrink: 0;
+}
+
+.print-brand-logo {
+  height: 60px;
+  width: auto;
   flex-shrink: 0;
 }
 
@@ -9838,8 +10305,8 @@ html[data-theme="light"] .content-area {
 }
 
 html[data-theme="light"] .topbar {
-  background: #ffffff;
-  border-bottom: 1px solid #cfe0f2;
+  background: #1d4ed8;
+  border-bottom: 1px solid #1739a8;
   box-shadow: 0 2px 7px rgba(31, 75, 122, 0.06);
   padding: 12px 24px;
 }
@@ -9852,17 +10319,24 @@ html[data-theme="light"] .page-heading-row {
 }
 
 html[data-theme="light"] .breadcrumb-path {
-  color: #2575d8;
+  color: rgba(255, 255, 255, 0.75);
   font-size: 0.72rem;
   font-weight: 500;
   text-transform: none;
 }
 
 html[data-theme="light"] .topbar h2 {
-  color: #2575d8;
+  color: #ffffff;
   font-size: 1.18rem;
   font-weight: 700;
   margin-top: 1px;
+}
+
+html[data-theme="light"] .topbar-brand-cluster .sidebar-toggle-btn {
+  color: #ffffff;
+}
+html[data-theme="light"] .topbar-brand-cluster .sidebar-toggle-btn:hover {
+  color: rgba(255, 255, 255, 0.8);
 }
 
 html[data-theme="light"] .icon-btn,
@@ -10743,10 +11217,7 @@ html[data-theme="light"] .issue-id-badge {
 .dashboard-hologram-core {
   align-self: center;
   aspect-ratio: 1;
-  background:
-    radial-gradient(circle at 50% 50%, rgba(15, 23, 42, 0.94) 0 43%, transparent 44%),
-    conic-gradient(var(--core) var(--score), rgba(148, 163, 184, 0.2) 0),
-    radial-gradient(circle, var(--core-soft), transparent 68%);
+  background: radial-gradient(circle, var(--core-soft), transparent 68%);
   border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 50%;
   box-shadow:
@@ -10761,47 +11232,9 @@ html[data-theme="light"] .issue-id-badge {
   width: 100%;
 }
 
-.dashboard-hologram-inner {
-  align-content: center;
-  background: rgba(2, 6, 23, 0.78);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 50%;
-  display: grid;
-  height: 57%;
-  justify-items: center;
-  padding: 14px;
-  text-align: center;
-  width: 57%;
-}
-
-.dashboard-hologram-inner span {
-  color: #bae6fd;
-  font-size: 0.66rem;
-  font-weight: 900;
-  text-transform: uppercase;
-}
-
-.dashboard-hologram-inner strong {
-  color: #ffffff;
-  font-size: 3rem;
-  font-weight: 900;
-  line-height: 0.95;
-}
-
-.dashboard-hologram-inner small {
-  color: rgba(226, 232, 240, 0.88);
-  font-size: 0.7rem;
-  font-weight: 800;
-}
-
-.dashboard-hologram-scan {
-  animation: dashboardScan 3.8s linear infinite;
-  background: repeating-linear-gradient(180deg, rgba(125, 211, 252, 0.18) 0 2px, transparent 2px 9px);
-  border-radius: 50%;
-  clip-path: circle(48% at 50% 50%);
-  inset: 8%;
-  opacity: 0.42;
-  position: absolute;
+.ops-score-gauge {
+  width: 100%;
+  height: 100%;
 }
 
 .dashboard-command-side {
@@ -11002,8 +11435,12 @@ button.dashboard-signal-card:hover {
   padding: 18px;
 }
 
-.dashboard-readiness-matrix { grid-column: span 5; }
-.dashboard-condition-matrix { grid-column: span 3; }
+/* Response Matrix at span 3 crushed each row's name/detail text down to
+   the point of wrapping/overlapping with the "X/Y READY" tag + bar next to
+   it — span 4 keeps it narrower than its original span 5 (per the earlier
+   request) but leaves enough room for that row content to stay legible. */
+.dashboard-readiness-matrix { grid-column: span 4; }
+.dashboard-condition-matrix { grid-column: span 4; }
 .dashboard-operations-matrix { grid-column: span 4; }
 .dashboard-distribution-matrix { grid-column: 1 / -1; }
 
@@ -11042,10 +11479,25 @@ button.dashboard-signal-card:hover {
 .dashboard-readiness-compact-list .emergency-readiness-row {
   margin: 0;
   padding: 9px 10px;
+  gap: 8px;
+}
+
+/* The category name had no truncation of its own (only the detail line
+   below it did) — at this panel's narrower width a long type name could
+   wrap and collide with the "X/Y READY" tag instead of just ellipsizing. */
+.dashboard-readiness-compact-list .emergency-readiness-row-name {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dashboard-readiness-compact-list .emergency-readiness-row-stat {
-  min-width: 76px;
+  min-width: 64px;
+}
+
+.dashboard-readiness-compact-list .emergency-readiness-row-bar {
+  width: 44px;
 }
 
 .dashboard-inline-action {
@@ -11063,12 +11515,12 @@ button.dashboard-signal-card:hover {
 .dashboard-condition-core {
   align-items: center;
   display: grid;
-  gap: 10px;
-  grid-template-columns: 116px minmax(0, 1fr);
+  gap: 14px;
+  grid-template-columns: 156px minmax(0, 1fr);
 }
 
 .dashboard-condition-donut .donut-chart {
-  width: 112px;
+  width: 152px;
 }
 
 .dashboard-condition-core .chart-legend {
@@ -11082,7 +11534,7 @@ button.dashboard-signal-card:hover {
 .dashboard-status-strip {
   display: grid;
   gap: 8px;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .dashboard-status-strip div {
@@ -11154,6 +11606,11 @@ button.dashboard-signal-card:hover {
   text-transform: uppercase;
 }
 
+.echarts-horizontal-bar {
+  width: 100%;
+  height: 200px;
+}
+
 .dashboard-grid-smart .horizontal-bars {
   gap: 10px;
 }
@@ -11161,17 +11618,6 @@ button.dashboard-signal-card:hover {
 .dashboard-grid-smart .bar-track {
   background: rgba(148, 163, 184, 0.18);
   height: 7px;
-}
-
-@keyframes dashboardScan {
-  from { transform: translateY(-9px); }
-  to { transform: translateY(9px); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .dashboard-hologram-scan {
-    animation: none;
-  }
 }
 
 html[data-theme="light"] .dashboard-command-center {
@@ -11202,22 +11648,6 @@ html[data-theme="light"] .dashboard-smart-panel-head > strong {
   color: #071a35;
 }
 
-html[data-theme="light"] .dashboard-hologram-inner {
-  background: rgba(248, 250, 252, 0.88);
-}
-
-html[data-theme="light"] .dashboard-hologram-inner strong {
-  color: #071a35;
-}
-
-html[data-theme="light"] .dashboard-hologram-inner span {
-  color: #0f766e;
-}
-
-html[data-theme="light"] .dashboard-hologram-inner small {
-  color: #475569;
-}
-
 @media (max-width: 1180px) {
   .dashboard-command-center {
     grid-template-columns: minmax(0, 1fr) minmax(210px, 0.72fr);
@@ -11245,6 +11675,10 @@ html[data-theme="light"] .dashboard-hologram-inner small {
     grid-template-columns: 1fr;
   }
 
+  .dashboard-status-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .dashboard-hologram-core {
     max-width: 220px;
   }
@@ -11268,10 +11702,6 @@ html[data-theme="light"] .dashboard-hologram-inner small {
   .dashboard-status-strip,
   .dashboard-operations-matrix .column-chart {
     grid-template-columns: 1fr;
-  }
-
-  .dashboard-hologram-inner strong {
-    font-size: 2.35rem;
   }
 
   .dashboard-signal-card p {
@@ -11358,17 +11788,22 @@ html[data-theme="dark"] .file-cabinet-dropzone-title {
 
 /* LOGIN SHOWCASE
    Image-led, split-screen sign-in treatment based on the supplied VMS artwork. */
+.login-page-shell {
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+}
+
 .vms-login-page {
   --login-blue: #0868c7;
   --login-cyan: #16d6f3;
   position: relative;
-  min-height: 100vh;
-  min-height: 100dvh;
-  display: grid;
-  place-items: center;
+  flex: 1;
+  min-height: 0;
+  display: flex;
   isolation: isolate;
   overflow: hidden;
-  padding: clamp(24px, 5vw, 72px);
+  padding: 0;
   background: #071426;
   color: #ffffff;
 }
@@ -11392,26 +11827,28 @@ html[data-theme="dark"] .file-cabinet-dropzone-title {
 }
 
 .vms-login-card {
-  width: min(1120px, 100%);
-  min-height: min(660px, calc(100dvh - 96px));
+  width: 100%;
+  height: 100%;
+  min-height: 0;
   display: flex;
   overflow: hidden;
   background: #071c38;
-  box-shadow: 0 34px 90px rgba(0, 8, 24, 0.55);
+  box-shadow: none;
 }
 
 .vms-login-hero {
   position: relative;
   width: 62%;
-  min-height: 600px;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
   flex-shrink: 0;
-  padding: clamp(34px, 4.2vw, 66px);
-  padding-right: clamp(78px, 8vw, 130px);
+  padding: clamp(24px, 3.4vw, 56px);
+  padding-right: clamp(60px, 7vw, 110px);
   background-position: center 42%;
   background-size: cover;
+  overflow: hidden;
 }
 
 .vms-login-hero-shade {
@@ -11497,9 +11934,11 @@ html[data-theme="dark"] .file-cabinet-dropzone-title {
   position: relative;
   width: 48%;
   min-width: 430px;
+  min-height: 0;
   margin-left: -10%;
   display: flex;
   align-items: center;
+  overflow: hidden;
   clip-path: polygon(18% 0, 100% 0, 100% 100%, 0 100%);
   background:
     linear-gradient(155deg, rgba(18, 126, 226, 0.95), rgba(5, 83, 177, 0.98)),
@@ -11530,29 +11969,29 @@ html[data-theme="dark"] .file-cabinet-dropzone-title {
   position: relative;
   z-index: 1;
   width: 100%;
-  max-width: 420px;
+  max-width: 480px;
   margin: 0 auto;
-  padding: 78px 48px 64px 100px;
+  padding: clamp(28px, 6vh, 78px) 48px clamp(24px, 5vh, 64px) 100px;
 }
 
 .vms-login-panel h1 {
   margin: 0;
   color: #ffffff;
-  font-size: clamp(2rem, 3.1vw, 3rem);
+  font-size: clamp(1.7rem, 2.6vw + 1vh, 3rem);
   letter-spacing: -0.035em;
 }
 
 .vms-login-intro {
-  margin: 14px 0 28px;
+  margin: 10px 0 20px;
   color: rgba(255, 255, 255, 0.82);
   font-size: 0.9rem;
-  line-height: 1.6;
+  line-height: 1.5;
 }
 
 .vms-login-form {
   display: flex;
   flex-direction: column;
-  gap: 17px;
+  gap: 14px;
 }
 
 .vms-login-field {
@@ -11689,7 +12128,7 @@ html[data-theme="dark"] .file-cabinet-dropzone-title {
 }
 
 .vms-login-register {
-  margin: 22px 0 0;
+  margin: 16px 0 0;
   color: rgba(255, 255, 255, 0.74);
   font-size: 0.76rem;
 }
@@ -11706,14 +12145,21 @@ html[data-theme="dark"] .file-cabinet-dropzone-title {
 }
 
 @media (max-width: 900px) {
+  .login-page-shell {
+    height: auto;
+    min-height: 100vh;
+    min-height: 100dvh;
+    overflow: visible;
+  }
+
   .vms-login-page {
     align-items: start;
     overflow-y: auto;
-    padding: 24px;
+    padding: 0;
   }
 
   .vms-login-card {
-    width: min(560px, 100%);
+    width: 100%;
     min-height: 0;
     flex-direction: column;
   }
@@ -11821,10 +12267,16 @@ html[data-theme="dark"] .file-cabinet-dropzone-title {
 }
 
 @media (max-height: 720px) and (min-width: 901px) {
+  .login-page-shell {
+    height: auto;
+    min-height: 100vh;
+    min-height: 100dvh;
+    overflow: visible;
+  }
+
   .vms-login-page {
     align-items: start;
     overflow-y: auto;
-    padding-block: 28px;
   }
 
   .vms-login-card {
@@ -11838,5 +12290,88 @@ html[data-theme="dark"] .file-cabinet-dropzone-title {
   .vms-login-password-toggle,
   .vms-login-hero-links a {
     transition: none;
+  }
+}
+
+/* =========================================================================
+   MOBILE NAV DRAWER — phone-width override for the authenticated app shell.
+   Appended last so it wins over the earlier .sidebar/.workspace rules
+   (several of which are themselves later-in-file overrides of even earlier
+   ones) regardless of where those happen to sit in the cascade.
+
+   Above 768px the sidebar behaves as it always has (full rail, or the
+   1100px-triggered icon-only rail) — untouched here. Below 768px it becomes
+   a hidden-by-default off-canvas drawer that slides over the content instead
+   of permanently eating into it, toggled by the same hamburger button
+   (see toggleSidebar in Workspace.jsx, which switches its own meaning at
+   this same 768px breakpoint) and a tap-outside backdrop. */
+@media (max-width: 768px) {
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+  .workspace.sidebar-collapsed {
+    grid-template-columns: 1fr;
+  }
+
+  .mobile-nav-backdrop {
+    position: fixed;
+    inset: 0;
+    top: var(--topbar-height, 64px);
+    background: rgba(2, 6, 23, 0.55);
+    z-index: 90;
+  }
+
+  .sidebar {
+    position: fixed;
+    top: var(--topbar-height, 64px);
+    left: 0;
+    bottom: 0;
+    z-index: 95;
+    width: 270px;
+    height: calc(100vh - var(--topbar-height, 64px));
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    box-shadow: 0 0 40px rgba(0, 0, 0, 0.4);
+  }
+  .sidebar.mobile-open {
+    transform: translateX(0);
+  }
+
+  /* The drawer should read as the full labeled sidebar, not the tablet
+     tier's icon-only rail — restore what that tier hides. */
+  .sidebar.mobile-open .module-nav-section {
+    display: flex;
+  }
+  .sidebar.mobile-open .eyebrow,
+  .sidebar.mobile-open .module-nav button span,
+  .sidebar.mobile-open .module-nav-badge,
+  .sidebar.mobile-open .profile-info,
+  .sidebar.mobile-open .profile-arrow-icon {
+    display: initial;
+  }
+  .sidebar.mobile-open .sidebar-brand {
+    justify-content: flex-start;
+    padding: 8px 8px 24px;
+  }
+  .sidebar.mobile-open .module-nav button {
+    justify-content: flex-start;
+    padding: 10px 12px;
+  }
+  .sidebar.mobile-open .profile-card {
+    justify-content: flex-start;
+  }
+
+  /* The 12-column grid itself never dropped to 1 column — only its current
+     children opted into full-width spans at wider tiers. Any child that
+     forgets to opt in would otherwise still squeeze at phone width. */
+  .dashboard-intelligence-grid {
+    grid-template-columns: 1fr;
+  }
+
+  /* A 520px-tall map leaves almost no room for anything else on a ~600-700px
+     phone viewport once the topbar and page chrome are accounted for. */
+  .location-density-map-shell,
+  .location-density-map {
+    min-height: 320px;
   }
 }

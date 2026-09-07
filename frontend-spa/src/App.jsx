@@ -1,4 +1,4 @@
-import { BrowserRouter as Router, Routes, Route, Navigate, Link } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import ErrorBoundary from './components/ErrorBoundary';
 import Login from './views/Login';
@@ -10,6 +10,7 @@ import Developers from './views/Developers';
 import Support from './views/Support';
 import Workspace from './views/Workspace';
 import SuperAdminWorkspace from './views/SuperAdminWorkspace';
+import NotFound from './views/NotFound';
 import './App.css';
 
 function Unauthorized() {
@@ -70,7 +71,7 @@ function App() {
               </ProtectedRoute>
             }
           />
-          <Route path="*" element={<Navigate to="/login" replace />} />
+          <Route path="*" element={<NotFound />} />
         </Routes>
       </ErrorBoundary>
     </Router>

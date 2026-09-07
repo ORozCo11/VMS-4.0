@@ -1,4 +1,5 @@
 import { Component } from 'react';
+import notFoundIllustration from '../assets/404-not-found.svg';
 
 // Function components can't catch render errors (React only calls
 // getDerivedStateFromError/componentDidCatch on class components), so this
@@ -34,7 +35,12 @@ class ErrorBoundary extends Component {
 
     return (
       <main className="auth-page">
-        <section className="auth-card">
+        <section className="auth-card" style={{ textAlign: 'center' }}>
+          <img
+            src={notFoundIllustration}
+            alt=""
+            style={{ width: '100%', maxWidth: 320, margin: '0 auto 20px' }}
+          />
           <p className="eyebrow">VMS</p>
           <h1>Something went wrong</h1>
           <p className="auth-subtitle">
