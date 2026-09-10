@@ -1,19 +1,22 @@
 import { Link } from 'react-router-dom';
 import Aurora from '../components/Aurora';
 import Icon from '../components/Icon';
+import AuthHeader from '../components/AuthHeader';
+import AuthFooter from '../components/AuthFooter';
 
 export default function Terms() {
   return (
-    <main className="auth-page" style={{ alignItems: 'flex-start', padding: '2rem 1rem' }}>
+    <div className="auth-page-shell">
+      <AuthHeader />
+      <main className="auth-page" style={{ alignItems: 'flex-start', padding: '2rem 1rem' }}>
       <Aurora colorStops={['#0b1220', '#1e3a5f', '#0f172a']} amplitude={0.6} blend={0.55} />
       <section className="auth-card policy-card" style={{ maxWidth: 680, width: '100%', textAlign: 'left', gap: '1rem' }}>
 
         <div className="policy-card-logo">
-          <Icon name="gear" size={28} className="auth-page-header-gear" filled />
+          <Icon name="gear" size={28} className="topbar-gear-icon" filled />
           <span className="vms-wordmark vms-wordmark-sm policy-card-logo-wordmark">vms</span>
         </div>
 
-        <p className="eyebrow">Barangay VMS</p>
         <h1 className="auth-login-heading" style={{ marginBottom: '0.25rem' }}>Terms of Service</h1>
         <p style={{ fontSize: '0.8rem', opacity: 0.7, marginBottom: '1rem' }}>Effective: January 1, 2025</p>
 
@@ -50,6 +53,7 @@ export default function Terms() {
         <TermsSection title="4. Role-Based Access Control">
           Access to system features is determined by your assigned role:
           <ul>
+            <li><strong>Super Admin</strong> — general platform oversight and cross-barangay administrative functions, including registration codes, concern reports, and user account management; does not access any barangay's specific fleet operational data (vehicles, tickets, or maintenance records)</li>
             <li><strong>Admin</strong> — full access to all modules, user management, and system reports</li>
             <li><strong>Custodian</strong> — access to vehicle records, issue reporting, condition checks, location tracking, and maintenance scheduling</li>
             <li><strong>Maintenance Personnel</strong> — access to assigned maintenance tickets and work order records</li>
@@ -112,7 +116,9 @@ export default function Terms() {
         </p>
 
       </section>
-    </main>
+      </main>
+      <AuthFooter />
+    </div>
   );
 }
 

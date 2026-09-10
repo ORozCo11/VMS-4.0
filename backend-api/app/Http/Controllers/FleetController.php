@@ -67,11 +67,11 @@ class FleetController extends Controller
                 ->get(['id', 'name', 'email', 'role']),
             'issue_types' => FaultCategory::orderBy('name')->pluck('name'),
             'maintenance_types' => MaintenanceType::orderBy('name')->pluck('name'),
-            'severity_levels' => ['Low', 'Medium', 'High', 'Critical'],
+            'severity_levels' => ['Low', 'Medium', 'High'],
             // 'In Use' exists in the DB enum but is intentionally not offered —
             // this system tracks availability only; nothing ever sets In Use.
             'vehicle_statuses' => ['Available', 'Under Maintenance', 'Inactive', 'Decommissioned'],
-            'condition_results' => ['Good', 'Needs Inspection', 'Needs Repair', 'Damaged'],
+            'condition_results' => ['Good', 'Needs Inspection', 'Needs Repair'],
             'issue_statuses' => ['Pending', 'Under Review', 'In Maintenance', 'Resolved'],
             'maintenance_statuses' => ['Assigned', 'Under Repair', 'On Hold - Awaiting Parts', 'For Verification', 'Completed'],
             'schedule_statuses' => ['Scheduled', 'Completed', 'Cancelled'],
@@ -141,7 +141,7 @@ class FleetController extends Controller
             ];
             $metrics[] = [
                 'label' => 'Vehicles Needing Attention',
-                'value' => Vehicle::whereIn('condition', ['Needs Inspection', 'Needs Repair', 'Damaged'])
+                'value' => Vehicle::whereIn('condition', ['Needs Inspection', 'Needs Repair'])
                     ->whereNotIn('status', ['Inactive', 'Decommissioned'])
                     ->count(),
             ];
@@ -172,7 +172,8 @@ class FleetController extends Controller
                         ->count()
                     : $activeIssues,
                 'tickets' => MaintenanceTicket::whereNotIn('status', ['Closed', 'Cancelled'])->count(),
-                'conditions' => VehicleConditionCheck::whereIn('condition_result', ['Needs Inspection', 'Needs Repair', 'Damaged'])
+                'conditions' => VehicleConditionCheck::whereIn('condition_result', ['Needs Inspection', 'Needs Repair'])
+                    ->whereHas('vehicle', fn ($q) => $q->whereNotIn('status', ['Inactive', 'Decommissioned']))
                     ->count(),
                 // A mechanic's own badge only counts THEIR upcoming work, not
                 // the whole fleet's — same personalization pattern as the
@@ -206,7 +207,7 @@ class FleetController extends Controller
                 ->groupBy('current_location')
                 ->orderBy('current_location')
                 ->get(),
-            // Fleet health (Good/Needs Inspection/Needs Repair/Damaged) — a
+            // Fleet health (Good/Needs Inspection/Needs Repair) — a
             // different signal than the status counts (Available/Under
             // Maintenance/Inactive) already shown as their own KPI tiles,
             // ordered by severity rather than alphabetically.
@@ -217,8 +218,7 @@ class FleetController extends Controller
                     WHEN 'Good' THEN 1
                     WHEN 'Needs Inspection' THEN 2
                     WHEN 'Needs Repair' THEN 3
-                    WHEN 'Damaged' THEN 4
-                    ELSE 5 END")
+                    ELSE 4 END")
                 ->get(),
             'recent_updates' => VehicleHistory::with(['vehicle', 'updatedBy'])
                 ->latest('history_id')
@@ -435,9 +435,11 @@ class FleetController extends Controller
         if ($vehicle->status !== 'Available') {
             return 'in_maintenance';
         }
-        if (in_array($vehicle->condition, ['Needs Repair', 'Damaged'], true)) {
-            return 'not_ready';
-        }
+        // Deliberately NOT gated on condition here — a vehicle can be
+        // Available with a lingering "Needs Repair" condition (see
+        // markVehicleAvailable's override for the emergency-dispatch case);
+        // whether it's actually ready to respond right now is decided by
+        // the readiness check itself, below.
         if (!$latest) {
             return 'unchecked';
         }
@@ -722,7 +724,18 @@ class FleetController extends Controller
     {
         $this->requireRole($request, ['Admin']);
 
-        abort_if($category->vehicles()->exists(), 422, 'This category is still assigned to one or more vehicles.');
+        // VehicleCategory is a global/shared table (categories.category_id
+        // has a RESTRICT FK from vehicles.category_id), but Vehicle itself is
+        // barangay-scoped — $category->vehicles()->exists() would only see
+        // the CURRENT barangay's vehicles and let this delete through even
+        // while another barangay's vehicle still references it, 500ing on
+        // the FK constraint. Bypass the tenant scope for this existence
+        // check since it's legitimately asking a global question.
+        abort_if(
+            Vehicle::withoutGlobalScopes()->where('category_id', $category->category_id)->exists(),
+            422,
+            'This category is still assigned to one or more vehicles.'
+        );
 
         $this->log($request, 'Delete', 'Vehicle Categories', $category->category_id, "Deleted vehicle type {$category->category_name}");
         $category->delete();
@@ -823,9 +836,29 @@ class FleetController extends Controller
         unset($data['photo']);
 
         DB::transaction(function () use ($vehicle, $data, $request) {
+            $previousLocation = $vehicle->current_location;
+
             $vehicle->update($data);
             $this->history($vehicle, 'Vehicle Information Updated', "{$vehicle->vehicle_name} information was updated.", 'vehicles', $vehicle->vehicle_id, $request);
             $this->log($request, 'Edit', 'Vehicle Management', $vehicle->vehicle_id, "Updated vehicle {$vehicle->vehicle_name}");
+
+            // Editing current_location straight from the vehicle edit form
+            // bypasses the dedicated POST /locations endpoint, so without
+            // this the "Vehicle Location" history tab (which reads from
+            // vehicle_locations) never learns about the change. Record the
+            // same shape of VehicleLocation row storeLocation() creates, so
+            // location history stays complete regardless of which form made
+            // the change.
+            if (isset($data['current_location']) && $data['current_location'] !== $previousLocation) {
+                $location = VehicleLocation::create([
+                    'vehicle_id' => $vehicle->vehicle_id,
+                    'current_location' => $data['current_location'],
+                    'updated_by' => $request->user()->id,
+                ]);
+
+                $this->history($vehicle, 'Location Updated', "{$vehicle->vehicle_name} current location was updated to {$data['current_location']}.", 'vehicle_locations', $location->location_record_id, $request);
+                $this->log($request, 'Edit', 'Vehicle Location', $location->location_record_id, "Updated location for {$vehicle->vehicle_name}");
+            }
         });
 
         return $vehicle->fresh('category');
@@ -918,7 +951,7 @@ class FleetController extends Controller
 
         $vehicle->update([
             'status' => 'Decommissioned',
-            'condition' => 'Damaged',
+            'condition' => 'Needs Repair',
             'estimated_return_date' => null,
             'decommission_reason' => $data['decommission_reason'],
             'decommissioned_by' => $request->user()->id,
@@ -1008,8 +1041,29 @@ class FleetController extends Controller
             ->exists();
         abort_if($hasOpenTicket, 422, 'This vehicle still has an open ticket — close it to bring the vehicle back to Available.');
 
+        $latestCheck = $vehicle->readinessChecks()->orderByDesc('checked_at')->first();
+        abort_unless(
+            $latestCheck && $latestCheck->all_passed,
+            422,
+            'This vehicle needs a passing readiness check before it can be marked Available.'
+        );
+
+        // A "Needs Repair" condition deliberately does NOT block this: a
+        // passing readiness check (fuel, lights, equipment — physically
+        // confirmed right now) is what operational readiness actually means
+        // for an emergency vehicle, even if a separate, not-yet-addressed
+        // repair is still outstanding. The Condition column keeps showing
+        // "Needs Repair" independently — it isn't cleared by this — so the
+        // outstanding issue stays visible and doesn't get forgotten; it's
+        // just not what's blocking the vehicle from responding right now.
+        $wasOverridingRepairFlag = $vehicle->condition === 'Needs Repair';
+
         $vehicle->update(['status' => 'Available']);
-        $this->history($vehicle, 'Vehicle Marked Available', "{$vehicle->vehicle_name} was marked Available after a passing readiness check.", 'vehicles', $vehicle->vehicle_id, $request);
+
+        $historyNote = $wasOverridingRepairFlag
+            ? "{$vehicle->vehicle_name} was marked Available after a passing readiness check, despite its condition still being Needs Repair — dispatched for operational need with the repair still outstanding."
+            : "{$vehicle->vehicle_name} was marked Available after a passing readiness check.";
+        $this->history($vehicle, 'Vehicle Marked Available', $historyNote, 'vehicles', $vehicle->vehicle_id, $request);
         $this->log($request, 'Edit', 'Vehicle Management', $vehicle->vehicle_id, "Marked {$vehicle->vehicle_name} Available");
 
         return $vehicle->fresh(['category']);
@@ -1078,7 +1132,7 @@ class FleetController extends Controller
 
     public function conditions(Request $request)
     {
-        $query = VehicleConditionCheck::with(['vehicle.category', 'checkedBy']);
+        $query = VehicleConditionCheck::with(['vehicle.category', 'checkedBy', 'resultingTicket:ticket_id,status,ticket_title']);
 
         $query->when($request->filled('vehicle_id'), fn ($q) => $q->where('vehicle_id', $request->vehicle_id))
             ->when($request->filled('condition_result'), fn ($q) => $q->where('condition_result', $request->condition_result));
@@ -1092,23 +1146,27 @@ class FleetController extends Controller
 
         $data = $request->validate([
             'vehicle_id' => ['required', 'exists:vehicles,vehicle_id'],
-            'condition_result' => ['required', Rule::in(['Good', 'Needs Inspection', 'Needs Repair', 'Damaged'])],
+            'condition_result' => ['required', Rule::in(['Good', 'Needs Inspection', 'Needs Repair'])],
             'observations' => ['nullable', 'string'],
-            'remarks' => ['nullable', 'string'],
         ]);
 
         $condition = DB::transaction(function () use ($data, $request) {
             $vehicle = Vehicle::findOrFail($data['vehicle_id']);
             $condition = VehicleConditionCheck::create($data + ['checked_by' => $request->user()->id]);
 
-            $vehicleStatus = in_array($data['condition_result'], ['Needs Repair', 'Damaged'], true)
-                ? 'Under Maintenance'
-                : $vehicle->status;
+            // A vehicle already retired (Inactive/Decommissioned) must stay
+            // that way — filing a condition check against it should never
+            // silently un-retire it back to Available/Under Maintenance.
+            if (!in_array($vehicle->status, ['Inactive', 'Decommissioned'], true)) {
+                $vehicleStatus = $data['condition_result'] === 'Needs Repair'
+                    ? 'Under Maintenance'
+                    : $vehicle->status;
 
-            $vehicle->update([
-                'condition' => $data['condition_result'],
-                'status' => $vehicleStatus,
-            ]);
+                $vehicle->update([
+                    'condition' => $data['condition_result'],
+                    'status' => $vehicleStatus,
+                ]);
+            }
 
             $this->history($vehicle, 'Condition Checked', "{$vehicle->vehicle_name} condition was marked {$data['condition_result']}.", 'vehicle_condition_checks', $condition->condition_check_id, $request);
             $this->log($request, 'Add', 'Vehicle Condition Monitoring', $condition->condition_check_id, "Recorded condition for {$vehicle->vehicle_name}");
@@ -1125,17 +1183,19 @@ class FleetController extends Controller
 
         $data = $request->validate([
             'vehicle_id' => ['sometimes', 'exists:vehicles,vehicle_id'],
-            'condition_result' => ['sometimes', Rule::in(['Good', 'Needs Inspection', 'Needs Repair', 'Damaged'])],
+            'condition_result' => ['sometimes', Rule::in(['Good', 'Needs Inspection', 'Needs Repair'])],
             'observations' => ['nullable', 'string'],
-            'remarks' => ['nullable', 'string'],
         ]);
 
         DB::transaction(function () use ($condition, $data, $request) {
             $condition->update($data);
 
-            if (isset($data['condition_result'])) {
+            // A vehicle already retired (Inactive/Decommissioned) must stay
+            // that way — editing a condition check against it should never
+            // silently un-retire it back to Available/Under Maintenance.
+            if (isset($data['condition_result']) && !in_array($condition->vehicle->status, ['Inactive', 'Decommissioned'], true)) {
                 $vehicle = $condition->vehicle;
-                $vehicleStatus = in_array($data['condition_result'], ['Needs Repair', 'Damaged'], true)
+                $vehicleStatus = $data['condition_result'] === 'Needs Repair'
                     ? 'Under Maintenance'
                     : $vehicle->status;
 
@@ -1160,24 +1220,29 @@ class FleetController extends Controller
             $vehicle = $condition->vehicle;
             $condition->delete();
 
-            // Revert vehicle condition to latest remaining check, if any
-            $latestCheck = VehicleConditionCheck::where('vehicle_id', $vehicle->vehicle_id)
-                ->latest('condition_check_id')
-                ->first();
+            // A vehicle already retired (Inactive/Decommissioned) must stay
+            // that way — deleting a condition check against it should never
+            // silently un-retire it back to Available/Under Maintenance.
+            if (!in_array($vehicle->status, ['Inactive', 'Decommissioned'], true)) {
+                // Revert vehicle condition to latest remaining check, if any
+                $latestCheck = VehicleConditionCheck::where('vehicle_id', $vehicle->vehicle_id)
+                    ->latest('condition_check_id')
+                    ->first();
 
-            if ($latestCheck) {
-                $vehicleStatus = in_array($latestCheck->condition_result, ['Needs Repair', 'Damaged'], true)
-                    ? 'Under Maintenance'
-                    : $vehicle->status;
+                if ($latestCheck) {
+                    $vehicleStatus = $latestCheck->condition_result === 'Needs Repair'
+                        ? 'Under Maintenance'
+                        : $vehicle->status;
 
-                $vehicle->update([
-                    'condition' => $latestCheck->condition_result,
-                    'status' => $vehicleStatus,
-                ]);
-            } else {
-                $vehicle->update([
-                    'condition' => 'Good',
-                ]);
+                    $vehicle->update([
+                        'condition' => $latestCheck->condition_result,
+                        'status' => $vehicleStatus,
+                    ]);
+                } else {
+                    $vehicle->update([
+                        'condition' => 'Good',
+                    ]);
+                }
             }
 
             $this->history($vehicle, 'Condition Check Deleted', "Deleted condition check record.", 'vehicles', $vehicle->vehicle_id, $request);
@@ -1265,7 +1330,7 @@ class FleetController extends Controller
             'vehicle_id' => ['required', 'exists:vehicles,vehicle_id'],
             'issue_type' => ['required', 'string', 'max:150'],
             'issue_description' => ['required', 'string'],
-            'severity_level' => ['required', Rule::in(['Low', 'Medium', 'High', 'Critical'])],
+            'severity_level' => ['required', Rule::in(['Low', 'Medium', 'High'])],
             'reported_on_behalf_of' => ['nullable', 'string', 'max:255'],
             'photo' => ['nullable', 'image', 'max:4096'],
             'remarks' => ['nullable', 'string'],
@@ -1318,7 +1383,7 @@ class FleetController extends Controller
             $data = $request->validate([
                 'issue_type' => ['sometimes', 'string', 'max:150'],
                 'issue_description' => ['sometimes', 'string'],
-                'severity_level' => ['sometimes', Rule::in(['Low', 'Medium', 'High', 'Critical'])],
+                'severity_level' => ['sometimes', Rule::in(['Low', 'Medium', 'High'])],
                 'photo' => ['nullable', 'image', 'max:4096'],
                 'remarks' => ['nullable', 'string'],
             ]);
@@ -1343,7 +1408,7 @@ class FleetController extends Controller
             'remarks' => ['nullable', 'string'],
             'issue_type' => ['sometimes', 'string', 'max:150'],
             'issue_description' => ['sometimes', 'string'],
-            'severity_level' => ['sometimes', Rule::in(['Low', 'Medium', 'High', 'Critical'])],
+            'severity_level' => ['sometimes', Rule::in(['Low', 'Medium', 'High'])],
         ]);
 
         if (isset($data['issue_type'])) {
@@ -1353,7 +1418,11 @@ class FleetController extends Controller
         DB::transaction(function () use ($issue, $data, $request) {
             $issue->update($data);
 
-            if (isset($data['status'])) {
+            // A vehicle already retired (Inactive/Decommissioned) must stay
+            // that way — resolving/updating an old issue report against it
+            // should never silently un-retire it back to Available/Under
+            // Maintenance.
+            if (isset($data['status']) && !in_array($issue->vehicle->status, ['Inactive', 'Decommissioned'], true)) {
                 $status = $data['status'];
                 $vehicleUpdates = [];
 
@@ -1433,7 +1502,7 @@ class FleetController extends Controller
         $data = $request->validate([
             'title' => ['required', 'string', 'max:255'],
             'category' => ['nullable', 'string', 'max:100'],
-            'file' => ['required', 'file', 'max:10240'],
+            'file' => ['required', 'file', 'mimes:jpg,jpeg,png,pdf,doc,docx', 'max:10240'],
         ]);
 
         $data['file_url'] = $this->storeUploadedImage($request->file('file'), 'vehicle-documents');
@@ -1461,7 +1530,7 @@ class FleetController extends Controller
         $data = $request->validate([
             'title' => ['sometimes', 'string', 'max:255'],
             'category' => ['nullable', 'string', 'max:100'],
-            'file' => ['nullable', 'file', 'max:10240'],
+            'file' => ['nullable', 'file', 'mimes:jpg,jpeg,png,pdf,doc,docx', 'max:10240'],
         ]);
 
         if ($request->hasFile('file')) {
@@ -2306,6 +2375,18 @@ class FleetController extends Controller
                 ] : []),
             ]);
 
+            // Keep the vehicle's status/condition in lockstep with the record,
+            // same as every other maintenance path (storeMaintenanceRecord,
+            // verifyMaintenance, confirmMaintenance) — this was the one path
+            // that created a record without ever touching the vehicle, so a
+            // fast-closed schedule left a vehicle stuck showing "Needs Repair"
+            // forever, and a normal (pending-verification) one left the
+            // vehicle looking untouched even though a record is now sitting
+            // in Custodian's queue for it.
+            $vehicle->update($fastClose
+                ? ['status' => 'Available', 'condition' => 'Good', 'estimated_return_date' => null]
+                : ['status' => 'Under Maintenance', 'condition' => 'Needs Repair']);
+
             // 2) Close the schedule — the CALENDAR task is done regardless of
             // how long the paperwork verification takes; recurrence below
             // still fires on schedule, independent of that. Link to the
@@ -2332,7 +2413,11 @@ class FleetController extends Controller
             // silently creating a duplicate booking.
             $next = null;
             if ($schedule->recurrence_months) {
-                $nextDate = \Illuminate\Support\Carbon::parse($completedDate)->addMonths($schedule->recurrence_months);
+                // addMonthsNoOverflow(), not addMonths(): plain addMonths()
+                // overflows past a shorter target month (e.g. Jan 31 + 1
+                // month lands on Mar 3, not Feb 28) instead of clamping to
+                // that month's last day.
+                $nextDate = \Illuminate\Support\Carbon::parse($completedDate)->addMonthsNoOverflow($schedule->recurrence_months);
                 for ($shift = 0; $shift < 60; $shift++) {
                     $candidate = $nextDate->copy()->addDays($shift);
                     $collides = VehicleMaintenanceSchedule::where('vehicle_id', $schedule->vehicle_id)
@@ -2492,11 +2577,16 @@ class FleetController extends Controller
                 ->when($request->filled('from'), fn ($q) => $q->whereDate('created_at', '>=', $data['from']))
                 ->when($request->filled('to'), fn ($q) => $q->whereDate('created_at', '<=', $data['to']))
                 ->get(),
+            // Filtered by when the work actually happened, not when the row
+            // was created — those diverge (e.g. a record created at
+            // schedule-completion time can reflect older work). Falls back
+            // to date_started for a record still in progress with no
+            // date_completed yet.
             'Vehicle Maintenance Report' => VehicleMaintenanceRecord::query()
                 ->with(['vehicle.category', 'maintenancePersonnel'])
                 ->when($request->filled('maintenance_type'), fn ($q) => $q->where('maintenance_type', $data['maintenance_type']))
-                ->when($request->filled('from'), fn ($q) => $q->whereDate('created_at', '>=', $data['from']))
-                ->when($request->filled('to'), fn ($q) => $q->whereDate('created_at', '<=', $data['to']))
+                ->when($request->filled('from'), fn ($q) => $q->whereDate(DB::raw('COALESCE(date_completed, date_started)'), '>=', $data['from']))
+                ->when($request->filled('to'), fn ($q) => $q->whereDate(DB::raw('COALESCE(date_completed, date_started)'), '<=', $data['to']))
                 ->get(),
             'Vehicle Maintenance Schedule Report' => VehicleMaintenanceSchedule::query()
                 ->with(['vehicle.category', 'createdBy', 'assignedToUser'])

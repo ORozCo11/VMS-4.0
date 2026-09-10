@@ -1,19 +1,22 @@
 import { Link } from 'react-router-dom';
 import Aurora from '../components/Aurora';
 import Icon from '../components/Icon';
+import AuthHeader from '../components/AuthHeader';
+import AuthFooter from '../components/AuthFooter';
 
 export default function Privacy() {
   return (
-    <main className="auth-page" style={{ alignItems: 'flex-start', padding: '2rem 1rem' }}>
+    <div className="auth-page-shell">
+      <AuthHeader />
+      <main className="auth-page" style={{ alignItems: 'flex-start', padding: '2rem 1rem' }}>
       <Aurora colorStops={['#0b1220', '#1e3a5f', '#0f172a']} amplitude={0.6} blend={0.55} />
       <section className="auth-card policy-card" style={{ maxWidth: 680, width: '100%', textAlign: 'left', gap: '1rem' }}>
 
         <div className="policy-card-logo">
-          <Icon name="gear" size={28} className="auth-page-header-gear" filled />
+          <Icon name="gear" size={28} className="topbar-gear-icon" filled />
           <span className="vms-wordmark vms-wordmark-sm policy-card-logo-wordmark">vms</span>
         </div>
 
-        <p className="eyebrow">Barangay VMS</p>
         <h1 className="auth-login-heading" style={{ marginBottom: '0.25rem' }}>Privacy Policy</h1>
         <p style={{ fontSize: '0.8rem', opacity: 0.7, marginBottom: '1rem' }}>Effective: January 1, 2025</p>
 
@@ -48,7 +51,11 @@ export default function Privacy() {
         <PolicySection title="4. Data Storage and Security">
           All data is stored within a secured local database managed by the barangay's IT
           infrastructure. Access is restricted by role-based permissions — Admin, Custodian, and
-          Maintenance Personnel accounts each have distinct levels of access. Passwords are
+          Maintenance Personnel accounts each have distinct levels of access to a barangay's own
+          fleet data. Super Admin accounts instead have general oversight and cross-barangay
+          administrative access (registration codes, concern reports, and user account
+          management) but do not access any barangay's specific fleet operational data, such as
+          vehicles, tickets, or maintenance records. Passwords are
           encrypted using industry-standard hashing (bcrypt) and are never stored in plain text.
           API communications between the frontend and backend are protected via token-based
           authentication (Laravel Sanctum).
@@ -85,7 +92,9 @@ export default function Privacy() {
         </p>
 
       </section>
-    </main>
+      </main>
+      <AuthFooter />
+    </div>
   );
 }
 

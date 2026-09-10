@@ -81,7 +81,7 @@ class UserController extends Controller
         $data = $request->validate([
             'name' => ['required', 'string', 'max:255'],
             'email' => ['required', 'email', 'unique:users,email'],
-            'password' => ['required', 'string', 'min:8'],
+            'password' => ['required', 'string', 'min:8', 'confirmed'],
             'role' => ['required_without:roles', Rule::in(self::ROLES)],
             'roles' => ['required_without:role', 'array', 'min:1'],
             'roles.*' => [Rule::in(self::ROLES)],
@@ -115,7 +115,7 @@ class UserController extends Controller
         $data = $request->validate([
             'name' => ['sometimes', 'required', 'string', 'max:255'],
             'email' => ['sometimes', 'required', 'email', Rule::unique('users', 'email')->ignore($user->id)],
-            'password' => ['nullable', 'string', 'min:8'],
+            'password' => ['nullable', 'string', 'min:8', 'confirmed'],
             'role' => ['sometimes', 'required', Rule::in(self::ROLES)],
             'roles' => ['sometimes', 'required', 'array', 'min:1'],
             'roles.*' => [Rule::in(self::ROLES)],
@@ -125,6 +125,14 @@ class UserController extends Controller
         ]);
 
         $data = $this->normalizeRoles($request, $data);
+
+        // A sole Admin unchecking their own "Admin" role through this same
+        // form (see deactivate()'s identical self-lockout guard below) would
+        // lock themselves — and, if they're the only Admin, their whole
+        // barangay — out of user management with no other way back in.
+        if ($user->id === $request->user()->id && $user->hasRole('Admin') && array_key_exists('roles', $data)) {
+            abort_if(!in_array('Admin', $data['roles'], true), 422, 'You cannot remove your own Admin role.');
+        }
 
         if (!empty($data['password'])) {
             $data['password'] = Hash::make($data['password']);

@@ -1,9 +1,10 @@
 import { useContext } from 'react';
-import { Navigate } from 'react-router-dom';
+import { Navigate, useLocation } from 'react-router-dom';
 import { AuthContext } from '../context/AuthContextObject';
 
 export const ProtectedRoute = ({ children, allowedRoles }) => {
   const { user, token, loading } = useContext(AuthContext);
+  const location = useLocation();
 
   // Pause rendering while checking for an existing browser session token
   if (loading) {
@@ -22,7 +23,7 @@ export const ProtectedRoute = ({ children, allowedRoles }) => {
 
   // If not logged in, redirect them immediately back to the main login portal
   if (!token) {
-    return <Navigate to="/login" replace />;
+    return <Navigate to="/login" state={{ from: location }} replace />;
   }
 
   // If logged in but lacks the required role, bounce them to an unauthorized alert view

@@ -6,6 +6,7 @@ use App\Http\Controllers\AuthController;
 use App\Http\Controllers\BarangayController;
 use App\Http\Controllers\CatalogController;
 use App\Http\Controllers\CityController;
+use App\Http\Controllers\ConcernReportController;
 use App\Http\Controllers\FleetController;
 use App\Http\Controllers\HubController;
 use App\Http\Controllers\TicketController;
@@ -26,7 +27,10 @@ Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:10
 
 // Self-registration — rate-limited to blunt scripted account-creation spam.
 Route::post('/register', [AuthController::class, 'register'])->middleware('throttle:5,1');
-Route::get('/registration-status', [AuthController::class, 'registrationStatus']);
+// Read-only lookup used interactively while filling the registration form —
+// no credentials involved, but still throttled so it can't be used to
+// cheaply enumerate which barangays already have an Admin.
+Route::get('/registration-status', [AuthController::class, 'registrationStatus'])->middleware('throttle:20,1');
 
 // Cascading Province -> City/Municipality -> Barangay lists for the
 // registration form's address fields.
@@ -41,6 +45,10 @@ Route::get('/barangays', [BarangayController::class, 'index']);
 // matched as a barangay ID by the wildcard route instead.
 Route::get('/barangays/registered', [BarangayController::class, 'registered']);
 Route::get('/barangays/{barangay}', [BarangayController::class, 'show']);
+
+// Support Center's "Report a Concern" form — no account required. Rate-limited
+// like /register to blunt scripted spam.
+Route::post('/concern-reports', [ConcernReportController::class, 'store'])->middleware('throttle:5,1');
 
 /*
 |--------------------------------------------------------------------------
@@ -65,6 +73,7 @@ Route::middleware(['auth:sanctum', EnsureUserIsActive::class, RestrictSuperAdmin
     Route::get('/greeting', [AuthController::class, 'greeting']);
     // Verifies the current password, so rate-limit it against guessing too.
     Route::put('/profile/password', [AuthController::class, 'updatePassword'])->middleware('throttle:10,1');
+    Route::put('/profile', [AuthController::class, 'updateProfile']);
 
     Route::get('/lookups', [FleetController::class, 'lookups']);
     Route::get('/dashboard', [FleetController::class, 'dashboard']);
@@ -74,9 +83,11 @@ Route::middleware(['auth:sanctum', EnsureUserIsActive::class, RestrictSuperAdmin
     // adding or removing one doesn't depend on submitting an unrelated form.
     Route::get('/fault-categories', [CatalogController::class, 'faultCategories']);
     Route::post('/fault-categories', [CatalogController::class, 'storeFaultCategory']);
+    Route::put('/fault-categories/{faultCategory}', [CatalogController::class, 'updateFaultCategory']);
     Route::delete('/fault-categories/{faultCategory}', [CatalogController::class, 'destroyFaultCategory']);
     Route::get('/maintenance-types', [CatalogController::class, 'maintenanceTypes']);
     Route::post('/maintenance-types', [CatalogController::class, 'storeMaintenanceType']);
+    Route::put('/maintenance-types/{maintenanceType}', [CatalogController::class, 'updateMaintenanceType']);
     Route::delete('/maintenance-types/{maintenanceType}', [CatalogController::class, 'destroyMaintenanceType']);
 
     Route::get('/categories', [FleetController::class, 'categories']);
@@ -128,6 +139,10 @@ Route::middleware(['auth:sanctum', EnsureUserIsActive::class, RestrictSuperAdmin
     Route::get('/superadmin/barangays/{barangay}/registration-code', [SuperAdminController::class, 'registrationCode']);
     Route::post('/superadmin/barangays/{barangay}/registration-code/regenerate', [SuperAdminController::class, 'regenerateRegistrationCode']);
     Route::get('/superadmin/activity-log', [SuperAdminController::class, 'activityLog']);
+    Route::get('/superadmin/concern-reports', [SuperAdminController::class, 'concernReports']);
+    Route::put('/superadmin/concern-reports/{concernReport}/resolve', [SuperAdminController::class, 'resolveConcernReport']);
+    Route::put('/superadmin/concern-reports/{concernReport}/reopen', [SuperAdminController::class, 'reopenConcernReport']);
+    Route::delete('/superadmin/concern-reports/{concernReport}', [SuperAdminController::class, 'destroyConcernReport']);
 
     Route::get('/hubs', [HubController::class, 'index']);
     Route::post('/hubs', [HubController::class, 'store']);

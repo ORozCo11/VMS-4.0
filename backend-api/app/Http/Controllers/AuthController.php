@@ -3,15 +3,19 @@
 namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
+use App\Http\Controllers\Concerns\UploadsImages;
 use App\Models\ActivityLog;
 use App\Models\Barangay;
 use App\Models\RegistrationSetting;
 use App\Models\User;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\Rule;
 
 class AuthController extends Controller
 {
+    use UploadsImages;
+
     /**
      * Public self-registration. Residents/staff sign up naming their own
      * barangay, but the account is created inactive — an Admin must approve
@@ -26,10 +30,14 @@ class AuthController extends Controller
      *   barangay's Admin immediately, active, no approval needed — there's
      *   nobody else there yet who could review them. This can happen once
      *   per barangay, whenever it happens to get its first registrant.
-     * - Everyone else registering under a barangay that already has
-     *   someone must supply THAT barangay's own Staff Registration Code —
-     *   the actual gate against a stranger reaching that barangay Admin's
-     *   approval queue at all, checked before an account is even created.
+     * - Everyone registering under a barangay — first person included —
+     *   must supply THAT barangay's own Staff Registration Code. Without
+     *   this, anyone could just claim to be "first" for a real barangay
+     *   whose Admin seat happens to still be empty and become its Admin
+     *   uncontested. The code for every real, pre-seeded barangay is
+     *   generated ahead of time (see BarangaySeeder) and handed to that
+     *   barangay's office outside the app, so only someone who actually
+     *   went through that office can ever complete this step.
      */
     public function register(Request $request)
     {
@@ -62,55 +70,72 @@ class AuthController extends Controller
             'phone.regex' => 'Phone number must be 11 digits starting with 09 (e.g. 09171234567).',
         ]);
 
-        // No barangay picked from a dropdown (the city has no seeded list
-        // yet) — turn the free-typed name into a real Barangay row, scoped
-        // to this city, so it shows up as an option for the next person
-        // registering under the same city instead of staying a one-off
-        // string. This also resolves the concrete barangay_id every
-        // registrant needs before we can know whose "first" they'd be.
         $barangayId = $data['barangay_id'] ?? null;
-        if (!$barangayId && !empty($data['barangay_name'])) {
-            $barangayId = Barangay::findOrCreateForCity((int) $data['city_id'], $data['barangay_name'])->id;
-        }
 
-        // Deliberately unscoped (User carries no global scope) and looks
-        // across every barangay — this is the one place that's supposed to.
-        $isFirstForBarangay = !User::where('barangay_id', $barangayId)->exists();
+        // Everything from here on runs inside a transaction that locks the
+        // Barangay row: without it, two people registering for the same
+        // brand-new barangay within the same instant could both read "no
+        // admin yet" (a plain SELECT, not itself a lock) and both get
+        // created as that barangay's Admin. lockForUpdate() serializes any
+        // concurrent registration for the SAME barangay behind this one —
+        // registrations for a DIFFERENT barangay lock a different row and
+        // proceed independently.
+        [$user, $isFirstForBarangay] = DB::transaction(function () use ($data, $barangayId, $request) {
+            // No barangay picked from a dropdown (the city has no seeded
+            // list yet) — turn the free-typed name into a real Barangay
+            // row, scoped to this city. Resolved INSIDE the transaction
+            // (not before it) so that if registration fails later in this
+            // same closure (e.g. a bad staff code), the row creation rolls
+            // back with everything else instead of leaving an orphaned
+            // Barangay nobody ever actually registered under.
+            $barangayId = $barangayId ?: (!empty($data['barangay_name'])
+                ? Barangay::findOrCreateForCity((int) $data['city_id'], $data['barangay_name'])->id
+                : null);
 
-        $roleData = $request->validate([
-            // The first-for-this-barangay account has no role choice (it's
-            // always Admin) and no code to check — there's nothing to gate yet.
-            'requested_role' => [$isFirstForBarangay ? 'nullable' : 'required', Rule::in(['Custodian', 'Maintenance Personnel'])],
-            'staff_code' => [$isFirstForBarangay ? 'nullable' : 'required', 'string'],
-        ], [
-            'requested_role.required' => 'Please select whether you are a Custodian or Maintenance Personnel.',
-            'staff_code.required' => 'Please enter the staff registration code given to you by your barangay office.',
-        ]);
+            Barangay::where('id', $barangayId)->lockForUpdate()->first();
 
-        if (!$isFirstForBarangay) {
+            // Deliberately unscoped (User carries no global scope) and looks
+            // across every barangay — this is the one place that's supposed to.
+            $isFirstForBarangay = !User::where('barangay_id', $barangayId)->exists();
+
+            $roleData = $request->validate([
+                // The first-for-this-barangay account has no role choice (it's
+                // always Admin) — but still has to prove they're actually from
+                // this barangay, same as anyone else. Otherwise a stranger
+                // could just claim to be "first" for a real barangay whose
+                // Admin seat is simply still empty and grab it uncontested.
+                'requested_role' => [$isFirstForBarangay ? 'nullable' : 'required', Rule::in(['Custodian', 'Maintenance Personnel'])],
+                'staff_code' => ['required', 'string'],
+            ], [
+                'requested_role.required' => 'Please select whether you are a Custodian or Maintenance Personnel.',
+                'staff_code.required' => 'Please enter the staff registration code given to you by your barangay office.',
+            ]);
+
             abort_unless(
                 hash_equals(RegistrationSetting::for($barangayId)->staff_code, strtoupper(trim($roleData['staff_code']))),
                 422,
                 'That staff registration code is not correct. Ask your barangay office for the current code.'
             );
-        }
 
-        $role = $isFirstForBarangay ? 'Admin' : $roleData['requested_role'];
+            $role = $isFirstForBarangay ? 'Admin' : $roleData['requested_role'];
 
-        $user = User::create([
-            'name' => $data['name'],
-            'email' => $data['email'],
-            'password' => Hash::make($data['password']),
-            'phone' => $data['phone'],
-            'address' => $data['address'],
-            'city_id' => $data['city_id'],
-            'barangay_id' => $barangayId,
-            'barangay_name' => $data['barangay_name'] ?? null,
-            'role' => $role,
-            'roles' => [$role],
-            'is_active' => $isFirstForBarangay,
-            'approved_at' => $isFirstForBarangay ? now() : null,
-        ]);
+            $user = User::create([
+                'name' => $data['name'],
+                'email' => $data['email'],
+                'password' => Hash::make($data['password']),
+                'phone' => $data['phone'],
+                'address' => $data['address'],
+                'city_id' => $data['city_id'],
+                'barangay_id' => $barangayId,
+                'barangay_name' => $data['barangay_name'] ?? null,
+                'role' => $role,
+                'roles' => [$role],
+                'is_active' => $isFirstForBarangay,
+                'approved_at' => $isFirstForBarangay ? now() : null,
+            ]);
+
+            return [$user, $isFirstForBarangay];
+        });
 
         return response()->json([
             'message' => $isFirstForBarangay
@@ -174,9 +199,17 @@ class AuthController extends Controller
         }
 
         if (!$user->is_active) {
-            return response()->json([
-                'message' => 'This account has been deactivated. Contact an administrator.'
-            ], 403);
+            // approved_at is only ever set the moment an Admin first approves
+            // an account (UserController::activate) — a still-NULL value
+            // means this account has never been approved yet at all (a
+            // brand-new registrant waiting in the queue), which reads very
+            // differently from an account an Admin actively deactivated
+            // after it was already in use.
+            $message = $user->approved_at === null
+                ? 'Your account is still awaiting approval from your barangay\'s Admin.'
+                : 'This account has been deactivated. Contact an administrator.';
+
+            return response()->json(['message' => $message], 403);
         }
 
         // 4. Issue a secure, unique Sanctum token, tagged with every role
@@ -277,11 +310,21 @@ class AuthController extends Controller
     {
         $this->assertImpersonationEnabled($request);
         abort_unless($this->canImpersonate($request), 403, 'Only an Admin or Super Admin can impersonate another account.');
+        // Server-side guard, independent of the frontend candidate list
+        // (which already filters role !== 'Super Admin' out of what it
+        // shows): nobody — not even another Super Admin — may impersonate a
+        // Super Admin account via a direct API call. Checked before the
+        // is_active gate so the rejection reason is unambiguous either way.
+        abort_if($user->hasRole('Super Admin'), 403, 'Super Admin accounts cannot be impersonated.');
         // Deliberately allowed to cross barangays — see impersonationCandidates
         // above.
         abort_if(!$user->is_active, 422, 'That account is deactivated.');
 
-        $token = $user->createToken('impersonation_token', [...$user->allRoles(), 'impersonated'])->plainTextToken;
+        // Impersonation is a brief, deliberate admin action, not a persistent
+        // login — give it a short explicit expiry regardless of the global
+        // Sanctum 'expiration' setting (config/sanctum.php), which governs
+        // ordinary login tokens instead.
+        $token = $user->createToken('impersonation_token', [...$user->allRoles(), 'impersonated'], now()->addHours(4))->plainTextToken;
 
         $actingAsSuperAdmin = $request->user()?->hasRole('Super Admin');
         ActivityLog::create([
@@ -400,6 +443,44 @@ class AuthController extends Controller
                 'role' => $user->role,
             ],
         ]);
+    }
+
+    /**
+     * Self-service edit of the authenticated user's own contact details —
+     * the same fields an Admin can edit for someone else via
+     * UserController::update, minus role and password (role is
+     * Admin-reviewed only; password stays on its own old-password-verified
+     * endpoint above).
+     */
+    public function updateProfile(Request $request)
+    {
+        $user = $request->user();
+
+        $data = $request->validate([
+            'name' => ['sometimes', 'required', 'string', 'max:255'],
+            'email' => ['sometimes', 'required', 'email', Rule::unique('users', 'email')->ignore($user->id)],
+            'phone' => ['nullable', 'string', 'max:30'],
+            'address' => ['nullable', 'string', 'max:255'],
+            'photo' => ['nullable', 'image', 'max:4096'],
+        ]);
+
+        if ($request->hasFile('photo')) {
+            $data['photo_url'] = $this->storeUploadedImage($request->file('photo'), 'profile-photos');
+        }
+        unset($data['photo']);
+
+        $user->update($data);
+
+        ActivityLog::create([
+            'user_id' => $user->id,
+            'role' => $user->role,
+            'action' => 'Edit',
+            'module' => 'Profile',
+            'affected_record_id' => (string) $user->id,
+            'details' => "{$user->name} updated their profile details.",
+        ]);
+
+        return $user->fresh();
     }
 
     /**

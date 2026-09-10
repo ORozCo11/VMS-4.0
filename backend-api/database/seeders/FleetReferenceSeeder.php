@@ -2,6 +2,7 @@
 
 namespace Database\Seeders;
 
+use App\Models\Barangay;
 use App\Models\VehicleCategory;
 use App\Models\VehicleHub;
 use Illuminate\Database\Seeder;
@@ -37,9 +38,24 @@ class FleetReferenceSeeder extends Seeder
      * Seed the fixed Paknaan vehicle hubs the fleet map/location dropdowns rely on.
      * These used to live only in frontend localStorage — moved server-side so every
      * user shares the same hub list.
+     *
+     * These three are real Paknaan locations (Twinbee Hub, the Paknaan
+     * Barangay Hall, the Paknaan Gymnasium) — not generic examples every
+     * barangay could plausibly reuse — so they're stamped with Paknaan's own
+     * barangay_id rather than left null. A hub row with a null barangay_id
+     * is invisible to every tenant (BelongsToBarangay's global scope filters
+     * on `WHERE barangay_id = <user's>`, which never matches NULL), which
+     * would otherwise leave every barangay — Paknaan included — with zero
+     * hubs to pick from and unable to add any vehicle at all (validateVehicle()
+     * requires current_location to be one of VehicleHub::pluck('name')). Any
+     * other barangay still starts with no hubs of its own; its Admin adds
+     * real ones for its own locations via POST /hubs, same as it does for
+     * everything else in this per-barangay tenant model.
      */
     private function seedDefaultHubs(): void
     {
+        $paknaanId = Barangay::where('name', 'Paknaan')->value('id');
+
         $hubs = [
             [
                 'hub_key' => 'twinbee-hub',
@@ -70,7 +86,7 @@ class FleetReferenceSeeder extends Seeder
         foreach ($hubs as $hub) {
             VehicleHub::updateOrCreate(
                 ['hub_key' => $hub['hub_key']],
-                $hub + ['is_default' => true],
+                $hub + ['is_default' => true, 'barangay_id' => $paknaanId],
             );
         }
     }

@@ -3,6 +3,7 @@
 namespace Database\Seeders;
 
 use Illuminate\Database\Seeder;
+use App\Models\Barangay;
 use App\Models\User;
 use Illuminate\Support\Facades\Hash;
 
@@ -13,13 +14,23 @@ class UserSeeder extends Seeder
      */
     public function run(): void
     {
-        // Remove any other users (like Jake or Precious)
+        // Remove any other users not part of this fixed demo roster.
         User::whereNotIn('email', [
             'superadmin@barangay.gov',
             'admin@barangay.gov',
             'custodian@barangay.gov',
+            'custodian2@barangay.gov',
             'maintenance@barangay.gov'
         ])->delete();
+
+        // Same convention as FleetReferenceSeeder::seedDefaultHubs() — these
+        // demo accounts represent real Paknaan staff, so they're stamped with
+        // Paknaan's own barangay_id. Without it, BelongsToBarangay's global
+        // scope (`Auth::check() && Auth::user()->barangay_id`) never applies
+        // for them, so they'd see/act across every barangay's data — and
+        // Vehicle's creating-time auto-stamp never fires here anyway since
+        // there's no authenticated user while seeding.
+        $paknaanId = Barangay::where('name', 'Paknaan')->value('id');
 
         $users = [
             [
@@ -27,24 +38,39 @@ class UserSeeder extends Seeder
                 'email' => 'superadmin@barangay.gov',
                 'password' => 'superadmin123',
                 'role' => 'Super Admin',
+                // Intentionally left without a barangay_id — see
+                // 2026_08_31_000001_create_super_admin_account.php and
+                // BelongsToBarangay's docblock: a null barangay_id is what
+                // lets the Super Admin see across every barangay.
+                'barangay_id' => null,
             ],
             [
-                'name' => 'Roel Degulacion',
+                'name' => 'Paul Orozco',
                 'email' => 'admin@barangay.gov',
                 'password' => 'admin123',
                 'role' => 'Admin',
+                'barangay_id' => $paknaanId,
             ],
             [
-                'name' => 'Nicole',
+                'name' => 'Precious Dignos',
                 'email' => 'custodian@barangay.gov',
                 'password' => 'custodian123',
                 'role' => 'Custodian',
+                'barangay_id' => $paknaanId,
             ],
             [
-                'name' => 'Toto Bongo',
+                'name' => 'Justine Mae Belia',
+                'email' => 'custodian2@barangay.gov',
+                'password' => 'custodian123',
+                'role' => 'Custodian',
+                'barangay_id' => $paknaanId,
+            ],
+            [
+                'name' => 'Jake Engana',
                 'email' => 'maintenance@barangay.gov',
                 'password' => 'maintenance123',
                 'role' => 'Maintenance Personnel',
+                'barangay_id' => $paknaanId,
             ],
         ];
 
@@ -55,6 +81,7 @@ class UserSeeder extends Seeder
                     'name' => $user['name'],
                     'password' => Hash::make($user['password']),
                     'role' => $user['role'],
+                    'barangay_id' => $user['barangay_id'],
                 ],
             );
         }

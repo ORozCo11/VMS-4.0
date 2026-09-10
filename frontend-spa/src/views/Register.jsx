@@ -148,6 +148,7 @@ function Register() {
 
   const handleSubmit = async (event) => {
     event.preventDefault();
+    if (submitting) return;
     setError('');
 
     if (!NAME_PATTERN.test(form.first_name.trim())) {
@@ -186,15 +187,13 @@ function Register() {
       setError('Street address is required.');
       return;
     }
-    if (!isFirstForBarangay) {
-      if (!form.requested_role) {
-        setError('Please select whether you are a Custodian or Maintenance Personnel.');
-        return;
-      }
-      if (!form.staff_code.trim()) {
-        setError('Please enter the staff registration code given to you by your barangay office.');
-        return;
-      }
+    if (!isFirstForBarangay && !form.requested_role) {
+      setError('Please select whether you are a Custodian or Maintenance Personnel.');
+      return;
+    }
+    if (!form.staff_code.trim()) {
+      setError('Please enter the staff registration code given to you by your barangay office.');
+      return;
     }
     if (form.password.length < 8) {
       setError('Password must be at least 8 characters.');
@@ -216,19 +215,37 @@ function Register() {
       setSubmitted(true);
     } catch (requestError) {
       const messages = requestError.response?.data?.errors;
-      const firstMessage = messages ? Object.values(messages)[0]?.[0] : null;
-      setError(
-        firstMessage ??
-          requestError.response?.data?.message ??
-          'Unable to register. Please check your connection and try again.',
-      );
+
+      // If we thought we'd be the first (and so hid the role/staff-code
+      // requirement) but the backend disagrees, someone else just claimed
+      // that barangay's first-Admin slot while this form was open. Reveal
+      // the now-required fields instead of leaving the user stuck unable to
+      // fix an error on a field they can't even see, and re-check the real
+      // status rather than just assuming.
+      if (isFirstForBarangay && messages && (messages.requested_role || messages.staff_code)) {
+        setIsFirstForBarangay(false);
+        setError('Someone else just registered as this barangay\'s first Administrator. Please select your role and enter the staff registration code below, then submit again.');
+        const params = { city_id: form.city_id };
+        if (form.barangay_id) params.barangay_id = form.barangay_id;
+        else params.barangay_name = form.barangay_name.trim();
+        api.get('/registration-status', { params })
+          .then((response) => setIsFirstForBarangay(response.data.is_first))
+          .catch(() => {});
+      } else {
+        const allMessages = messages ? Object.values(messages).map((arr) => arr[0]).filter(Boolean) : [];
+        setError(
+          allMessages.length ? allMessages.join(' ') :
+            requestError.response?.data?.message ??
+            'Unable to register. Please check your connection and try again.',
+        );
+      }
     } finally {
       setSubmitting(false);
     }
   };
 
   return (
-    <div className="auth-page-shell">
+    <div className="auth-page-shell slide-in">
       <AuthHeader />
 
       <main className="auth-split-page">
@@ -396,7 +413,7 @@ function Register() {
 
             {isFirstForBarangay === true && (
               <p className="notice success auth-field-full">
-                You&apos;ll be the first to register here — you&apos;ll become this barangay&apos;s Administrator.
+                You&apos;ll be the first to register here — you&apos;ll become this barangay&apos;s Administrator once your staff registration code is verified below.
               </p>
             )}
 
@@ -416,39 +433,37 @@ function Register() {
             </label>
 
             {isFirstForBarangay !== true && (
-              <>
-                <label className="auth-field">
-                  <span>I am a...</span>
-                  <div className="auth-input-wrapper auth-input-plain">
-                    <select
-                      name="requested_role"
-                      onChange={handleChange}
-                      required
-                      value={form.requested_role}
-                    >
-                      <option value="" disabled>Select your role</option>
-                      <option value="Custodian">Custodian</option>
-                      <option value="Maintenance Personnel">Maintenance Personnel</option>
-                    </select>
-                  </div>
-                </label>
-
-                <label className="auth-field">
-                  <span>Staff Registration Code</span>
-                  <div className="auth-input-wrapper auth-input-plain">
-                    <input
-                      autoComplete="off"
-                      name="staff_code"
-                      onChange={handleChange}
-                      placeholder="Given to you by your barangay office"
-                      required
-                      type="text"
-                      value={form.staff_code}
-                    />
-                  </div>
-                </label>
-              </>
+              <label className="auth-field">
+                <span>I am a...</span>
+                <div className="auth-input-wrapper auth-input-plain">
+                  <select
+                    name="requested_role"
+                    onChange={handleChange}
+                    required
+                    value={form.requested_role}
+                  >
+                    <option value="" disabled>Select your role</option>
+                    <option value="Custodian">Custodian</option>
+                    <option value="Maintenance Personnel">Maintenance Personnel</option>
+                  </select>
+                </div>
+              </label>
             )}
+
+            <label className="auth-field">
+              <span>Staff Registration Code</span>
+              <div className="auth-input-wrapper auth-input-plain">
+                <input
+                  autoComplete="off"
+                  name="staff_code"
+                  onChange={handleChange}
+                  placeholder="Given to you by your barangay office"
+                  required
+                  type="text"
+                  value={form.staff_code}
+                />
+              </div>
+            </label>
 
             <label className="auth-field">
               <span>Password</span>

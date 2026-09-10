@@ -62,4 +62,17 @@ class ImpersonationTest extends TestCase
 
         $this->postJson("/api/impersonate/{$target->id}")->assertUnauthorized();
     }
+
+    #[Test]
+    public function a_super_admin_cannot_impersonate_another_super_admin_via_a_direct_api_call(): void
+    {
+        // The frontend's candidate list filters role !== 'Super Admin' out of
+        // what it shows, but that's a UI-only guard — this pins the
+        // server-side check that a direct API call can't bypass it.
+        $superAdmin = User::factory()->create(['role' => 'Super Admin', 'roles' => ['Super Admin']]);
+        $otherSuperAdmin = User::factory()->create(['role' => 'Super Admin', 'roles' => ['Super Admin']]);
+
+        Sanctum::actingAs($superAdmin, ['*']);
+        $this->postJson("/api/impersonate/{$otherSuperAdmin->id}")->assertStatus(403);
+    }
 }

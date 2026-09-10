@@ -6,6 +6,29 @@
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+  animation: pageFadeIn 0.4s ease both;
+}
+/* Every public page (Login, Register, About, Developers, Privacy, Terms) is
+   its own top-level route, so React fully remounts .auth-page-shell on each
+   navigation between them — replaying this fade+rise makes clicking a nav
+   link feel like a smooth transition instead of an instant hard cut. */
+@keyframes pageFadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+/* Register only — slides in from the right instead of the fade+rise every
+   other public page uses, reading as "stepping forward" into the signup
+   flow rather than just a generic page swap. */
+.auth-page-shell.slide-in {
+  animation: pageSlideIn 0.75s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@keyframes pageSlideIn {
+  from { opacity: 0; transform: translateX(80px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .auth-page-shell { animation: none; }
+  .auth-page-shell.slide-in { animation: none; }
 }
 .auth-page-header {
   /* Deeper, richer blue — closer to the reference than the app's usual
@@ -79,8 +102,14 @@
   font-size: 0.92rem;
   font-weight: 600;
   text-decoration: none;
+  display: inline-block;
+  transition: color 0.15s ease, transform 0.12s ease;
 }
-.auth-page-nav a:hover { color: #ffffff; text-decoration: underline; }
+.auth-page-nav a:hover { color: yellowgreen; text-decoration: underline; }
+.auth-page-nav a:active { transform: scale(0.94); }
+.auth-page-header-brand { transition: color 0.15s ease; }
+.auth-page-header-brand:hover .vms-wordmark,
+.auth-page-header-brand:hover .auth-page-header-subtext { color: yellowgreen; }
 .auth-page-header-login-btn {
   display: inline-flex;
   align-items: center;
@@ -94,9 +123,14 @@
   font-weight: 700;
   text-decoration: none;
   flex-shrink: 0;
-  transition: background 0.15s ease;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease, transform 0.12s ease;
 }
-.auth-page-header-login-btn:hover { background: rgba(255, 255, 255, 0.14); }
+.auth-page-header-login-btn:hover {
+  background: rgba(255, 255, 255, 0.14);
+  color: yellowgreen;
+  border-color: yellowgreen;
+}
+.auth-page-header-login-btn:active { transform: scale(0.95); }
 @media (max-width: 640px) {
   .auth-page-header-inner { flex-wrap: wrap; gap: 12px 20px; padding: 14px 20px; }
   .auth-page-header-right { flex-wrap: wrap; gap: 12px 20px; width: 100%; }
@@ -174,8 +208,8 @@
   font-size: 0.75rem;
   color: #94a3b8;
 }
-.auth-legal a { color: #94a3b8; text-decoration: underline; }
-.auth-legal a:hover { color: #64748b; }
+.auth-legal a { color: #94a3b8; text-decoration: underline; transition: color 0.15s ease; }
+.auth-legal a:hover { color: yellowgreen; }
 
 /* LINE WAVES BACKGROUND */
 .auth-page .line-waves-container {
@@ -276,7 +310,8 @@
   flex-shrink: 0;
 }
 .auth-input-wrapper input,
-.auth-input-wrapper select {
+.auth-input-wrapper select,
+.auth-input-wrapper textarea {
   width: 100%;
   padding: 13px 16px 13px 42px;
   border: 1.5px solid var(--border, #d9e2ef);
@@ -289,12 +324,16 @@
      theme-independent, so its own text color should be too. */
   color: #0f172a !important;
   font-size: 0.95rem;
+  font-family: inherit;
   outline: none;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
-.auth-input-wrapper input::placeholder { color: var(--text-faint, #94a3b8); }
+.auth-input-wrapper textarea { resize: vertical; min-height: 90px; }
+.auth-input-wrapper input::placeholder,
+.auth-input-wrapper textarea::placeholder { color: var(--text-faint, #94a3b8); }
 .auth-input-wrapper input:focus,
-.auth-input-wrapper select:focus {
+.auth-input-wrapper select:focus,
+.auth-input-wrapper textarea:focus {
   border-color: #2563eb;
   box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.14);
 }
@@ -319,7 +358,8 @@
 /* No-icon input variant (reference has plain fields, no icon prefix) —
    normal left padding instead of the icon-reserved 42px, pale blue fill. */
 .auth-input-plain input,
-.auth-input-plain select {
+.auth-input-plain select,
+.auth-input-plain textarea {
   padding-left: 16px;
   background: #eef4fc;
   border-color: #dce8f8;
@@ -427,9 +467,10 @@
   font-weight: 700;
   text-decoration: none;
   flex-shrink: 0;
-  transition: background 0.15s ease, opacity 0.15s ease;
+  transition: background 0.15s ease, opacity 0.15s ease, transform 0.12s ease;
 }
-.auth-page-header-register-btn:hover { opacity: 0.9; }
+.auth-page-header-register-btn:hover { color: yellowgreen; transform: translateY(-1px); }
+.auth-page-header-register-btn:active { transform: scale(0.95); }
 
 .auth-remember {
   display: flex;
@@ -448,50 +489,307 @@
   cursor: pointer;
 }
 
-/* About Us / Developers — static content pages reached from the header nav.
-   Wider and left-aligned, unlike the narrow centered sign-in card. */
-.auth-page-static { align-items: flex-start; padding: 48px 20px; }
-.auth-static-card {
-  width: min(100%, 720px);
-  text-align: left;
+/* About page — plain white "what the system can do" feature grid below the
+   dark intro card, icon-tile-and-caption style. */
+.about-features {
+  background: #ffffff;
+  padding: 64px 20px;
 }
-.auth-static-card h1 { font-size: 1.6rem; font-weight: 800; color: #0f172a; margin: 6px 0 16px; }
-.auth-static-card h3 { font-size: 1rem; font-weight: 700; color: #0f172a; margin: 20px 0 8px; }
-.auth-static-card p { font-size: 0.92rem; line-height: 1.7; color: #334155; margin: 0 0 10px; }
-.auth-static-card ul { margin: 0 0 10px; padding-left: 20px; }
-.auth-static-card li { font-size: 0.92rem; line-height: 1.7; color: #334155; margin-bottom: 4px; }
-
-.dev-team-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 16px;
-  margin: 20px 0 8px;
-}
-.dev-team-card {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
+.about-features-inner {
+  width: min(100%, 980px);
+  margin: 0 auto;
   text-align: center;
-  padding: 20px 14px;
-  border: 1px solid #e2e8f0;
-  border-radius: 12px;
-  background: #f8fafc;
 }
-.dev-team-avatar {
-  width: 56px;
-  height: 56px;
-  border-radius: 50%;
-  background: #2563eb;
-  color: #ffffff;
+.about-features-title {
+  font-size: clamp(1.4rem, 2.6vw, 1.9rem);
   font-weight: 800;
-  font-size: 1.1rem;
+  color: #1d4ed8;
+  margin: 0 0 44px;
+}
+.about-features-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 36px 24px;
+}
+@media (max-width: 760px) {
+  .about-features-grid { grid-template-columns: repeat(2, 1fr); }
+}
+.about-feature-card { display: flex; flex-direction: column; align-items: center; }
+.about-feature-icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #2563eb, #1d4ed8);
+  color: #ffffff;
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-bottom: 10px;
+  margin-bottom: 14px;
+  box-shadow: 0 8px 18px rgba(29, 78, 216, 0.28);
 }
-.dev-team-name { font-size: 0.9rem; font-weight: 700; color: #0f172a; margin: 0; }
-.dev-team-role { font-size: 0.78rem; color: #64748b; margin: 2px 0 0; }
+.about-feature-name { font-size: 0.95rem; font-weight: 700; color: #1d4ed8; margin: 0 0 6px; }
+.about-feature-desc { font-size: 0.82rem; line-height: 1.55; color: #64748b; margin: 0; max-width: 210px; }
+
+/* Support Center — plain white body below the compact hero: an FAQ
+   accordion, then a "Report a Concern" form reusing the same auth-field
+   styling as Register/Login. */
+.support-body {
+  background: #ffffff;
+  padding: 56px 20px 72px;
+}
+.support-body-inner {
+  width: min(100%, 760px);
+  margin: 0 auto;
+}
+.support-section-title {
+  font-size: 1.3rem;
+  font-weight: 800;
+  color: #1d4ed8;
+  margin: 0 0 8px;
+}
+.support-body-inner > .support-section-title:not(:first-child) {
+  margin-top: 48px;
+}
+.support-section-subtitle {
+  font-size: 0.88rem;
+  color: #64748b;
+  line-height: 1.6;
+  margin: 0 0 20px;
+}
+.faq-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.faq-item {
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  overflow: hidden;
+}
+.faq-question {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  background: #f8fafc;
+  border: none;
+  text-align: left;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #0f172a;
+  cursor: pointer;
+}
+.faq-item.is-open .faq-question { background: #eff6ff; color: #1d4ed8; }
+.faq-chevron { flex-shrink: 0; transition: transform 0.15s ease; }
+.faq-item.is-open .faq-chevron { transform: rotate(180deg); }
+.faq-answer {
+  margin: 0;
+  padding: 14px 16px 16px;
+  font-size: 0.86rem;
+  line-height: 1.65;
+  color: #475569;
+}
+.support-form { margin-top: 4px; }
+
+/* Shared full-width blue gradient hero — used by Developers (team carousel)
+   and About (system overview). Privacy/Terms use their own .policy-card
+   instead, unaffected by this. */
+.auth-hero {
+  position: relative;
+  min-height: calc(100vh - 140px);
+  display: flex;
+  justify-content: center;
+  background: linear-gradient(135deg, #0b1f4d 0%, #1d4ed8 55%, #2563eb 100%);
+  padding: 64px 20px 72px;
+  overflow: hidden;
+}
+/* Shorter top-banner variant — for a page like Support where the hero is
+   just a title + intro, not the whole page's content, so it shouldn't
+   force near-full-viewport height and leave a dead gap above the rest. */
+.auth-hero.is-compact {
+  min-height: 0;
+  padding: 56px 20px 64px;
+}
+.auth-hero-inner {
+  position: relative;
+  z-index: 1;
+  width: min(100%, 1040px);
+  text-align: center;
+}
+/* Purely decorative arrow graphics flanking the hero (see DecoArrow in
+   Developers.jsx) — staggered top-left / lower-right like the reference,
+   sitting behind the content and never intercepting clicks. */
+.dev-team-deco-arrow {
+  position: absolute;
+  width: 130px;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.7;
+}
+.dev-team-deco-arrow-left {
+  left: 8px;
+  top: 8px;
+  height: 78%;
+}
+.dev-team-deco-arrow-right {
+  right: 8px;
+  bottom: 8px;
+  height: 72%;
+}
+@media (max-width: 900px) {
+  .dev-team-deco-arrow { display: none; }
+}
+.auth-hero-eyebrow {
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #93c5fd;
+  margin: 0;
+}
+.auth-hero-title {
+  font-size: clamp(1.8rem, 3.4vw, 2.4rem);
+  font-weight: 800;
+  color: #ffffff;
+  margin: 10px 0 16px;
+}
+.auth-hero-subtitle {
+  font-size: 0.95rem;
+  line-height: 1.7;
+  color: rgba(226, 232, 240, 0.85);
+  max-width: 640px;
+  margin: 0 auto 44px;
+}
+
+/* About page's hero body — the "What it covers" / "Who it's for" text,
+   left-aligned and wider than .auth-hero-subtitle since it's prose rather
+   than a one-line tagline, but still living on the same dark gradient. */
+.about-hero-body {
+  width: min(100%, 760px);
+  margin: 0 auto;
+  text-align: left;
+}
+.about-hero-body p {
+  font-size: 0.95rem;
+  line-height: 1.75;
+  color: rgba(226, 232, 240, 0.85);
+  margin: 0 0 14px;
+}
+.about-hero-body h3 {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #ffffff;
+  margin: 28px 0 12px;
+}
+.about-hero-body ul {
+  margin: 0 0 14px;
+  padding-left: 20px;
+}
+.about-hero-body li {
+  font-size: 0.95rem;
+  line-height: 1.75;
+  color: rgba(226, 232, 240, 0.85);
+  margin-bottom: 6px;
+}
+.about-hero-body strong { color: #ffffff; }
+.dev-team-carousel {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+.dev-team-arrow {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255, 255, 255, 0.14);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.dev-team-arrow:hover { background: rgba(255, 255, 255, 0.26); }
+.dev-team-arrow svg { width: 18px; height: 18px; }
+.dev-team-grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 24px;
+  min-width: 0;
+}
+.dev-team-photo {
+  position: relative;
+  aspect-ratio: 3 / 4;
+  border-radius: 14px;
+  overflow: hidden;
+  background: linear-gradient(135deg, #1e293b, #334155);
+  box-shadow: 0 14px 30px rgba(2, 6, 23, 0.35);
+}
+.dev-team-photo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.dev-team-photo-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 26%;
+  font-size: 2rem;
+  font-weight: 800;
+  color: rgba(255, 255, 255, 0.85);
+}
+.dev-team-caption {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 22px 12px 12px;
+  text-align: left;
+  background: linear-gradient(180deg, transparent, rgba(2, 6, 23, 0.92) 55%);
+}
+.dev-team-caption .dev-team-name {
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: #ffffff;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dev-team-caption .dev-team-role {
+  font-size: 0.76rem;
+  color: #93c5fd;
+  margin: 2px 0 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dev-team-dots {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 22px;
+}
+.dev-team-dot {
+  width: 7px;
+  height: 7px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.32);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.dev-team-dot.is-active { width: 18px; background: #ffffff; }
 
 .primary-link {
   display: inline-flex; align-items: center; justify-content: center;
@@ -589,6 +887,7 @@
   transition: all 0.15s ease;
 }
 .module-nav button:hover { background: #1e293b; color: #e2e8f0; }
+.module-nav button:active { transform: scale(0.97); }
 .module-nav button.active {
   background: #1d4ed8;
   color: #ffffff;
@@ -930,10 +1229,12 @@
   gap: 12px;
 }
 .workspace-footer-btn {
+  display: inline-block;
   padding: 10px 20px;
   border-radius: 8px;
   font-size: 0.85rem;
   font-weight: 700;
+  text-decoration: none;
   cursor: pointer;
   transition: all 0.15s;
 }
@@ -992,7 +1293,7 @@
   }
 }
 
-/* AuthFooter — public-page footer (Login, About Us, Developers). No logo
+/* AuthFooter — public-page footer (Login, About, Developers). No logo
    (the header already carries the brand); a large tagline + socials on the
    left, real site links on the right, copyright/legal along the bottom. */
 .auth-footer {
@@ -1002,6 +1303,7 @@
 }
 .auth-footer-main {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: 32px;
   flex-wrap: wrap;
@@ -1031,9 +1333,10 @@
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.14);
   color: #ffffff;
-  transition: background 0.15s ease;
+  transition: background 0.15s ease, transform 0.12s ease;
 }
-.auth-footer-social a:hover { background: rgba(255, 255, 255, 0.26); }
+.auth-footer-social a:hover { background: rgba(255, 255, 255, 0.26); color: yellowgreen; transform: translateY(-2px); }
+.auth-footer-social a:active { transform: scale(0.92); }
 .auth-footer-links {
   display: flex;
   flex-direction: column;
@@ -1043,8 +1346,11 @@
   font-size: 0.9rem;
   font-weight: 600;
   color: rgba(255, 255, 255, 0.85);
+  display: inline-block;
+  transition: color 0.15s ease, transform 0.12s ease;
 }
-.auth-footer-links a:hover { color: #ffffff; text-decoration: underline; }
+.auth-footer-links a:hover { color: yellowgreen; text-decoration: underline; transform: translateX(3px); }
+.auth-footer-links a:active { transform: scale(0.95); }
 .auth-footer-bottom {
   display: flex;
   align-items: center;
@@ -1069,8 +1375,9 @@
   font-size: 0.8rem;
   font-weight: 700;
   color: #ffffff;
+  transition: color 0.15s ease;
 }
-.auth-footer-legal a:hover { text-decoration: underline; }
+.auth-footer-legal a:hover { color: yellowgreen; text-decoration: underline; }
 @media (max-width: 720px) {
   .auth-footer-main { flex-direction: column; }
   .auth-footer-bottom { justify-content: center; text-align: center; }
@@ -2219,16 +2526,28 @@ table a:hover {
   align-items: center;
   gap: 8px;
   min-width: 0;
-  max-width: 200px;
+  /* Was a fixed 200px — wider than a narrow fixed-layout column (e.g. this
+     app's 13% Vehicle column), and with no flex/grid ancestor forcing it to
+     shrink, it just rendered at its own natural width regardless of the
+     actual <td>, spilling into the next cell. 100% ties it to the real
+     column width so the inner min-width:0 shrink chain (button -> .vcn-text)
+     has something real to shrink against. */
+  max-width: 100%;
+  overflow: hidden;
 }
 .vehicle-cell .photo-cell,
 .vehicle-cell .photo-thumb {
   flex-shrink: 0;
 }
-/* Truncate a long vehicle name with an ellipsis; the plate lives in its own column. */
+/* Truncate a long vehicle name with an ellipsis; the plate lives in its own column.
+   min-width: 0 matters here — both this span and its parent button are flex
+   items (button.cell-link is display:inline-flex), and flex items refuse to
+   shrink below their content's natural width by default, which silently
+   overrides max-width/ellipsis entirely — the classic flexbox truncation bug. */
 .vcn-text {
   display: block;
   max-width: 150px;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2291,6 +2610,8 @@ button.cell-link {
   gap: 8px;
   height: auto;
   min-height: 0;
+  min-width: 0;
+  max-width: 100%;
   padding: 0;
   margin: 0;
   border: none;
@@ -3378,6 +3699,13 @@ button.wizard-step-pill:hover {
   border: 1.5px solid #d9e6f8; border-radius: 14px; padding: 18px;
   cursor: pointer; transition: all 0.2s ease;
   box-shadow: 0 4px 12px rgba(15,23,42,0.05);
+  /* Cards carry a variable amount of content above the footer (progress
+     bar, workflow-stage flag — both optional), so without this the status
+     badge + date land at a different height on every card in a row. Grid
+     already stretches cards to equal height; this pins the footer to the
+     bottom of that stretched height so it lines up across the whole row. */
+  display: flex;
+  flex-direction: column;
 }
 .ticket-card:hover {
   transform: translateY(-3px);
@@ -3386,9 +3714,20 @@ button.wizard-step-pill:hover {
 }
 .ticket-card-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
 .ticket-card-id { font-size: 0.72rem; font-weight: 800; color: #64748b; text-transform: uppercase; letter-spacing: 0.08em; }
-.ticket-card-title { font-size: 0.93rem; font-weight: 700; color: #0f172a; line-height: 1.4; margin-bottom: 6px; }
+.ticket-card-title {
+  font-size: 0.93rem; font-weight: 700; color: #0f172a; line-height: 1.4; margin-bottom: 6px;
+  /* Reserve space for 2 lines regardless of actual length — otherwise a
+     one-line title lets everything below it (progress bar, sub-issue
+     count, stage flag) start higher than on a card with a two-line title,
+     so those labels land at a different height on every card. */
+  min-height: 2.6em;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 .ticket-card-vehicle { font-size: 0.78rem; color: #64748b; margin-bottom: 14px; }
-.ticket-card-bottom { display: flex; align-items: center; justify-content: space-between; }
+.ticket-card-bottom { display: flex; align-items: center; justify-content: space-between; margin-top: auto; padding-top: 10px; }
 .ticket-card-date { font-size: 0.72rem; color: #94a3b8; }
 
 /* --- Ticket Detail Overlay --- */
@@ -4513,6 +4852,15 @@ html section.ticket-process-hero .ticket-detail-title { margin-bottom: 8px; colo
   max-width: 280px;
 }
 
+/* Add/Edit Vehicle Type — just 2 short fields + a textarea; letting it
+   stretch across the same width as the big multi-section forms (Vehicle,
+   User) left it looking sparse and unfinished. Capped and centered instead
+   of filling the whole panel. */
+.form-grid-2col.category-form-grid {
+  max-width: 640px;
+  margin: 0 auto;
+}
+
 /* Create Ticket form — sectioned card layout instead of one long vertical
    list of full-width fields. */
 .ticket-form-grid-2 {
@@ -4877,6 +5225,23 @@ html section.ticket-process-hero .ticket-detail-title { margin-bottom: 8px; colo
   overflow: hidden;
   z-index: -1;
 }
+/* Same off-screen/reveal-on-print treatment as .veh-print-report, for the
+   Reports module — see the comment on .veh-print-report and the @media
+   print rule below for why this has to live outside #root at all. */
+.report-print-view {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 700px;
+  height: 0;
+  overflow: hidden;
+  z-index: -1;
+}
+.report-print-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+.report-print-table th, .report-print-table td {
+  text-align: left; padding: 6px 10px; border-bottom: 1px solid #e2e8f0;
+}
+.report-print-table th { font-weight: 700; color: #0f172a; }
 @media print {
   /* Chrome renders its own header/footer (title, URL, date, page number)
      inside the page's margin box. Zeroing that margin via @page leaves it
@@ -4895,7 +5260,8 @@ html section.ticket-process-hero .ticket-detail-title { margin-bottom: 8px; colo
   /* Normal static flow — not position:fixed — is what actually paginates
      correctly. A fixed element gets reprinted on every page, which is
      exactly what was duplicating this whole report onto a second page. */
-  .veh-print-report {
+  .veh-print-report,
+  .report-print-view {
     position: static;
     width: auto;
     height: auto;
@@ -5451,6 +5817,23 @@ button.file-card-icon-btn:disabled { opacity: 0.4; cursor: not-allowed; pointer-
 .creatable-select-option-delete:hover {
   background: #fef2f2;
   color: #dc2626;
+}
+.creatable-select-option-edit {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: #94a3b8;
+  cursor: pointer;
+}
+.creatable-select-option-edit:hover {
+  background: #eff6ff;
+  color: #2563eb;
 }
 .creatable-select-add {
   display: flex;
@@ -6140,103 +6523,6 @@ table button,
   /* No forced min-height — a one-line "all clear" message shouldn't sit
      inside a box sized for a dozen rows. Cards hug their own content. */
   margin-bottom: 0;
-}
-
-.dashboard-graphs {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 14px;
-}
-
-@media (max-width: 960px) {
-  .dashboard-graphs {
-    grid-template-columns: 1fr;
-  }
-}
-
-.graph-panel {
-  /* No forced min-height, same reasoning as .dashboard-card-panel above. */
-  background: linear-gradient(180deg, rgba(22, 23, 27, 0.98), rgba(14, 15, 18, 0.98));
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  box-shadow: var(--shadow-soft);
-  color: var(--text);
-  padding: 14px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-/* The breakdown charts grouped under one "Fleet Analytics" card — each
-   quadrant has no card of its own (no border/background/shadow), just a
-   divider line shared with its neighbors, so the set reads as one related
-   panel, one single row, instead of separate floating boxes. */
-.dashboard-analytics-panel .dashboard-analytics-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  /* start, not stretch — a column with one short list (e.g. "What's
-     Breaking Most" with a single entry) shouldn't get stretched to match
-     a neighbor with 7 (e.g. "Vehicles by Type"), leaving dead space at
-     the bottom. Same reasoning as the removed panel min-heights above. */
-  align-items: start;
-  gap: 0;
-}
-.dashboard-analytics-panel .dashboard-analytics-grid-4 {
-  grid-template-columns: repeat(4, 1fr);
-}
-@media (max-width: 1100px) {
-  .dashboard-analytics-panel .dashboard-analytics-grid-4 {
-    grid-template-columns: repeat(2, 1fr);
-  }
-  .dashboard-analytics-grid-4 .graph-panel-bare:nth-child(2n) {
-    border-right: none;
-  }
-  .dashboard-analytics-grid-4 .graph-panel-bare:nth-child(n+3) {
-    border-top: 1px solid var(--border-subtle, #e2e8f0);
-  }
-}
-.graph-panel-bare {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 16px;
-  border-right: 1px solid var(--border-subtle, #e2e8f0);
-}
-.dashboard-analytics-grid .graph-panel-bare:last-child {
-  border-right: none;
-}
-@media (max-width: 720px) {
-  .dashboard-analytics-panel .dashboard-analytics-grid {
-    grid-template-columns: 1fr;
-  }
-  .graph-panel-bare {
-    border-right: none;
-    border-bottom: 1px solid var(--border-subtle, #e2e8f0);
-  }
-  .dashboard-analytics-grid .graph-panel-bare:last-child {
-    border-bottom: none;
-  }
-}
-
-.graph-panel-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  min-height: 34px;
-}
-
-.graph-panel-header h3 {
-  color: var(--text-strong);
-  font-size: 0.98rem;
-  font-weight: 800;
-}
-
-.graph-panel-header span {
-  color: var(--primary-strong);
-  font-size: 0.78rem;
-  font-weight: 800;
-  text-align: right;
 }
 
 .donut-chart {
@@ -8436,6 +8722,12 @@ button.btn-view-action svg {
   color: #b91c1c;
 }
 
+.location-density-notice.info {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  color: #1d4ed8;
+}
+
 .location-density-notice button {
   align-items: center;
   background: transparent;
@@ -10520,24 +10812,6 @@ html[data-theme="light"] .issue-id-badge {
   position: absolute;
 }
 
-.dashboard-hologram-orbit {
-  border: 1px solid rgba(186, 230, 253, 0.34);
-  border-radius: 50%;
-  height: 72%;
-  position: absolute;
-  width: 94%;
-}
-
-.dashboard-hologram-orbit.orbit-one {
-  animation: dashboardOrbit 12s linear infinite;
-  transform: rotateX(68deg) rotateZ(18deg);
-}
-
-.dashboard-hologram-orbit.orbit-two {
-  animation: dashboardOrbit 15s linear infinite reverse;
-  transform: rotateX(68deg) rotateZ(-42deg);
-}
-
 .dashboard-command-side {
   align-self: stretch;
   display: flex;
@@ -10902,13 +11176,8 @@ button.dashboard-signal-card:hover {
   to { transform: translateY(9px); }
 }
 
-@keyframes dashboardOrbit {
-  to { rotate: 360deg; }
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .dashboard-hologram-scan,
-  .dashboard-hologram-orbit {
+  .dashboard-hologram-scan {
     animation: none;
   }
 }
@@ -11016,4 +11285,81 @@ html[data-theme="light"] .dashboard-hologram-inner small {
   .dashboard-signal-card p {
     min-height: 0;
   }
+}
+
+/* "File cabinet" attachment picker (Log Repairs' Photo/Doc field) — a real
+   drop-zone affordance instead of the bare native file input, using the
+   archive icon (a drawer with a lid) as the cabinet motif. The native
+   <input type="file"> is display:none inside the <label>; clicking anywhere
+   on the label still opens the file picker, since that's how label/input
+   association works regardless of the input's own visibility. */
+.file-cabinet-dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 20px 12px;
+  border: 1.5px dashed #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.file-cabinet-dropzone:hover {
+  border-color: #93c5fd;
+  background: #f8fafc;
+}
+.file-cabinet-dropzone-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  background: #eff6ff;
+  color: #2563eb;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.file-cabinet-dropzone-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #0f172a;
+}
+.file-cabinet-dropzone-hint {
+  font-size: 0.72rem;
+  color: #94a3b8;
+}
+/* Filled state — a file already "put away" in the cabinet. */
+.file-cabinet-drawer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+}
+.file-cabinet-drawer-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 6px;
+  background: #eff6ff;
+  color: #2563eb;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+html[data-theme="dark"] .file-cabinet-dropzone,
+html[data-theme="dark"] .file-cabinet-drawer {
+  background: var(--surface, #1e293b);
+  border-color: var(--border, #334155);
+}
+html[data-theme="dark"] .file-cabinet-dropzone:hover {
+  background: var(--surface-hover, #263548);
+  border-color: #3b82f6;
+}
+html[data-theme="dark"] .file-cabinet-dropzone-title {
+  color: var(--text-strong, #f1f5f9);
 }
