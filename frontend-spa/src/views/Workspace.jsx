@@ -7,6 +7,7 @@ import VehicleLocationMap from '../components/VehicleLocationMap';
 import Icon from '../components/Icon';
 import TextType from '../components/TextType';
 import WorkspaceFooter from '../components/WorkspaceFooter';
+import ConfirmDialog from '../components/ConfirmDialog';
 import { AuthContext } from '../context/AuthContextObject';
 import { groupLocationRowsByHub } from '../data/paknaanLocationDensity';
 
@@ -15,6 +16,55 @@ const FormNoticeContext = createContext(null);
 // view for what was actually clicked — a vehicle cell opens the vehicle, a user
 // cell opens that user — instead of the whole row always going to the vehicle.
 const RowActionsContext = createContext(null);
+
+// Every value the backend actually stamps onto a Notification.type (see
+// notifyAdmins/notifyCustodians/notifyUser call sites in TicketController.php
+// and FleetController.php) mapped to the bell dropdown's visual category.
+// Driven off this reliable field instead of guessing from the title text.
+const NOTIFICATION_STYLE_BY_TYPE = {
+  // success — a positive/resolved outcome
+  sub_issue_confirmed: 'success',
+  repairs_approved: 'success',
+  ticket_ready_to_close: 'success',
+  ticket_closed: 'success',
+  schedule_restored: 'success',
+
+  // warning — a rejection, rework, deferral, or reopened/recurring problem
+  repairs_rejected: 'warning',
+  work_order_reopened: 'warning',
+  sub_issue_deferred: 'warning',
+  ticket_reopened: 'warning',
+  repair_reopened_for_verification: 'warning',
+  recurring_fault: 'warning',
+
+  // info — a neutral assignment/submission with no verdict yet
+  ticket_prediagnosed: 'info',
+  inspection_assigned: 'info',
+  inspection_submitted: 'info',
+  work_order_assigned: 'info',
+  work_order_reassigned: 'info',
+  ticket_reassigned: 'info',
+  repairs_completed: 'info',
+  maintenance_recorded: 'info',
+  maintenance_verification_withdrawn: 'info',
+  schedule_assigned: 'info',
+  maintenance_verification_needed: 'info',
+};
+
+// Backward-compat only: a notification row created before `type` existed (or
+// with a type this map hasn't caught up to yet) has no reliable field to key
+// off, so fall back to the old title-sniffing guess rather than mislabeling it.
+function legacyNotificationStyleFromTitle(title) {
+  if (/confirmed|approved|completed|verified|done/i.test(title)) return 'success';
+  if (/reopened|deferred|rejected|sent back/i.test(title)) return 'warning';
+  if (/required|assigned|logged|repairs completed/i.test(title)) return 'info';
+  if (/failed|error/i.test(title)) return 'error';
+  return 'info';
+}
+
+function getNotificationStyle(notification) {
+  return NOTIFICATION_STYLE_BY_TYPE[notification.type] ?? legacyNotificationStyleFromTitle(notification.title);
+}
 
 const roleRoutes = {
   Admin: '/admin',
@@ -65,6 +115,7 @@ const modulesByRole = {
     ] },
     { section: 'Monitoring & Schedules', items: [
       ['conditions', 'Condition Monitoring'],
+      ['schedules', 'Maintenance Schedule'],
       ['maintenanceStatus', 'Maintenance Status'],
       ['maintenance', 'Maintenance Records'],
     ] },
@@ -387,14 +438,25 @@ function Workspace() {
       return next;
     });
   };
-  // A ticket profile can be reached from places that never touch
+  // Any special page can be reached from places that never touch
   // setActiveModule — a notification click, a shared link opened in a new
   // tab, a direct URL/refresh — so `activeModule` itself can't be trusted
-  // here. Computed directly (not synced via an effect) so the breadcrumb is
-  // never wrong even for a single frame.
-  const breadcrumbModule = ticketProfileId
+  // for the heading icon/breadcrumb or the sidebar's own highlight while on
+  // one of these. Computed directly (not synced via an effect) so it's
+  // never wrong even for a single frame. Falls back to `activeModule` only
+  // for the plain module-list pages, where that state is authoritative.
+  const breadcrumbModule = ticketProfileId || isNewTicketPage
     ? (user.role === 'Admin' ? 'tickets' : 'workTracker')
-    : maintenanceProfileId ? 'maintenance' : activeModule;
+    : maintenanceProfileId || isNewMaintenancePage || editMaintenanceId ? 'maintenance'
+    : isNewVehiclePage || vehicleProfileId ? 'vehicles'
+    : isNewCategoryPage || editCategoryId ? 'categories'
+    : isNewSchedulePage || editScheduleId ? 'schedules'
+    : isNewIssuePage || editIssueId || viewIssueId ? 'issues'
+    : isNewConditionPage || editConditionId ? 'conditions'
+    : isNewUserPage || editUserId || viewUserId ? 'users'
+    : logRepairsTicketId ? 'ticketWorkOrders'
+    : inspectTicketId ? 'ticketInspections'
+    : activeModule;
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(
     () => localStorage.getItem('vms_sidebar_collapsed') === '1'
   );
@@ -466,6 +528,39 @@ function Workspace() {
   const [userInfoTarget, setUserInfoTarget] = useState(null);
   const [confirmDialog, setConfirmDialog] = useState(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
+  // Tracks whether the form on whatever special page is currently open has
+  // been touched — set true the moment a field changes, cleared on submit,
+  // on an explicit Cancel, or after the user confirms discarding it. Lets
+  // the sidebar (and anything else that can navigate away) warn before an
+  // accidental click wipes out something like a half-filled Log Repairs or
+  // Inspect Vehicle form.
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  // Runs `action` only after confirming with the user if a form is dirty —
+  // used anywhere navigation could otherwise silently discard unsaved input.
+  // Reuses the same styled ConfirmDialog every other consequential action in
+  // this app goes through, instead of the browser's own native confirm().
+  const guardedNavigate = useCallback((action) => {
+    if (!hasUnsavedChanges) {
+      action();
+      return;
+    }
+    setConfirmDialog({
+      title: 'Unsaved Changes',
+      message: 'You have unsaved changes on this page. Discard them and leave?',
+      confirmLabel: 'Discard & Leave',
+      onConfirm: () => {
+        setHasUnsavedChanges(false);
+        action();
+      },
+    });
+  }, [hasUnsavedChanges]);
+  // Any route change means whatever page we're now on starts clean — this
+  // is what actually clears the flag after a successful save (submitting
+  // navigates away on its own, outside guardedNavigate), and also covers
+  // navigating directly from one edit form straight into another.
+  useEffect(() => {
+    setHasUnsavedChanges(false);
+  }, [location.pathname]);
   // First-time approval only — a pending self-registration's role is a
   // request, not yet real, so Admin reviews/confirms it here instead of
   // the plain yes/no ConfirmDialog every other activate/deactivate uses.
@@ -498,7 +593,8 @@ function Workspace() {
   const [filterAssignedTo, setFilterAssignedTo] = useState([]); // schedules
   const [filterVerdict, setFilterVerdict] = useState([]); // ticketVerifications
   const [filterCheckedBy, setFilterCheckedBy] = useState([]); // conditions
-  const [filterDateStart, setFilterDateStart] = useState(''); // issues/maintenance/tickets
+  const [filterActivityType, setFilterActivityType] = useState([]); // histories
+  const [filterDateStart, setFilterDateStart] = useState(''); // issues/maintenance/tickets/histories
   const [filterDateEnd, setFilterDateEnd] = useState('');
 
   // Ticket Archives date/status filters
@@ -686,6 +782,7 @@ function Workspace() {
      setFilterAssignedTo([]);
      setFilterVerdict([]);
      setFilterCheckedBy([]);
+     setFilterActivityType([]);
      setFilterDateStart('');
      setFilterDateEnd('');
      setCondFilterStartDate('');
@@ -805,9 +902,12 @@ function Workspace() {
     navigate(`${roleRoutes[user.role]}/tickets/new`);
   };
 
-  // #2 (Mode C) — a "Needs Repair"/"Damaged" condition check already IS the
-  // inspection, so spawn a pre-diagnosed ticket carrying the custodian's
-  // findings straight in (no re-inspection). Observations seed the sub-issues.
+  // #2 (Mode C) — a "Needs Repair"/"Needs Inspection" condition check
+  // already IS the inspection, so spawn a pre-diagnosed ticket carrying the
+  // custodian's findings straight in instead of making someone re-describe
+  // the same problem all over again via a separate Issue Report. Observations
+  // seed the sub-issues. Needs Repair is a confirmed problem (High); Needs
+  // Inspection is still just "take a closer look" (Medium) until it is one.
   const handleCreateTicketFromCondition = (cond) => {
     setPrefilledTicketData({
       vehicle_id: cond.vehicle_id,
@@ -815,7 +915,8 @@ function Workspace() {
       ticket_description: `From condition check #${cond.condition_check_id} by ${cond.checked_by?.name ?? 'custodian'}.\nObservations: ${cond.observations ?? '—'}`,
       entry_mode: 'prediagnosed',
       sub_issues_text: cond.observations || cond.condition_result,
-      priority: cond.condition_result === 'Damaged' ? 'High' : 'Medium',
+      priority: cond.condition_result === 'Needs Repair' ? 'High' : 'Medium',
+      condition_check_id: cond.condition_check_id,
     });
     navigate(`${roleRoutes[user.role]}/tickets/new`);
   };
@@ -1051,7 +1152,13 @@ function Workspace() {
       await refreshCurrent();
       setNotice({ type: 'success', text: 'Vehicle added.' });
       const newVehicleId = response?.data?.vehicle_id;
-      if (newVehicleId) {
+      // Arrived here via another page's "+ Add Vehicle" shortcut (e.g.
+      // Report Vehicle Issue) — go back there with the new vehicle already
+      // selected, instead of landing on its profile page.
+      const returnTo = location.state?.returnTo;
+      if (returnTo) {
+        navigate(returnTo, { state: newVehicleId ? { prefillVehicleId: newVehicleId } : undefined });
+      } else if (newVehicleId) {
         navigate(`${roleRoutes[user.role]}/vehicles/${newVehicleId}`);
       } else {
         returnToModule('vehicles');
@@ -1275,12 +1382,17 @@ function Workspace() {
       result = result.filter((row) => filterVerdict.includes(row.verification_verdict));
     }
 
+    if (activeModule === 'histories' && filterActivityType.length) {
+      result = result.filter((row) => filterActivityType.includes(row.activity_type));
+    }
+
     // Date range — same two fields, applied to whichever date column is
     // meaningful for the active module.
     if (filterDateStart || filterDateEnd) {
       const dateField = activeModule === 'maintenance' ? 'date_started'
         : activeModule === 'tickets' ? 'created_at'
         : activeModule === 'issues' ? 'created_at'
+        : activeModule === 'histories' ? 'created_at'
         : null;
       if (dateField) {
         result = result.filter((row) => {
@@ -1412,7 +1524,7 @@ function Workspace() {
     }
 
     return result;
-  }, [rawRows, searchQuery, filterCategory, filterCapacity, filterLocation, filterDomain, filterStatus, filterPriority, filterReadiness, filterIssueType, filterMaintType, filterSource, filterActive, filterAssignedTo, filterVerdict, filterCheckedBy, filterDateStart, filterDateEnd, activeModule, condFilterStartDate, condFilterEndDate, archiveStart, archiveEnd, archiveStatusFilter]);
+  }, [rawRows, searchQuery, filterCategory, filterCapacity, filterLocation, filterDomain, filterStatus, filterPriority, filterReadiness, filterIssueType, filterMaintType, filterSource, filterActive, filterAssignedTo, filterVerdict, filterCheckedBy, filterActivityType, filterDateStart, filterDateEnd, activeModule, condFilterStartDate, condFilterEndDate, archiveStart, archiveEnd, archiveStatusFilter]);
 
   // Status breakdown for the Vehicle Management stat cards — counted from the
   // full unfiltered fetch so the cards stay accurate regardless of the active
@@ -1448,7 +1560,7 @@ function Workspace() {
   }, [records.schedules, user.id]);
 
   const conditionStats = useMemo(
-    () => countByValues(records.conditions ?? [], (r) => r.condition_result, ['Good', 'Needs Inspection', 'Needs Repair', 'Damaged']),
+    () => countByValues(records.conditions ?? [], (r) => r.condition_result, ['Good', 'Needs Inspection', 'Needs Repair']),
     [records.conditions]
   );
 
@@ -1588,6 +1700,7 @@ function Workspace() {
     try {
       const res = await api.post(`/impersonate/${impersonateId}`);
       localStorage.setItem('token', res.data.access_token);
+      sessionStorage.removeItem('token');
       // Full reload → axios picks up the new token and AuthContext reloads the
       // impersonated user cleanly (no stale state from the previous account).
       window.location.assign(roleRoutes[res.data.user?.role] ?? '/admin');
@@ -1608,6 +1721,18 @@ function Workspace() {
   const [mapBarangays, setMapBarangays] = useState([]);
   const [mapBarangayId, setMapBarangayId] = useState('');
   const [mapBoundaryOverride, setMapBoundaryOverride] = useState(null);
+  // Guards the one-time "default to Paknaan" seed below from re-firing on a
+  // second effect invocation (React's dev-only StrictMode double-invokes
+  // effects on mount) — without this, a second run would call
+  // loadBarangaysForProvince(cebu.id, 'Paknaan') again.
+  const mapDefaultAppliedRef = useRef(false);
+  // The bigger race: that seed is 2 sequential API calls deep (province ->
+  // barangay list -> boundary fetch), slow enough on the local dev server
+  // that an admin can pick a real barangay from the dropdown WHILE it's
+  // still in flight. When it finally resolves, it must not overwrite a
+  // selection made in the meantime — this ref is the source of truth for
+  // "has the admin touched this dropdown themselves".
+  const userPickedBarangayRef = useRef(false);
 
   // DEV-only: the same two dropdowns also drive Impersonate below, so a
   // barangay with registered staff but no boundary polygon (anything other
@@ -1630,15 +1755,33 @@ function Workspace() {
         byId.set(String(u.barangay_id), { id: u.barangay_id, name: u.barangay_name });
       }
     });
+    // Guarantee the currently-selected barangay always has an entry — in
+    // production, impersonateCandidates above is always empty (that merge
+    // is dev-only), so a barangay outside Mandaue City (the only city with
+    // a real /barangays/registered list) would otherwise vanish from its
+    // own dropdown the moment it's selected, e.g. every non-Paknaan admin
+    // landing on their own barangay by default.
+    if (mapBarangayId && !byId.has(String(mapBarangayId)) && mapBoundaryOverride?.label) {
+      byId.set(String(mapBarangayId), { id: mapBarangayId, name: mapBoundaryOverride.label });
+    }
     return Array.from(byId.values()).sort((a, b) => a.name.localeCompare(b.name));
-  }, [mapBarangays, impersonateCandidates, mapProvinceId]);
+  }, [mapBarangays, impersonateCandidates, mapProvinceId, mapBarangayId, mapBoundaryOverride]);
   // Keeps the Impersonate staff dropdown valid for whichever barangay is
   // currently selected above — re-runs whenever the barangay changes or the
   // candidate list itself first loads.
   const impersonateGroupUsers = impersonateGroups.find((g) => g.key === String(mapBarangayId))?.users ?? [];
   useEffect(() => {
     const stillValid = impersonateGroupUsers.some((u) => String(u.id) === String(impersonateId));
-    if (!stillValid) setImpersonateId(impersonateGroupUsers[0]?.id ?? '');
+    if (!stillValid) {
+      // The barangay/candidate chain resolves over several async calls, so
+      // this can fire once against a still-loading (wrong) group before
+      // landing on the real one. Falling back to "whoever's first" there
+      // would silently pick a coworker instead of yourself — prefer your
+      // own account if it's in this group at all, only falling further
+      // back to "first" when you genuinely aren't a candidate here.
+      const self = impersonateGroupUsers.find((u) => String(u.id) === String(user.id));
+      setImpersonateId(self?.id ?? impersonateGroupUsers[0]?.id ?? '');
+    }
     // impersonateGroupUsers is a derived array (new reference every render);
     // keying off mapBarangayId/impersonateCandidates instead avoids re-running
     // this on every render.
@@ -1650,30 +1793,42 @@ function Workspace() {
     if (!barangayId) { setMapBoundaryOverride(null); return; }
     try {
       const res = await api.get(`/barangays/${barangayId}`);
-      setMapBoundaryOverride(res.data.boundary ? { geometry: res.data.boundary, label: res.data.name } : null);
+      // Always carry the picked barangay's own name, even when it has no
+      // boundary polygon on file (only Mandaue City barangays do today) —
+      // otherwise the map silently falls back to Paknaan's shape AND label,
+      // which reads as "the dropdown did nothing" instead of "no data yet".
+      setMapBoundaryOverride({ geometry: res.data.boundary ?? null, label: res.data.name });
     } catch {
       setMapBoundaryOverride(null);
     }
   }, []);
 
-  // Resolves the one city under a province that has a registered barangay
-  // list (Mandaue City today) and loads only the barangays that actually
-  // have a registered user, plus Paknaan (always included — the system's
-  // built-in home barangay). Provinces with no such city simply end up
-  // with an empty Barangay dropdown. `defaultBarangayName` pre-selects a
-  // barangay once the list loads — used to land on Paknaan on first load.
-  const loadBarangaysForProvince = useCallback(async (provinceId, defaultBarangayName) => {
+  // Loads the barangays that actually have a registered user (plus Paknaan,
+  // always included — the system's built-in home barangay) for the one
+  // city within a province that has a registered barangay list. Which city
+  // that is comes straight from `/provinces/with-barangays`'
+  // `city_with_barangays_id` (see ProvinceController::withBarangays) rather
+  // than being re-derived here — this used to search the province's city
+  // list for one literally named "Mandaue City", which only worked because
+  // that was the sole seeded example; a second city with real barangay data
+  // in any province would have silently produced an empty dropdown. A
+  // province with no such city (falsy `cityId`) simply ends up with an
+  // empty Barangay dropdown. `defaultBarangayName` pre-selects a barangay
+  // once the list loads — used to land on Paknaan on first load.
+  const loadBarangaysForProvince = useCallback(async (cityId, defaultBarangayName) => {
+    if (!cityId) {
+      setMapBarangays([]);
+      return;
+    }
     try {
-      const citiesRes = await api.get('/cities', { params: { province_id: provinceId } });
-      const cityWithBarangays = citiesRes.data.find((c) => c.name === 'Mandaue City');
-      if (!cityWithBarangays) {
-        setMapBarangays([]);
-        return;
-      }
-      const barangaysRes = await api.get('/barangays/registered', { params: { city_id: cityWithBarangays.id } });
+      const barangaysRes = await api.get('/barangays/registered', { params: { city_id: cityId } });
       setMapBarangays(barangaysRes.data);
 
-      const defaultBarangay = defaultBarangayName
+      // Skip applying the default if the admin has already picked a real
+      // barangay themselves while this chain was still in flight — this
+      // check happens as late as possible (right before acting on it) so
+      // it catches a pick made at any point during the 3-call chain above.
+      const defaultBarangay = defaultBarangayName && !userPickedBarangayRef.current
         ? barangaysRes.data.find((b) => b.name === defaultBarangayName)
         : null;
       if (defaultBarangay) {
@@ -1694,23 +1849,44 @@ function Workspace() {
       const cebu = response.data.find((p) => p.name === 'Cebu');
       if (cebu) {
         setMapProvinceId(String(cebu.id));
-        loadBarangaysForProvince(cebu.id, 'Paknaan');
+        if (!mapDefaultAppliedRef.current) {
+          mapDefaultAppliedRef.current = true;
+          // Land every admin on THEIR OWN barangay by default, not always
+          // Paknaan — that hardcoded default only ever made sense back when
+          // Paknaan was the only barangay in the system. Falls back to
+          // Paknaan only for an account with no barangay of its own (there
+          // isn't one today, but this keeps old behavior as the fallback).
+          if (user.barangay_id && !userPickedBarangayRef.current) {
+            setMapBarangayId(String(user.barangay_id));
+            selectBarangayBoundary(user.barangay_id);
+            loadBarangaysForProvince(cebu.city_with_barangays_id, null);
+          } else {
+            loadBarangaysForProvince(cebu.city_with_barangays_id, 'Paknaan');
+          }
+        } else {
+          // Still populate the barangay list for this province — just
+          // don't re-seed the default selection over a real one.
+          loadBarangaysForProvince(cebu.city_with_barangays_id, null);
+        }
       }
     }).catch(() => {});
-  }, [loadBarangaysForProvince]);
+  }, [loadBarangaysForProvince, selectBarangayBoundary, user.barangay_id]);
 
   const handleMapProvinceChange = (e) => {
+    userPickedBarangayRef.current = true;
     const provinceId = e.target.value;
     setMapProvinceId(provinceId);
     setMapBarangayId('');
     setMapBoundaryOverride(null);
     setMapBarangays([]);
     if (provinceId) {
-      loadBarangaysForProvince(provinceId);
+      const province = mapProvinces.find((p) => String(p.id) === String(provinceId));
+      loadBarangaysForProvince(province?.city_with_barangays_id ?? null);
     }
   };
 
   const handleMapBarangayChange = (e) => {
+    userPickedBarangayRef.current = true;
     const barangayId = e.target.value;
     setMapBarangayId(barangayId);
     selectBarangayBoundary(barangayId);
@@ -1807,14 +1983,7 @@ function Workspace() {
                     </div>
                   ) : (
                     notifications.map((n) => {
-                      const getNotificationType = (title) => {
-                        if (/confirmed|approved|completed|verified|done/i.test(title)) return 'success';
-                        if (/reopened|deferred|rejected|sent back/i.test(title)) return 'warning';
-                        if (/required|assigned|logged|repairs completed/i.test(title)) return 'info';
-                        if (/failed|error/i.test(title)) return 'error';
-                        return 'info';
-                      };
-                      const notificationType = getNotificationType(n.title);
+                      const notificationType = getNotificationStyle(n);
                       return (
                       <div
                         key={n.notification_id}
@@ -1891,14 +2060,14 @@ function Workspace() {
                 const badgeCount = dashboard?.badge_counts?.[key] ?? 0;
                 return (
                   <button
-                    className={key === activeModule ? 'active' : ''}
+                    className={key === breadcrumbModule ? 'active' : ''}
                     key={key}
-                    onClick={() => {
+                    onClick={() => guardedNavigate(() => {
                       setActiveModule(key);
                       if (isOnSpecialPage) {
                         navigate(roleRoutes[user.role]);
                       }
-                    }}
+                    })}
                     title={isSidebarCollapsed ? label : undefined}
                     type="button"
                   >
@@ -1921,7 +2090,7 @@ function Workspace() {
               // would leave no way to reach them), and the group containing
               // whatever module is currently active — so notification jumps
               // and deep links never land on a hidden item.
-              const holdsActive = items.some(([key]) => key === activeModule);
+              const holdsActive = items.some(([key]) => key === breadcrumbModule);
               const expanded = isSidebarCollapsed || holdsActive || !collapsedNavGroups.includes(section);
 
               return (
@@ -1947,11 +2116,11 @@ function Workspace() {
           {/* Dashboard has its own greeting banner right below (name, role,
               date) — this generic icon+title bar would just repeat "Dashboard"
               redundantly above it, so it's skipped for that one page only. */}
-          {activeModule !== 'dashboard' && (
+          {(activeModule !== 'dashboard' || isOnSpecialPage) && (
             <div className="page-heading-row">
-              <span className="page-heading-icon">{moduleIcons[activeModule]}</span>
+              <span className="page-heading-icon">{moduleIcons[breadcrumbModule]}</span>
               <div className="page-heading-text">
-                {subPageTitle && (
+                {subPageTitle && !isProfilePage && (
                   <p className="breadcrumb-path">{moduleLabel(modules, breadcrumbModule)} »</p>
                 )}
                 <h2>{subPageTitle ?? moduleLabel(modules, activeModule)}</h2>
@@ -2005,13 +2174,16 @@ function Workspace() {
               user={user}
               onBack={() => navigate(roleRoutes[user.role])}
               setNotice={setNotice}
+              refreshUser={refreshUser}
+              onDirty={() => setHasUnsavedChanges(true)}
             />
           ) : isNewVehiclePage ? (
             <NewVehiclePage
-              onBack={() => returnToModule('vehicles')}
+              onBack={() => (location.state?.returnTo ? navigate(location.state.returnTo) : returnToModule('vehicles'))}
               lookups={lookups}
               allHubs={allHubs}
               onSubmit={handleCreateVehicle}
+              onDirty={() => setHasUnsavedChanges(true)}
             />
           ) : isNewTicketPage ? (
             <NewTicketPage
@@ -2020,6 +2192,7 @@ function Workspace() {
               prefilledTicketData={prefilledTicketData}
               onCreateTicket={createTicket}
               basePath={roleRoutes[user.role]}
+              onDirty={() => setHasUnsavedChanges(true)}
             />
           ) : vehicleProfileId ? (
             <VehicleProfilePage
@@ -2027,6 +2200,7 @@ function Workspace() {
               lookups={lookups}
               allHubs={allHubs}
               canManage={hasRole(user, 'Admin')}
+              canManageDocuments={hasRole(user, 'Admin') || hasRole(user, 'Custodian') || hasRole(user, 'Maintenance Personnel')}
               canCheckReadiness={hasRole(user, 'Admin') || hasRole(user, 'Custodian')}
               setNotice={setNotice}
               onSaved={refreshCurrent}
@@ -2060,6 +2234,8 @@ function Workspace() {
               initialValues={editCategoryId ? (records.categories ?? []).find((c) => String(c.category_id) === String(editCategoryId)) : EMPTY_OBJ}
               onSubmit={(payload) => submitFormPage('categories', editCategoryId ? { category_id: editCategoryId } : null, payload)}
               submitLabel={editCategoryId ? 'Update Type' : 'Add Type'}
+              wrapperClassName="category-form-grid"
+              onDirty={() => setHasUnsavedChanges(true)}
             />
           ) : (isNewSchedulePage || editScheduleId) ? (
             <FormPage
@@ -2071,6 +2247,7 @@ function Workspace() {
               submitLabel={editScheduleId ? 'Update Schedule' : 'Add Schedule'}
               contextVehicles={lookups.vehicles}
               hubs={allHubs}
+              onDirty={() => setHasUnsavedChanges(true)}
             />
           ) : viewIssueId ? (
             <IssueViewPage
@@ -2085,14 +2262,17 @@ function Workspace() {
             <FormPage
               description={issueDescription(user.role)}
               onBack={() => returnToModule('issues')}
-              fields={issueFields(lookups, editIssueId ? { issue_report_id: editIssueId } : null, user.role)}
-              initialValues={editIssueId ? (records.issues ?? []).find((i) => String(i.issue_report_id) === String(editIssueId)) : EMPTY_OBJ}
+              fields={issueFields(lookups, editIssueId ? { issue_report_id: editIssueId } : null, user.role, (!editIssueId && hasRole(user, 'Admin')) ? () => navigate(`${roleRoutes[user.role]}/vehicles/new`, { state: { returnTo: location.pathname } }) : undefined)}
+              initialValues={editIssueId
+                ? (records.issues ?? []).find((i) => String(i.issue_report_id) === String(editIssueId))
+                : (location.state?.prefillVehicleId ? { vehicle_id: location.state.prefillVehicleId } : EMPTY_OBJ)}
               onSubmit={(payload) => submitFormPage('issues', editIssueId ? { issue_report_id: editIssueId } : null, payload)}
               submitLabel={editIssueId ? 'Update Issue' : 'Submit Issue'}
               contextVehicles={lookups.vehicles}
               hubs={allHubs}
               warnEndpoint={editIssueId ? undefined : (vid) => `/vehicles/${vid}/open-issues`}
               warnRender={(rows) => <OpenItemsWarning kind="issue" rows={rows} basePath={roleRoutes[user.role]} />}
+              onDirty={() => setHasUnsavedChanges(true)}
             />
           ) : (isNewConditionPage || editConditionId) ? (
             <FormPage
@@ -2104,6 +2284,7 @@ function Workspace() {
               submitLabel={editConditionId ? 'Update Condition' : 'Record Condition'}
               contextVehicles={lookups.vehicles}
               hubs={allHubs}
+              onDirty={() => setHasUnsavedChanges(true)}
             />
           ) : (isNewMaintenancePage || editMaintenanceId) ? (
             <FormPage
@@ -2118,6 +2299,7 @@ function Workspace() {
               reviewStep
               wrapperClassName="maintenance-form-grid"
               formTitle="Maintenance Record Details"
+              onDirty={() => setHasUnsavedChanges(true)}
             />
           ) : viewUserId ? (
             <UserViewPage
@@ -2135,12 +2317,14 @@ function Workspace() {
               onSubmit={(payload) => submitFormPage('users', editUserId ? { id: editUserId } : null, payload)}
               submitLabel={editUserId ? 'Update User' : 'Add User'}
               wrapperClassName="user-form-grid"
+              onDirty={() => setHasUnsavedChanges(true)}
             />
           ) : logRepairsTicketId ? (
             <LogRepairsPage
               ticket={flattenSubIssueRows(records.ticketWorkOrders).find((r) => String(r.ticket_id) === String(logRepairsTicketId) && String(r.sub_issue_id) === String(logRepairsSubIssueId))}
               onBack={() => returnToModule('ticketWorkOrders')}
               onSubmit={(subIssueRow, payload) => ticketAction(`/tickets/${subIssueRow.ticket_id}/sub-issues/${subIssueRow.sub_issue_id}/log-repairs`, payload, 'Repair logs submitted. Sent for Custodian verification.').then((ok) => { if (ok) returnToModule('ticketWorkOrders'); })}
+              onDirty={() => setHasUnsavedChanges(true)}
             />
           ) : inspectTicketId ? (
             <InspectTicketPage
@@ -2148,6 +2332,7 @@ function Workspace() {
               ticketLookups={ticketLookups}
               onBack={() => returnToModule('ticketInspections')}
               onSubmit={(ticket, payload) => ticketAction(`/tickets/${ticket.ticket_id}/inspect`, payload, 'Inspection submitted successfully.').then((ok) => { if (ok) returnToModule('ticketInspections'); })}
+              onDirty={() => setHasUnsavedChanges(true)}
             />
           ) : (loading ? <ModuleLoader /> : renderModule())}
         </div>
@@ -2535,7 +2720,7 @@ function Workspace() {
               {/* Condition Dropdown */}
               <MultiSelectDropdown
                 placeholder="All Conditions"
-                options={['Good', 'Needs Inspection', 'Needs Repair', 'Damaged']}
+                options={['Good', 'Needs Inspection', 'Needs Repair']}
                 selected={condDraft.status}
                 onChange={(vals) => setCondDraft((d) => ({ ...d, status: vals }))}
               />
@@ -2629,7 +2814,7 @@ function Workspace() {
             </div>
 
             <DataTable
-              columns={conditionColumns(user.role, (row) => navigate(`${roleRoutes[user.role]}/conditions/${row.condition_check_id}/edit`), deleteRecord, handleCreateTicketFromCondition, handleSuggestScheduleFromCondition)}
+              columns={conditionColumns(user.role, (row) => navigate(`${roleRoutes[user.role]}/conditions/${row.condition_check_id}/edit`), deleteRecord, handleCreateTicketFromCondition, handleSuggestScheduleFromCondition, (ticketId) => navigate(`${roleRoutes[user.role]}/tickets/${ticketId}`))}
               emptyMessage="No condition checks logged yet — click the + button to record one."
               rows={visibleRows}
               onRowClick={(row) => row.vehicle && openVehicleProfile(row.vehicle)}
@@ -2821,7 +3006,7 @@ function Workspace() {
               <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search verifications..." />
             </div>
             <DataTable
-              columns={maintenanceStatusColumns(setEditTarget)}
+              columns={maintenanceStatusColumns(setEditTarget, user.id)}
               emptyMessage="Nothing awaiting your verification right now."
               rows={visibleRows}
               onRowClick={(row) => row.vehicle && openVehicleProfile(row.vehicle)}
@@ -2923,7 +3108,9 @@ function Workspace() {
                 value={searchQuery}
                 onChange={setSearchQuery}
                 placeholder="Search schedules..."
-                onAdd={hasRole(user, 'Admin') ? () => navigate(`${roleRoutes[user.role]}/schedules/new`) : undefined}
+                onAdd={(hasRole(user, 'Admin') || hasRole(user, 'Maintenance Personnel') || hasRole(user, 'Custodian'))
+                  ? () => navigate(`${roleRoutes[user.role]}/schedules/new`)
+                  : undefined}
                 addLabel="Add Schedule"
                 onExport={() => exportRowsToCsv('maintenance-schedules.csv', SCHEDULE_EXPORT_COLUMNS, visibleRows)}
               />
@@ -3035,8 +3222,51 @@ function Workspace() {
     }
 
     if (activeModule === 'histories') {
+      const historyActivityTypeOptions = [...new Set((records.histories ?? []).map((h) => h.activity_type).filter(Boolean))].sort();
       return (
-        <ModulePanel description="Automatic vehicle activity timeline across location, issue, condition, and maintenance events.">
+        <ModulePanel
+          description="Automatic vehicle activity timeline across location, issue, condition, and maintenance events."
+          filterBar={
+            <div className="filter-bar-container">
+              <div className="filter-label"><span>Filters:</span></div>
+              <MultiSelectDropdown
+                placeholder="All Activity Types"
+                options={historyActivityTypeOptions}
+                selected={filterActivityType}
+                onChange={setFilterActivityType}
+              />
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                <span style={{ fontSize: '0.78rem', fontWeight: 600, opacity: 0.65 }}>From:</span>
+                <input
+                  type="date"
+                  className="filter-select"
+                  style={{ minWidth: 'auto' }}
+                  value={filterDateStart}
+                  onChange={(e) => setFilterDateStart(e.target.value)}
+                />
+              </div>
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                <span style={{ fontSize: '0.78rem', fontWeight: 600, opacity: 0.65 }}>To:</span>
+                <input
+                  type="date"
+                  className="filter-select"
+                  style={{ minWidth: 'auto' }}
+                  value={filterDateEnd}
+                  onChange={(e) => setFilterDateEnd(e.target.value)}
+                />
+              </div>
+              {(filterActivityType.length > 0 || filterDateStart || filterDateEnd) && (
+                <button
+                  type="button"
+                  className="filter-clear-btn"
+                  onClick={() => { setFilterActivityType([]); setFilterDateStart(''); setFilterDateEnd(''); }}
+                >
+                  Clear Filters
+                </button>
+              )}
+            </div>
+          }
+        >
           <div className="panel-header-bar">
             <h3>Activity History <span className="count-badge">{visibleRows.length}</span></h3>
             <LocalSearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search history..." />
@@ -3783,7 +4013,7 @@ function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedu
   // on their dashboard instead of only living in the shared schedule table.
   const myScheduledWork = data.my_scheduled_work ?? [];
 
-  // Fleet health (Good/Needs Inspection/Needs Repair/Damaged) — a different
+  // Fleet health (Good/Needs Inspection/Needs Repair) — a different
   // signal than Available/Under Maintenance/Inactive, which already have
   // their own KPI tiles just below this card, so this donut wouldn't just
   // be re-drawing the same three numbers. Colors match the same condition
@@ -3862,8 +4092,6 @@ function Dashboard({ data, hubs = null, user, basePath, onNavigate, onGoToSchedu
 
         <div className="dashboard-hologram-core" style={{ '--score': `${opsScore}%`, '--readiness': `${readinessRate}%` }}>
           <span className="dashboard-hologram-scan" />
-          <span className="dashboard-hologram-orbit orbit-one" />
-          <span className="dashboard-hologram-orbit orbit-two" />
           <div className="dashboard-hologram-inner">
             <span>Ops Score</span>
             <strong>{opsScore}</strong>
@@ -4438,21 +4666,6 @@ function dashboardMetricValue(metrics, label) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-// `bare` drops this panel's own card chrome (border/background/shadow) —
-// used when four of these sit inside one outer "Fleet Analytics" card
-// instead of each being its own separate floating box.
-function GraphPanel({ title, stat, children, bare = false }) {
-  return (
-    <article className={bare ? 'graph-panel-bare' : 'graph-panel'}>
-      <div className="graph-panel-header">
-        <h3>{title}</h3>
-        <span>{stat}</span>
-      </div>
-      {children}
-    </article>
-  );
-}
-
 function DonutChart({ segments, centerLabel, centerSubLabel }) {
   const total = segments.reduce((sum, segment) => sum + segment.value, 0);
   const radius = 42;
@@ -5009,48 +5222,6 @@ function IssueViewPage({ issueId, allIssues = [], allHubs = [], role, onCreateTi
   );
 }
 
-function ConfirmDialog({ busy, dialog, onCancel, onConfirm }) {
-  if (!dialog) return null;
-
-  return (
-    <div className="confirm-overlay" onClick={busy ? undefined : onCancel}>
-      <section
-        aria-labelledby="confirm-dialog-title"
-        aria-modal="true"
-        className="confirm-dialog"
-        onClick={(event) => event.stopPropagation()}
-        role="dialog"
-      >
-        <div className="confirm-dialog-icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M12 9v4" />
-            <path d="M12 17h.01" />
-            <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
-          </svg>
-        </div>
-        <div className="confirm-dialog-copy">
-          <p className="eyebrow">Confirmation</p>
-          <h3 id="confirm-dialog-title">{dialog.title ?? 'Confirm Action'}</h3>
-          <p>{dialog.message}</p>
-        </div>
-        <div className="confirm-dialog-actions">
-          <button className="ghost-button" disabled={busy} onClick={onCancel} type="button">
-            Cancel
-          </button>
-          <button
-            className={dialog.variant === 'primary' ? 'primary-button' : 'danger-button'}
-            disabled={busy}
-            onClick={onConfirm}
-            type="button"
-          >
-            {busy ? 'Working...' : dialog.confirmLabel ?? 'Continue'}
-          </button>
-        </div>
-      </section>
-    </div>
-  );
-}
-
 function ProfileMenu({ user, open, setOpen, onLogout, onOpenNotifications, onOpenSettings }) {
   const initials = user.name
     ? user.name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase()
@@ -5101,10 +5272,33 @@ function ProfileMenu({ user, open, setOpen, onLogout, onOpenNotifications, onOpe
   );
 }
 
-/** Self-service profile page (all roles) — account summary + password change. */
-function ProfilePage({ user, onBack, setNotice }) {
+function profileFields(existingPhotoUrl) {
+  return [
+    { label: 'Full Name', name: 'name', required: true, type: 'text' },
+    { label: 'Email', name: 'email', required: true, type: 'text', placeholder: 'name@barangay.gov' },
+    { label: 'Phone', name: 'phone', type: 'tel', pattern: '[0-9]{10}', placeholder: '09XXXXXXXXX', title: 'Phone must be exactly 10 digits' },
+    { label: 'Address', name: 'address', type: 'text' },
+    { label: 'Profile Photo', name: 'photo', accept: 'image/*', type: 'file', existingUrl: existingPhotoUrl },
+  ];
+}
+
+/** Self-service profile page (all roles) — editable details (same fields/layout
+ * an Admin uses on Update User) plus a separate password-change section, since
+ * that one stays gated behind old-password verification. */
+function ProfilePage({ user, onBack, setNotice, refreshUser, onDirty }) {
   const initials = user.name ? user.name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase() : 'U';
   const roles = (Array.isArray(user.roles) && user.roles.length) ? user.roles : [user.role].filter(Boolean);
+
+  const updateDetails = async (payload) => {
+    setNotice(null);
+    try {
+      await sendPayload('put', '/profile', payload);
+      await refreshUser();
+      setNotice({ type: 'success', text: 'Profile updated.' });
+    } catch (error) {
+      showError(error, setNotice);
+    }
+  };
 
   const updatePassword = async (payload) => {
     setNotice(null);
@@ -5140,6 +5334,23 @@ function ProfilePage({ user, onBack, setNotice }) {
         </div>
 
         <div className="profile-section">
+          <h4 className="profile-section-title"><Icon name="edit" size={15} /> Edit Details</h4>
+          <p className="muted profile-section-hint">Keep your contact information up to date.</p>
+          <div className="form-grid-2col user-form-grid">
+            <SmartForm
+              fields={profileFields(user.photo_url)}
+              initialValues={user}
+              key="profile-details"
+              onCancel={onBack}
+              onSubmit={updateDetails}
+              onValuesChange={() => onDirty?.()}
+              submitLabel="Save Changes"
+              title=""
+            />
+          </div>
+        </div>
+
+        <div className="profile-section">
           <h4 className="profile-section-title"><Icon name="key" size={15} /> Change Password</h4>
           <p className="muted profile-section-hint">Use a strong password you don't reuse on other sites.</p>
           <div className="profile-form">
@@ -5148,6 +5359,7 @@ function ProfilePage({ user, onBack, setNotice }) {
               key="profile-password"
               onCancel={onBack}
               onSubmit={updatePassword}
+              onValuesChange={() => onDirty?.()}
               submitLabel="Update Password"
               title=""
             />
@@ -5164,10 +5376,32 @@ function splitQuantityValue(value, units) {
   const str = String(value ?? '').trim();
   if (!str) return { amount: '', unit: units[0] };
   const lastSpace = str.lastIndexOf(' ');
-  if (lastSpace === -1) return { amount: str, unit: units[0] };
+  if (lastSpace === -1) {
+    // No "<amount> <unit>" shape found. If the whole string is actually
+    // just a unit name (e.g. the user picked a unit before typing an
+    // amount, so the field's value is only that unit), treat it as
+    // "no amount yet" with that unit preserved — don't misread the unit
+    // name itself as the amount and silently reset the dropdown.
+    if (units.includes(str)) return { amount: '', unit: str };
+    return { amount: str, unit: units[0] };
+  }
   const amount = str.slice(0, lastSpace).trim();
   const unitCandidate = str.slice(lastSpace + 1).trim();
   return units.includes(unitCandidate) ? { amount, unit: unitCandidate } : { amount: str, unit: units[0] };
+}
+
+// A quantity field's amount only counts as filled in when it's a genuine
+// number — a bare unit string (e.g. "Gallons" picked before any amount was
+// typed) must not pass as a valid amount.
+function isQuantityAmountFilled(amount) {
+  return amount !== '' && amount != null && !Number.isNaN(Number(amount));
+}
+
+// Generic required-check: treat only "no value" (empty string/null/undefined)
+// as missing, so a legitimate falsy value like the number 0 (e.g. latitude
+// 0, longitude 0) still counts as filled in.
+function isValueMissing(value) {
+  return value === '' || value === null || value === undefined;
 }
 
 const SELECT_OR_OTHER_SENTINEL = '__other__';
@@ -5248,8 +5482,21 @@ function collectValidationErrors(fields, values) {
       return;
     }
 
+    if (field.type === 'quantity') {
+      // Require the amount portion specifically — a combined value like
+      // "Gallons" (unit picked, no amount typed) must not pass just because
+      // the raw string is non-empty.
+      if (field.required) {
+        const { amount } = splitQuantityValue(value, field.units);
+        if (!isQuantityAmountFilled(amount)) {
+          lines.push(`${field.label} is required.`);
+        }
+      }
+      return;
+    }
+
     if (field.confirmOf) {
-      if (field.required && !value) {
+      if (field.required && isValueMissing(value)) {
         lines.push(`${field.label} is required.`);
       } else if (value && value !== values[field.confirmOf]) {
         lines.push(`${field.label} does not match.`);
@@ -5257,7 +5504,7 @@ function collectValidationErrors(fields, values) {
       return;
     }
 
-    if (field.required && !value) {
+    if (field.required && isValueMissing(value)) {
       lines.push(`${field.label} is required.`);
       return;
     }
@@ -5389,7 +5636,19 @@ function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, cancelLabel = 
           className={field.compactFile ? 'file-inline' : undefined}
           style={field.fullWidth ? { gridColumn: '1 / -1' } : undefined}
         >
-          <span>{field.label}{field.required ? <span className="required-asterisk"> *</span> : null}</span>
+          <span style={field.action ? { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 } : undefined}>
+            <span>{field.label}{field.required ? <span className="required-asterisk"> *</span> : null}</span>
+            {field.action && (
+              <button
+                type="button"
+                className="link-button"
+                onClick={field.action.onClick}
+                style={{ background: 'none', border: 'none', padding: 0, color: 'var(--primary)', cursor: 'pointer', textDecoration: 'underline', fontWeight: 600, fontSize: '0.78rem', whiteSpace: 'nowrap' }}
+              >
+                {field.action.label}
+              </button>
+            )}
+          </span>
           {field.type === 'quantity' ? (
             <div className="quantity-field">
               <input
@@ -5434,7 +5693,11 @@ function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, cancelLabel = 
             >
               <option value="">Select</option>
               {field.options.map((option, i) => (
-                <option key={option?.value != null ? option.value : `opt-${i}`} value={option?.value ?? option ?? ''}>
+                <option
+                  key={option?.value != null ? option.value : `opt-${i}`}
+                  value={option?.value ?? option ?? ''}
+                  style={option?.value === NEW_ISSUE_OPTION.value ? { color: '#2563eb', fontWeight: 700 } : undefined}
+                >
                   {option?.label ?? option}
                 </option>
               ))}
@@ -5543,7 +5806,7 @@ function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, cancelLabel = 
                     />
                     <button
                       type="button"
-                      className="danger-button"
+                      className="btn-delete-action icon-btn"
                       onClick={() => setValues((current) => {
                         const list = (Array.isArray(current[field.name]) ? current[field.name] : ['']).filter((_, i) => i !== index);
                         const merged = { ...current, [field.name]: list.length ? list : [''] };
@@ -5553,7 +5816,6 @@ function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, cancelLabel = 
                       disabled={rows.length === 1}
                       title={`Remove ${field.removeLabel ?? 'issue'}`}
                       aria-label={`Remove ${field.removeLabel ?? 'issue'}`}
-                      style={{ padding: '8px 12px' }}
                     >
                       <Icon name="close" size={14} />
                     </button>
@@ -5562,14 +5824,14 @@ function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, cancelLabel = 
               })}
               <button
                 type="button"
-                className="ghost-button"
+                className="primary-button"
                 onClick={() => setValues((current) => {
                   const merged = { ...current, [field.name]: [...(Array.isArray(current[field.name]) ? current[field.name] : ['']), ''] };
                   onValuesChange?.(merged);
                   return merged;
                 })}
               >
-                <Icon name="clipboard" size={14} /> {field.addLabel ?? 'Add Another Issue'}
+                <Icon name="plus" size={14} /> {field.addLabel ?? 'Add another issue'}
               </button>
             </div>
           ) : null}
@@ -5600,6 +5862,7 @@ function SmartForm({ fields, initialValues = EMPTY_OBJ, onCancel, cancelLabel = 
             <input
               accept={field.accept}
               autoComplete="off"
+              maxLength={field.maxLength}
               name={field.name}
               onChange={handleChange}
               pattern={field.pattern}
@@ -5791,6 +6054,7 @@ function ReportPreview({ report }) {
   }
 
   const rows = report.rows ?? [];
+  const columns = reportColumns(rows);
 
   return (
     <section>
@@ -5799,9 +6063,51 @@ function ReportPreview({ report }) {
           <h3>{report.report_type}</h3>
           <p>Generated by {report.generated_by} on {formatDate(report.generated_at)}</p>
         </div>
-        <button className="ghost-button" onClick={() => window.print()} type="button">Print</button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            className="ghost-button"
+            onClick={() => exportRowsToCsv(`${report.report_type.toLowerCase().replaceAll(' ', '-')}.csv`, reportExportColumns(rows), rows)}
+            type="button"
+          >
+            Export CSV
+          </button>
+          <button className="ghost-button" onClick={() => window.print()} type="button">Print</button>
+        </div>
       </div>
-      <DataTable columns={reportColumns(rows)} rows={rows} />
+      <DataTable columns={columns} rows={rows} />
+
+      {/* Print-only — kept off-screen (see .report-print-view), shown by the
+          Print button above. Portaled to <body>, same reasoning as the
+          vehicle profile's .veh-print-report: the app's @media print rule
+          hides #root entirely, so the printable content has to live outside
+          it or Print produces a blank page. */}
+      {createPortal(
+        <div className="report-print-view">
+          <div className="veh-print-header">
+            <div className="veh-print-header-left">
+              <h2>{report.report_type}</h2>
+              <p>Generated by {report.generated_by} on {formatDate(report.generated_at)}</p>
+            </div>
+            <div className="veh-print-header-right">
+              <Icon name="gear" size={48} className="topbar-gear-icon" filled />
+              <span className="vms-wordmark">vms</span>
+            </div>
+          </div>
+          <table className="report-print-table">
+            <thead>
+              <tr>{columns.map((col) => <th key={col.label}>{col.label}</th>)}</tr>
+            </thead>
+            <tbody>
+              {rows.length ? rows.map((row, i) => (
+                <tr key={row.id ?? i}>{columns.map((col) => <td key={col.label}>{col.render(row)}</td>)}</tr>
+              )) : (
+                <tr><td colSpan={columns.length || 1}>No records</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>,
+        document.body,
+      )}
     </section>
   );
 }
@@ -5833,9 +6139,12 @@ const emptyTicketLookups = {
 };
 
 const categoryFields = [
-  { label: 'Vehicle Type Name', name: 'category_name', required: true, type: 'text' },
-  { label: 'Domain', name: 'domain', options: ['Land', 'Water'], required: true, type: 'select' },
-  { label: 'Description', name: 'description', type: 'textarea' },
+  { label: 'Vehicle Type Name', name: 'category_name', required: true, type: 'text', placeholder: 'e.g. Fire Truck, Rescue Boat' },
+  {
+    label: 'Domain', name: 'domain', options: ['Land', 'Water'], required: true, type: 'select',
+    hint: 'Water changes what a vehicle of this type asks for elsewhere — hull material and engine type instead of the usual land specs.',
+  },
+  { label: 'Description', name: 'description', type: 'textarea', placeholder: 'Optional notes about when to use this type' },
 ];
 
 // `liveValues` lets Confirm Password become required only once a new
@@ -5914,10 +6223,10 @@ function vehicleDomainFields(domain) {
     : [{ label: 'Fuel Type', name: 'fuel_type', options: FUEL_TYPE_OPTIONS, required: true, type: 'select' }];
 }
 
-const VEHICLE_WIZARD_STEP_LABELS = ['Basic Info', 'Specs', 'Photo & Location'];
+const VEHICLE_WIZARD_STEP_LABELS = ['Basic Information', 'Specs', 'Photo & Location'];
 const VEHICLE_WIZARD_STEP_ICONS = ['clipboard', 'wrench', 'pin'];
 
-function NewVehiclePage({ onBack, lookups, allHubs, onSubmit }) {
+function NewVehiclePage({ onBack, lookups, allHubs, onSubmit, onDirty }) {
   const [step, setStep] = useState(1);
   const [wizardData, setWizardData] = useState(EMPTY_OBJ);
   // Live-tracks the in-progress Category pick within step 1 (before it's
@@ -5931,8 +6240,6 @@ function NewVehiclePage({ onBack, lookups, allHubs, onSubmit }) {
     (c) => String(c.category_id) === String(wizardData.category_id)
   )?.domain ?? 'Land';
 
-  const hubOptions = allHubs.map((hub) => ({ value: hub.name, label: hub.name }));
-
   // Derived from the actual vehicle types on file, not hardcoded — so a
   // newly added domain (beyond today's Land/Water) just works here too.
   const domainOptions = [...new Set(lookups.categories.map((c) => c.domain).filter(Boolean))].sort();
@@ -5943,26 +6250,30 @@ function NewVehiclePage({ onBack, lookups, allHubs, onSubmit }) {
       domainFilter === 'Water'
         ? {
             label: plateFieldLabel('Water'), name: 'plate_number', required: true, type: 'text',
-            placeholder: 'e.g. HULL-2024-001', uppercase: true,
+            placeholder: 'e.g. HULL-24-01', uppercase: true, maxLength: 10,
           }
         : {
             label: plateFieldLabel('Land'), name: 'plate_number', required: true, type: 'text',
             // NOTE: browsers compile `pattern` with the strict `v` flag, where `\s`
             // inside a character class is invalid — use a literal space instead.
             placeholder: 'e.g. ABC 1234', pattern: '^[A-Za-z]{2,6}[ \\-]?\\d{2,6}[A-Za-z]?$',
-            title: 'Enter a valid plate number, e.g. ABC 1234 or ABC-1234', uppercase: true,
+            title: 'Enter a valid plate number, e.g. ABC 1234 or ABC-1234', uppercase: true, maxLength: 10,
           },
       { label: 'Category', name: 'vehicle_domain', options: domainOptions, required: true, type: 'select' },
       {
         label: 'Vehicle Type',
         name: 'category_id',
-        options: options(
-          lookups.categories.filter((c) => c.domain === domainFilter),
-          'category_id',
-          'category_name',
-        ),
+        options: lookups.categories.filter((c) => c.domain === domainFilter),
         required: true,
-        type: 'select',
+        type: 'creatable-select',
+        newItemLabel: 'vehicle type',
+        catalogEndpoint: '/categories',
+        idField: 'category_id',
+        nameField: 'category_name',
+        valueIsId: true,
+        // Pre-fills the add-new-type modal's Domain field to match the
+        // Category already picked above, instead of leaving it blank.
+        extraFields: [{ name: 'domain', label: 'Domain', options: domainOptions.length ? domainOptions : ['Land', 'Water'], required: true, default: domainFilter || 'Land' }],
       },
     ],
     2: [
@@ -5976,7 +6287,15 @@ function NewVehiclePage({ onBack, lookups, allHubs, onSubmit }) {
     3: [
       { label: 'Vehicle Photo', name: 'photo', accept: 'image/*', type: 'file', compactFile: true },
       {
-        label: 'Current Location', name: 'current_location', options: hubOptions, required: true, type: 'select',
+        label: 'Current Location', name: 'current_location', options: allHubs, required: true, type: 'creatable-select',
+        newItemLabel: 'location', catalogEndpoint: '/hubs', idField: 'hub_id', nameField: 'name',
+        // A hub needs real coordinates to ever show up on the map, so
+        // unlike Vehicle Type's Domain (a plain preset dropdown), these are
+        // free-typed numbers with no sensible default to pre-fill.
+        extraFields: [
+          { name: 'lat', label: 'Latitude', type: 'number', required: true, placeholder: 'e.g. 10.3378' },
+          { name: 'lng', label: 'Longitude', type: 'number', required: true, placeholder: 'e.g. 123.9422' },
+        ],
         // Shows exactly where the hub is as soon as one is picked, instead
         // of leaving the location as just a name in a dropdown. Rendered
         // inline (inside this field's own cell, right under the select)
@@ -6052,7 +6371,7 @@ function NewVehiclePage({ onBack, lookups, allHubs, onSubmit }) {
           cancelLabel={step === 1 ? 'Cancel' : 'Back'}
           onCancel={step === 1 ? onBack : () => goToStep(step - 1)}
           onSubmit={handleStepSubmit}
-          onValuesChange={(vals) => setDomainFilter(vals.vehicle_domain ?? '')}
+          onValuesChange={(vals) => { setDomainFilter(vals.vehicle_domain ?? ''); onDirty?.(); }}
           submitLabel={isLastStep ? 'Add Vehicle' : 'Next'}
           title=""
         />
@@ -6128,7 +6447,7 @@ function OpenItemsWarning({ kind, rows, basePath }) {
 // When `contextVehicles` is provided, the page renders Realcore-style: the form
 // fields sit in a card on the right, and the left side live-previews the
 // selected vehicle (photo, info, location map) as the user picks one.
-function FormPage({ description, onBack, fields, initialValues, onSubmit, submitLabel, contextVehicles, hubs, warnEndpoint, warnRender, reviewStep = false, wrapperClassName, formTitle = '' }) {
+function FormPage({ description, onBack, fields, initialValues, onSubmit, submitLabel, contextVehicles, hubs, warnEndpoint, warnRender, reviewStep = false, wrapperClassName, formTitle = '', onDirty }) {
   const [liveValues, setLiveValues] = useState(initialValues ?? EMPTY_OBJ);
   const [warnRows, setWarnRows] = useState([]);
   // Opt-in two-step flow (Maintenance Records today): fill the fields, hit
@@ -6228,7 +6547,7 @@ function FormPage({ description, onBack, fields, initialValues, onSubmit, submit
         initialValues={initialValues ?? EMPTY_OBJ}
         onCancel={onBack}
         onSubmit={reviewStep ? (payload) => { setLiveValues(payload); setStep(2); } : onSubmit}
-        onValuesChange={setLiveValues}
+        onValuesChange={(vals) => { setLiveValues(vals); onDirty?.(); }}
         submitLabel={reviewStep ? 'Next' : submitLabel}
         title={formTitle}
       />
@@ -6291,7 +6610,7 @@ function vehicleFields(lookups, allHubs = [], domain = 'Land', existingPhotoUrl 
 
   return [
     { label: 'Vehicle Name', name: 'vehicle_name', required: true, type: 'text' },
-    { label: plateFieldLabel(domain), name: 'plate_number', required: true, type: 'text' },
+    { label: plateFieldLabel(domain), name: 'plate_number', required: true, type: 'text', maxLength: 10 },
     { label: 'Vehicle Photo', name: 'photo', accept: 'image/*', type: 'file', existingUrl: existingPhotoUrl },
     {
       label: 'Vehicle Type', name: 'category_id', options: lookups.categories ?? [], required: true, type: 'creatable-select',
@@ -6345,11 +6664,10 @@ function conditionFields(lookups) {
     { label: 'Vehicle', name: 'vehicle_id', options: vehicleOptions(lookups), required: true, type: 'select' },
     { label: 'Condition Result', name: 'condition_result', options: lookups.condition_results, required: true, type: 'select' },
     { label: 'Observations', name: 'observations', type: 'textarea' },
-    { label: 'Remarks', name: 'remarks', type: 'textarea' },
   ];
 }
 
-function issueFields(lookups, editTarget, role) {
+function issueFields(lookups, editTarget, role, onAddVehicle) {
   if (editTarget?.issue_report_id && role === 'Custodian') {
     return [
       { label: 'Issue Type', name: 'issue_type', options: lookups.issue_types, required: true, type: 'creatable-select', newItemLabel: 'issue type', catalogEndpoint: '/fault-categories' },
@@ -6357,7 +6675,7 @@ function issueFields(lookups, editTarget, role) {
       // when this report is later converted into a Pre-Diagnosed ticket,
       // every distinct problem lands as its own sub-issue instead of the
       // whole description getting dumped into a single sub-issue.
-      { label: 'Issues Found', name: 'issue_description', required: true, type: 'list', placeholder: 'e.g. Low coolant level', addLabel: 'Add Another Issue' },
+      { label: 'Issues Found', name: 'issue_description', required: true, type: 'list', placeholder: 'e.g. Low coolant level', addLabel: 'Add another issue' },
       { label: 'Severity Level', name: 'severity_level', options: lookups.severity_levels, required: true, type: 'select' },
       { label: 'Reported On Behalf Of (driver, optional)', name: 'reported_on_behalf_of', placeholder: 'e.g. Driver Mang Tonio', type: 'text' },
       { label: 'Attachment / Photo', name: 'photo', accept: 'image/*', type: 'file' },
@@ -6373,7 +6691,13 @@ function issueFields(lookups, editTarget, role) {
   }
 
   return [
-    { label: 'Vehicle', name: 'vehicle_id', options: vehicleOptions(lookups), required: true, type: 'select' },
+    {
+      label: 'Vehicle', name: 'vehicle_id', options: vehicleOptions(lookups), required: true, type: 'select',
+      // Admin-only — only Admin can actually create a vehicle
+      // (FleetController::storeVehicle), so this shortcut isn't offered to
+      // Custodian/Maintenance Personnel, who'd just hit a permissions wall.
+      action: onAddVehicle ? { label: '+ Add Vehicle', onClick: onAddVehicle } : undefined,
+    },
     { label: 'Issue Type', name: 'issue_type', options: lookups.issue_types, required: true, type: 'creatable-select', newItemLabel: 'issue type', catalogEndpoint: '/fault-categories' },
     { label: 'Issue Description', name: 'issue_description', required: true, type: 'textarea' },
     { label: 'Severity Level', name: 'severity_level', options: lookups.severity_levels, required: true, type: 'select' },
@@ -6464,7 +6788,7 @@ function maintenanceFields(lookups, role, liveValues = EMPTY_OBJ) {
       type: 'list',
       group: 'Work Log',
       placeholder: 'e.g. Brake pads',
-      addLabel: 'Add Another Part',
+      addLabel: 'Add another part',
       removeLabel: 'part',
     },
     { label: 'Maintenance Cost (PHP)', name: 'maintenance_cost', type: 'number', min: 0, placeholder: 'e.g. 1500', group: 'Cost & Completion' },
@@ -6773,7 +7097,6 @@ const CONDITION_STAT_CARDS = [
   { key: 'Good', label: 'Good', icon: 'checkCircle', bg: '#dcfce7', color: '#16a34a' },
   { key: 'Needs Inspection', label: 'Needs Inspection', icon: 'search', bg: '#e0f2fe', color: '#0284c7' },
   { key: 'Needs Repair', label: 'Needs Repair', icon: 'wrench', bg: '#fef3c7', color: '#d97706' },
-  { key: 'Damaged', label: 'Damaged', icon: 'alert', bg: '#fee2e2', color: '#dc2626' },
 ];
 
 const MAINTENANCE_RECORD_STAT_CARDS = [
@@ -7052,13 +7375,30 @@ function locationColumns(currentUser, onViewOnMap) {
   ];
 }
 
-function conditionColumns(role, onEdit, deleteRecord, onCreateTicketFromCondition, onSuggestScheduleFromCondition) {
+function conditionColumns(role, onEdit, deleteRecord, onCreateTicketFromCondition, onSuggestScheduleFromCondition, onViewTicket) {
   const columns = [
     { label: 'ID', render: (row) => row.condition_check_id },
     { label: 'Vehicle', render: (row) => <VehicleCell vehicle={row.vehicle} /> }, { label: 'Plate', render: (row) => row.vehicle?.plate_number ?? '-' },
     { label: 'Result', render: (row) => <StatusBadge value={row.condition_result} /> },
     { label: 'Checked By', render: (row) => <UserAvatarName user={row.checked_by} /> },
     { label: 'Observations', className: 'cell-text', render: (row) => <ExpandableText text={row.observations} /> },
+    {
+      // Set once when a ticket is created from this check, never changed
+      // again — but its STATUS is read live off the linked ticket, so this
+      // always reflects reality without any extra sync step. No link at
+      // all means nobody's acted on this finding yet.
+      label: 'Escalated To',
+      render: (row) => row.resulting_ticket ? (
+        <button
+          type="button"
+          className="link-button"
+          onClick={(e) => { e.stopPropagation(); onViewTicket(row.resulting_ticket.ticket_id); }}
+          style={{ background: 'none', border: 'none', padding: 0, color: 'var(--primary)', cursor: 'pointer', textDecoration: 'underline', fontWeight: 500, display: 'inline-flex', alignItems: 'center', gap: 5 }}
+        >
+          Ticket #{row.resulting_ticket.ticket_id} <StatusBadge value={row.resulting_ticket.status} />
+        </button>
+      ) : <span className="muted">—</span>,
+    },
     { label: 'Date', render: (row) => <DateBadge value={row.created_at} /> },
     { label: 'Time', render: (row) => formatTime(row.created_at) },
   ];
@@ -7068,13 +7408,16 @@ function conditionColumns(role, onEdit, deleteRecord, onCreateTicketFromConditio
       label: 'Action',
       render: (row) => (
         <div className="row-actions">
-          {/* #2 — Admin can turn a problem-finding condition check into a
-              pre-diagnosed ticket in one click (the check WAS the inspection).
-              Reserved as its own slot (hidden, not removed) even when this
-              row doesn't qualify — otherwise Edit/Delete shift left on every
-              row that lacks it, and the column stops lining up. */}
+          {/* #2 — Admin can turn a problem-finding condition check (Needs
+              Repair OR Needs Inspection — anything short of Good) into a
+              pre-diagnosed ticket in one click, instead of someone having to
+              redescribe the same problem in a separate Issue Report just to
+              get it in front of Admin. Reserved as its own slot (hidden, not
+              removed) even when this row doesn't qualify — otherwise
+              Edit/Delete shift left on every row that lacks it, and the
+              column stops lining up. */}
           {role === 'Admin' && onCreateTicketFromCondition && (
-            ['Needs Repair', 'Damaged'].includes(row.condition_result) ? (
+            row.condition_result !== 'Good' ? (
               <button className="btn-confirm-action icon-btn" onClick={() => onCreateTicketFromCondition(row)} type="button" title="Create Ticket" aria-label="Create Ticket"><Icon name="ticket" size={14} /></button>
             ) : (
               <button
@@ -7619,7 +7962,7 @@ function MaintenanceRecordProfilePage({ maintenanceId, onConfirm, onReopen, onDe
   );
 }
 
-function maintenanceStatusColumns(setEditTarget) {
+function maintenanceStatusColumns(setEditTarget, currentUserId) {
   return [
     { label: 'ID', render: (row) => row.maintenance_id },
     { label: 'Vehicle', render: (row) => <VehicleCell vehicle={row.vehicle} /> }, { label: 'Plate', render: (row) => row.vehicle?.plate_number ?? '-' },
@@ -7629,7 +7972,19 @@ function maintenanceStatusColumns(setEditTarget) {
     { label: 'Action Taken', className: 'cell-text', render: (row) => <ExpandableText text={row.action_taken} /> },
     { label: 'Personnel', render: (row) => <UserAvatarName user={row.maintenance_personnel} fallback={row.performed_by_other ?? '-'} /> },
     { label: 'Progress', render: (row) => <StatusBadge value={row.progress_status} /> },
-    { label: 'Action', render: (row) => <button className="btn-edit-action icon-btn" onClick={() => setEditTarget(row)} type="button" title="Verify" aria-label="Verify"><Icon name="checkCircle" size={14} /></button> },
+    {
+      label: 'Action',
+      render: (row) => {
+        // The backend blocks a Custodian from verifying their own repair
+        // (dual-role Custodian/mechanic accounts can log one) — matching
+        // that here instead of showing a button that just 403s on submit.
+        const isOwnRepair = currentUserId != null && String(row.maintenance_personnel_id) === String(currentUserId);
+        if (isOwnRepair) {
+          return <span className="muted" title="You performed this repair — another Custodian needs to verify it.">Awaiting another Custodian</span>;
+        }
+        return <button className="btn-edit-action icon-btn" onClick={() => setEditTarget(row)} type="button" title="Verify" aria-label="Verify"><Icon name="checkCircle" size={14} /></button>;
+      },
+    },
   ];
 }
 
@@ -7967,20 +8322,50 @@ function PaginatedCardGrid({ items, renderItem, keyOf, emptyMessage, pageSizeOpt
   );
 }
 
+// Common "this is the human-readable name" field on the loaded relation
+// objects reports eager-load (Vehicle, VehicleCategory, User, ...) — tried
+// in order so a resolved name shows instead of a bare foreign-key id.
+function resolveRelationLabel(value) {
+  if (!value || typeof value !== 'object') return null;
+  return value.name ?? value.vehicle_name ?? value.category_name ?? value.title ?? (value.id != null ? `#${value.id}` : null);
+}
+
+function prettifyKey(key) {
+  return key.replaceAll('_', ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 function reportColumns(rows) {
   if (!rows?.length) {
     return [{ label: 'Result', render: () => 'No records' }];
   }
 
   const sample = rows[0];
-  const keys = Object.keys(sample).filter((key) => !['category', 'vehicle', 'reported_by', 'maintenance_personnel', 'created_by', 'assigned_to'].includes(key));
+  // A loaded relation (e.g. `category`, `maintenance_personnel`) is an
+  // object in the row — resolve it to a readable name instead of hiding it
+  // outright, and hide its matching raw `<key>_id` column so the report
+  // shows "Fire Truck" instead of a bare category_id number.
+  const relationKeys = Object.keys(sample).filter((key) => sample[key] && typeof sample[key] === 'object' && !Array.isArray(sample[key]));
+  const hiddenKeys = new Set(relationKeys.map((key) => `${key}_id`));
 
-  return keys.slice(0, 8).map((key) => ({
-    // Prettify raw DB keys into Title Case headers ("maintenance_type" →
-    // "Maintenance Type") so the generated report reads like a real table.
-    label: key.replaceAll('_', ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+  const relationColumns = relationKeys.map((key) => ({
+    label: prettifyKey(key),
+    render: (row) => resolveRelationLabel(row[key]) ?? '-',
+  }));
+
+  const plainKeys = Object.keys(sample).filter((key) => !relationKeys.includes(key) && !hiddenKeys.has(key));
+  const plainColumns = plainKeys.slice(0, 8).map((key) => ({
+    label: prettifyKey(key),
     render: (row) => String(row[key] ?? '-'),
   }));
+
+  return [...relationColumns, ...plainColumns];
+}
+
+// Flat, CSV-exportable version of the same columns `reportColumns` renders
+// for on-screen/print display — `exportRowsToCsv` needs a `value(row)`
+// shape rather than `render(row)`.
+function reportExportColumns(rows) {
+  return reportColumns(rows).map((col) => ({ label: col.label, value: (row) => col.render(row) }));
 }
 
 function StatusBadge({ value }) {
@@ -9821,8 +10206,12 @@ function TicketDetailPanel({ role, userId, ticket, lookups, onAssignMechanic, on
               <button className="primary-button" type="button" onClick={() => onUncancel(ticket)}>Restore Ticket</button>
             )}
             {/* Close Ticket itself now lives in the green banner above when
-                canClose is true — no need to repeat the same button here. */}
-            {isAdmin && ticket.status !== 'Closed' && ticket.status !== 'Cancelled' && (
+                canClose is true — no need to repeat the same button here.
+                Cancel is excluded once canClose too: every sub-issue is
+                already resolved at that point, so there's real, confirmed
+                work on record — cancelling would void it instead of just
+                abandoning an unstarted/unfinished ticket. */}
+            {isAdmin && ticket.status !== 'Closed' && ticket.status !== 'Cancelled' && !canClose && (
               <button className="ghost-button" type="button" onClick={requestCancel}>Cancel Ticket</button>
             )}
             {/* Once every sub-issue is resolved (ready to close) or the ticket
@@ -9897,7 +10286,7 @@ function TicketProfilePage({ ticketId, role, userId, ticketLookups, onBack, onDe
   );
 }
 
-function NewTicketPage({ onBack, ticketLookups, prefilledTicketData, onCreateTicket, basePath }) {
+function NewTicketPage({ onBack, ticketLookups, prefilledTicketData, onCreateTicket, basePath, onDirty }) {
   // Stable across re-renders (only changes if prefilledTicketData itself
   // changes) — resetting on every render would wipe out whatever the user
   // already typed.
@@ -9914,7 +10303,13 @@ function NewTicketPage({ onBack, ticketLookups, prefilledTicketData, onCreateTic
   // inspection form: "pre-diagnosed" means the Admin already knows what
   // kind of repair this is, so asking again when a mechanic gets assigned
   // later would just be re-asking something already known.
-  const [subIssueCategory, setSubIssueCategory] = useState('');
+  // Starts from whatever Fault Category is already known (e.g. carried over
+  // from an Issue Report or Condition Check) instead of blank — Admin
+  // already told the system what's wrong one field up; re-picking the same
+  // thing again here from a parallel list would just be redundant. Still
+  // fully editable — the real repair category can differ from what was
+  // originally reported.
+  const [subIssueCategory, setSubIssueCategory] = useState(() => prefilledTicketData?.fault_category ?? '');
   const [submitting, setSubmitting] = useState(false);
   const selectedVehicleId = liveValues.vehicle_id ?? null;
   const [openTicketsOnVehicle, setOpenTicketsOnVehicle] = useState([]);
@@ -9947,13 +10342,13 @@ function NewTicketPage({ onBack, ticketLookups, prefilledTicketData, onCreateTic
     return () => { cancelled = true; };
   }, [selectedVehicleId, liveValues.fault_category, liveValues.ticket_title]);
 
-  const setField = (name, value) => setLiveValues((v) => ({ ...v, [name]: value }));
+  const setField = (name, value) => { setLiveValues((v) => ({ ...v, [name]: value })); onDirty?.(); };
   const preDiagnosed = liveValues.entry_mode === 'prediagnosed';
 
   // Same add/remove list pattern as Root Causes on the Inspect Ticket page —
   // one consistent way to build a list of findings anywhere in the app,
   // instead of a free-text "one per line" box.
-  const updateSubIssue = (index, value) => setSubIssueRows((rows) => rows.map((r, i) => (i === index ? value : r)));
+  const updateSubIssue = (index, value) => { setSubIssueRows((rows) => rows.map((r, i) => (i === index ? value : r))); onDirty?.(); };
   const addSubIssueRow = () => setSubIssueRows((rows) => [...rows, '']);
   const removeSubIssueRow = (index) => setSubIssueRows((rows) => rows.filter((_, i) => i !== index));
 
@@ -9970,6 +10365,7 @@ function NewTicketPage({ onBack, ticketLookups, prefilledTicketData, onCreateTic
         priority: liveValues.priority,
         entry_mode: liveValues.entry_mode,
         issue_report_id: prefilledTicketData?.issue_report_id,
+        condition_check_id: prefilledTicketData?.condition_check_id,
       };
       if (preDiagnosed) {
         out.sub_issues = subIssueRows.map((t) => t.trim()).filter(Boolean).map((title) => ({ title, maintenance_type: subIssueCategory || null }));
@@ -9981,7 +10377,7 @@ function NewTicketPage({ onBack, ticketLookups, prefilledTicketData, onCreateTic
     }
   };
 
-  const vehicleOptions = (ticketLookups.vehicles ?? []).filter((v) => v.status !== 'Inactive');
+  const vehicleOptions = (ticketLookups.vehicles ?? []).filter((v) => v.status !== 'Inactive' && v.status !== 'Decommissioned');
   const custodianOptions = ticketLookups.custodians ?? [];
   const faultCategoryOptions = ticketLookups.fault_categories ?? [];
   const priorityOptions = ticketLookups.priorities ?? [];
@@ -10212,7 +10608,7 @@ function NewTicketPage({ onBack, ticketLookups, prefilledTicketData, onCreateTic
                   </div>
                 ))}
               </div>
-              <button type="button" className="ghost-button" onClick={addSubIssueRow}><Icon name="clipboard" size={14} /> Add Another Sub-Issue</button>
+              <button type="button" className="primary-button" onClick={addSubIssueRow}><Icon name="plus" size={14} /> Add another sub-issue</button>
             </div>
           </section>
         )}
@@ -10828,7 +11224,7 @@ function VehicleFilesModal({ onClose, vehicleId, documents, canManage, onChanged
   );
 }
 
-function VehicleProfilePage({ vehicleId, lookups, allHubs, canManage = false, canCheckReadiness = false, setNotice, onSaved, onRequestConfirmation }) {
+function VehicleProfilePage({ vehicleId, lookups, allHubs, canManage = false, canManageDocuments = false, canCheckReadiness = false, setNotice, onSaved, onRequestConfirmation }) {
   const location = useLocation();
   const [editing, setEditing] = useState(new URLSearchParams(location.search).get('tab') === 'edit');
   const [tabData, setTabData] = useState({});
@@ -10991,7 +11387,7 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, canManage = false, ca
     <ModulePanel description="Full profile, maintenance, and tickets for this vehicle.">
       <div className="vehicle-profile-header">
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginLeft: 'auto' }}>
-          {vehicle.status !== 'Decommissioned' && !editing && (
+          {canManage && vehicle.status !== 'Decommissioned' && !editing && (
             <button className="btn-sm primary-button" type="button" onClick={() => setEditing(true)}>
               <Icon name="edit" size={13} /> Edit Vehicle
             </button>
@@ -11151,7 +11547,7 @@ function VehicleProfilePage({ vehicleId, lookups, allHubs, canManage = false, ca
                 </div>
               </section>
 
-              <VehicleFiles vehicleId={vehicle.vehicle_id} canManage={canManage} onRequestConfirmation={onRequestConfirmation} />
+              <VehicleFiles vehicleId={vehicle.vehicle_id} canManage={canManageDocuments} onRequestConfirmation={onRequestConfirmation} />
             </div>
           </div>
 
@@ -11274,6 +11670,12 @@ function ticketWorkflowStage(ticket) {
   if (subIssues.some((s) => s.status === 'Open')) {
     return { label: 'Diagnosed — Assign a Mechanic', tone: 'action' };
   }
+  // The mechanic already submitted repair logs (logRepairs sets this) — the
+  // ball is in the Custodian's court now, not stuck/idle like the generic
+  // "In Repair" fallback below implies.
+  if (subIssues.some((s) => s.status === 'For Inspection')) {
+    return { label: 'Awaiting Custodian Verification', tone: 'waiting' };
+  }
   const total = ticket.progress?.total ?? subIssues.length;
   const done = ticket.progress?.done ?? subIssues.filter((s) => s.status === 'Done').length;
   if (total > 0 && done === total) {
@@ -11345,7 +11747,7 @@ function TicketCard({ ticket, unreadCount = 0, onClick }) {
       <div className="ticket-card-content-wrapper">
         <div className="ticket-card-info">
           <div className="ticket-card-top">
-            <span className="ticket-card-id">#{ticket.ticket_id}</span>
+            <span className="ticket-card-id">Ticket #{ticket.ticket_id}</span>
             <TicketStatusBadge value={ticket.priority} />
           </div>
           <p className="ticket-card-title">{ticket.ticket_title}</p>
@@ -11377,7 +11779,7 @@ function TicketCard({ ticket, unreadCount = 0, onClick }) {
       )}
       <div className="ticket-card-bottom">
         <TicketStatusBadge value={ticket.status} />
-        <span className="ticket-card-date">{formatDate(ticket.created_at)}</span>
+        <DateBadge value={ticket.created_at} />
       </div>
     </div>
   );
@@ -11477,7 +11879,7 @@ function CustodianInspectionModule({
   );
 }
 
-function InspectTicketPage({ ticket, onBack, onSubmit, ticketLookups }) {
+function InspectTicketPage({ ticket, onBack, onSubmit, ticketLookups, onDirty }) {
   const [resultValue, setResultValue] = useState(ticket?.inspection_result ?? '');
   const [notes, setNotes] = useState(ticket?.inspection_notes ?? '');
   const [category, setCategory] = useState('');
@@ -11490,7 +11892,7 @@ function InspectTicketPage({ ticket, onBack, onSubmit, ticketLookups }) {
     );
   }
 
-  const updateTitle = (index, value) => setSubIssueTitles((rows) => rows.map((row, i) => (i === index ? value : row)));
+  const updateTitle = (index, value) => { setSubIssueTitles((rows) => rows.map((row, i) => (i === index ? value : row))); onDirty?.(); };
   const addRow = () => setSubIssueTitles((rows) => [...rows, '']);
   const removeRow = (index) => setSubIssueTitles((rows) => rows.filter((_, i) => i !== index));
 
@@ -11547,7 +11949,7 @@ function InspectTicketPage({ ticket, onBack, onSubmit, ticketLookups }) {
       <form className="smart-form" onSubmit={handleSubmit} noValidate>
         <label>
           <span>Inspection Result</span>
-          <select required value={resultValue} onChange={(e) => setResultValue(e.target.value)}>
+          <select required value={resultValue} onChange={(e) => { setResultValue(e.target.value); onDirty?.(); }}>
             <option value="">Select</option>
             <option value="Needs Maintenance">Needs Maintenance</option>
             <option value="No Issues">No Issues</option>
@@ -11555,7 +11957,7 @@ function InspectTicketPage({ ticket, onBack, onSubmit, ticketLookups }) {
         </label>
         <label>
           <span>Inspection Notes</span>
-          <textarea required rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} />
+          <textarea required rows={3} value={notes} onChange={(e) => { setNotes(e.target.value); onDirty?.(); }} />
         </label>
 
         {resultValue === 'Needs Maintenance' && (
@@ -11567,7 +11969,7 @@ function InspectTicketPage({ ticket, onBack, onSubmit, ticketLookups }) {
               <span>Category</span>
               <CreatableSelect
                 value={category}
-                onChange={setCategory}
+                onChange={(v) => { setCategory(v); onDirty?.(); }}
                 options={ticketLookups?.maintenance_types ?? []}
                 placeholder="Select a category or type to add new"
                 newItemLabel="maintenance type"
@@ -11588,18 +11990,17 @@ function InspectTicketPage({ ticket, onBack, onSubmit, ticketLookups }) {
                 />
                 <button
                   type="button"
-                  className="danger-button"
+                  className="btn-delete-action icon-btn"
                   onClick={() => removeRow(index)}
                   disabled={subIssueTitles.length === 1}
                   title="Remove root cause"
                   aria-label="Remove root cause"
-                  style={{ padding: '8px 12px' }}
                 >
                   <Icon name="close" size={14} />
                 </button>
               </div>
             ))}
-            <button type="button" className="ghost-button" onClick={addRow} style={{ marginTop: 4 }}><Icon name="clipboard" size={14} /> Add Another Root Cause</button>
+            <button type="button" className="primary-button" onClick={addRow} style={{ marginTop: 4 }}><Icon name="plus" size={14} /> Add another root cause</button>
           </div>
         )}
 
@@ -11914,13 +12315,12 @@ function MechanicWorkOrderModule({
   );
 }
 
-function LogRepairsPage({ ticket, onBack, onSubmit }) {
+function LogRepairsPage({ ticket, onBack, onSubmit, onDirty }) {
   const [repairLogs, setRepairLogs] = useState('');
   const [parts, setParts] = useState([{ name: '', cost: '' }]);
   const [attachment, setAttachment] = useState(null);
   const [repairStartedAt, setRepairStartedAt] = useState('');
   const [repairCompletedAt, setRepairCompletedAt] = useState('');
-  const [estimatedReturnDate, setEstimatedReturnDate] = useState('');
 
   if (!ticket) {
     return (
@@ -11929,7 +12329,7 @@ function LogRepairsPage({ ticket, onBack, onSubmit }) {
     );
   }
 
-  const updatePart = (index, field, value) => setParts((rows) => rows.map((row, i) => (i === index ? { ...row, [field]: value } : row)));
+  const updatePart = (index, field, value) => { setParts((rows) => rows.map((row, i) => (i === index ? { ...row, [field]: value } : row))); onDirty?.(); };
   const addPart = () => setParts((rows) => [...rows, { name: '', cost: '' }]);
   const removePart = (index) => setParts((rows) => rows.filter((_, i) => i !== index));
 
@@ -11948,7 +12348,6 @@ function LogRepairsPage({ ticket, onBack, onSubmit }) {
       maintenance_cost: totalCost > 0 ? totalCost : undefined,
       repair_started_at: repairStartedAt || undefined,
       repair_completed_at: repairCompletedAt || undefined,
-      estimated_return_date: estimatedReturnDate || undefined,
     });
   };
 
@@ -11974,7 +12373,7 @@ function LogRepairsPage({ ticket, onBack, onSubmit }) {
       <form className="smart-form" onSubmit={handleSubmit} noValidate>
         <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: 10, marginBottom: 8 }}>
           <h4 style={{ margin: '0 0 6px 0', display: 'flex', alignItems: 'center', gap: 6, color: '#0f172a', fontSize: '0.85rem' }}><Icon name="clipboard" size={14} /> Repair Log Entry</h4>
-          <textarea required rows={2} value={repairLogs} onChange={(e) => setRepairLogs(e.target.value)} style={{ width: '100%' }} />
+          <textarea required rows={2} value={repairLogs} onChange={(e) => { setRepairLogs(e.target.value); onDirty?.(); }} style={{ width: '100%' }} />
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 190px', gap: 8, marginBottom: 12, alignItems: 'start' }}>
@@ -12001,18 +12400,17 @@ function LogRepairsPage({ ticket, onBack, onSubmit }) {
                   />
                   <button
                     type="button"
-                    className="danger-button"
+                    className="btn-delete-action icon-btn"
                     onClick={() => removePart(index)}
                     disabled={parts.length === 1}
                     title="Remove part"
                     aria-label="Remove part"
-                    style={{ padding: '6px 9px' }}
                   >
                     <Icon name="close" size={13} />
                   </button>
                 </div>
               ))}
-              <button type="button" className="ghost-button" onClick={addPart}><Icon name="clipboard" size={14} /> Add Another Part</button>
+              <button type="button" className="primary-button" onClick={addPart}><Icon name="plus" size={14} /> Add another part</button>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8, paddingTop: 8, borderTop: '1px solid #e2e8f0' }}>
                 <span style={{ fontSize: '0.8rem', fontWeight: 600, color: '#475569' }}>Total Cost</span>
                 <strong style={{ fontSize: '1rem', color: '#16a34a' }}>₱{totalCost.toLocaleString('en-US', { minimumFractionDigits: 2 })}</strong>
@@ -12021,23 +12419,23 @@ function LogRepairsPage({ ticket, onBack, onSubmit }) {
 
             <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: 10 }}>
               {attachment ? (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div className="file-cabinet-drawer">
                   {attachment.type.startsWith('image/') ? (
-                    <img src={URL.createObjectURL(attachment)} alt="Attachment preview" style={{ width: 34, height: 34, objectFit: 'cover', borderRadius: 6, border: '1px solid #e2e8f0', flexShrink: 0 }} />
+                    <img src={URL.createObjectURL(attachment)} alt="Attachment preview" style={{ width: 38, height: 38, objectFit: 'cover', borderRadius: 6, border: '1px solid #e2e8f0', flexShrink: 0 }} />
                   ) : (
-                    <span style={{ width: 34, height: 34, borderRadius: 6, background: '#eff6ff', color: '#2563eb', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                      <Icon name="clipboard" size={16} />
-                    </span>
+                    <span className="file-cabinet-drawer-icon"><Icon name="archive" size={17} /></span>
                   )}
-                  <span style={{ flex: 1, fontSize: '0.82rem', color: '#334155', wordBreak: 'break-all' }}>{attachment.name}</span>
-                  <button type="button" className="danger-button" onClick={() => setAttachment(null)} title="Remove attachment" aria-label="Remove attachment" style={{ padding: '6px 9px' }}>
+                  <span style={{ flex: 1, fontSize: '0.82rem', color: '#334155', wordBreak: 'break-all', fontWeight: 500 }}>{attachment.name}</span>
+                  <button type="button" className="btn-delete-action icon-btn" onClick={() => setAttachment(null)} title="Remove attachment" aria-label="Remove attachment">
                     <Icon name="close" size={13} />
                   </button>
                 </div>
               ) : (
-                <label style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ color: '#0f172a', fontSize: '0.85rem', fontWeight: 600, whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 6 }}><Icon name="clipboard" size={14} /> Photo/Doc</span>
-                  <input type="file" accept="image/*,.pdf,.doc,.docx" onChange={(e) => setAttachment(e.target.files[0] ?? null)} style={{ flex: 1 }} />
+                <label className="file-cabinet-dropzone">
+                  <span className="file-cabinet-dropzone-icon"><Icon name="archive" size={20} /></span>
+                  <span className="file-cabinet-dropzone-title">Click to file a photo or document</span>
+                  <span className="file-cabinet-dropzone-hint">JPG, PNG, PDF, or DOC — up to 8MB</span>
+                  <input type="file" accept="image/*,.pdf,.doc,.docx" onChange={(e) => { setAttachment(e.target.files[0] ?? null); onDirty?.(); }} style={{ display: 'none' }} />
                 </label>
               )}
             </div>
@@ -12047,15 +12445,11 @@ function LogRepairsPage({ ticket, onBack, onSubmit }) {
             <h4 style={{ margin: '0 0 6px 0', display: 'flex', alignItems: 'center', gap: 6, color: '#0f172a', fontSize: '0.85rem' }}><Icon name="calendar" size={14} /> Schedule</h4>
             <label style={{ marginBottom: 6 }}>
               <span style={{ fontSize: '0.68rem' }}>Start Date</span>
-              <input type="date" value={repairStartedAt} onChange={(e) => setRepairStartedAt(e.target.value)} style={{ width: '100%', padding: '6px 5px', fontSize: '0.75rem' }} />
+              <input type="date" value={repairStartedAt} onChange={(e) => { setRepairStartedAt(e.target.value); onDirty?.(); }} style={{ width: '100%', padding: '6px 5px', fontSize: '0.75rem' }} />
             </label>
             <label style={{ marginBottom: 6 }}>
               <span style={{ fontSize: '0.68rem' }}>Completion Date</span>
-              <input type="date" value={repairCompletedAt} onChange={(e) => setRepairCompletedAt(e.target.value)} style={{ width: '100%', padding: '6px 5px', fontSize: '0.75rem' }} />
-            </label>
-            <label>
-              <span style={{ fontSize: '0.68rem' }}>Est. Return Date</span>
-              <input type="date" value={estimatedReturnDate} onChange={(e) => setEstimatedReturnDate(e.target.value)} style={{ width: '100%', padding: '6px 5px', fontSize: '0.75rem' }} />
+              <input type="date" value={repairCompletedAt} onChange={(e) => { setRepairCompletedAt(e.target.value); onDirty?.(); }} style={{ width: '100%', padding: '6px 5px', fontSize: '0.75rem' }} />
             </label>
           </div>
         </div>
@@ -12302,6 +12696,11 @@ function CreatableSelect({
   // same as the reference add-new-Company flow (a real little form, not
   // just a yes/no confirmation of the raw typed text).
   const [addModalName, setAddModalName] = useState(null);
+  // Non-null while the modal above is in EDIT mode instead of ADD mode —
+  // holds the raw {id, name} item being renamed. Shares the same
+  // addModalName/addModalExtra/addModalError/addSaving state as add, since
+  // it's the same little form either way; only the submit target differs.
+  const [editTarget, setEditTarget] = useState(null);
   // Values for `extraFields` (e.g. Domain), keyed by field name.
   const [addModalExtra, setAddModalExtra] = useState({});
   const [addModalError, setAddModalError] = useState(null);
@@ -12367,10 +12766,23 @@ function CreatableSelect({
     setOpen(false);
   };
   const openAddModal = (name) => {
+    setEditTarget(null);
     setAddModalName(name);
     // Extra fields can carry a sensible default from context (e.g. Domain
     // pre-filled to match the vehicle already being filled out) — still
     // shown and changeable, just not blank by default.
+    setAddModalExtra(Object.fromEntries(extraFields.map((f) => [f.name, f.default ?? ''])));
+    setAddModalError(null);
+    setOpen(false);
+  };
+  // Renaming an existing entry — same little modal as add, pre-filled with
+  // its current name. Only offered where add/delete already are (a real
+  // catalogEndpoint, Admin), since it's the same permission story: a shared
+  // list everyone reads, only Admin should be able to change it out from
+  // under everyone else.
+  const openEditModal = (item) => {
+    setEditTarget(item);
+    setAddModalName(item.name);
     setAddModalExtra(Object.fromEntries(extraFields.map((f) => [f.name, f.default ?? ''])));
     setAddModalError(null);
     setOpen(false);
@@ -12388,11 +12800,39 @@ function CreatableSelect({
       setAddModalError('Name is required.');
       return;
     }
-    const missingExtra = extraFields.find((f) => f.required && !addModalExtra[f.name]);
+    const missingExtra = extraFields.find((f) => f.required && (addModalExtra[f.name] ?? '') === '');
     if (missingExtra) {
       setAddModalError(`${missingExtra.label} is required.`);
       return;
     }
+
+    if (editTarget) {
+      setAddSaving(true);
+      try {
+        const res = await api.put(`${catalogEndpoint}/${editTarget.id}`, { [nameField]: val, ...addModalExtra });
+        const updated = normalizeItem(res.data);
+        setCatalogItems((items) => items
+          .map((i) => (i.id === editTarget.id ? updated : i))
+          .sort((a, b) => a.name.localeCompare(b.name)));
+        // Renamed item was the one already selected — plain-string mode
+        // (valueIsId false) stores the name itself, so it has to follow the
+        // rename or the field would keep showing text that's no longer a
+        // real option. valueIsId mode needs nothing here; the id didn't change.
+        if (!valueIsId && value === editTarget.name) {
+          onChange(updated.name);
+        }
+        setEditTarget(null);
+        setAddModalName(null);
+        setAddModalError(null);
+        setAddedMessage(`"${editTarget.name}" renamed to "${updated.name}".`);
+      } catch (err) {
+        setAddModalError(err?.response?.data?.message || 'Something went wrong — please try again.');
+      } finally {
+        setAddSaving(false);
+      }
+      return;
+    }
+
     if (!catalogEndpoint) {
       pick({ id: null, name: val });
       setAddModalName(null);
@@ -12421,6 +12861,7 @@ function CreatableSelect({
   const closeAddModal = () => {
     setAddModalName(null);
     setAddModalError(null);
+    setEditTarget(null);
   };
   const confirmDelete = async () => {
     setDeleteBusy(true);
@@ -12462,15 +12903,35 @@ function CreatableSelect({
                   {o.name}
                 </button>
                 {catalogEndpoint && canDeleteCatalogItems && o.id != null && (
-                  <button
-                    type="button"
-                    className="creatable-select-option-delete"
-                    onClick={(e) => { e.stopPropagation(); setDeleteTarget(o); setDeleteError(null); }}
-                    title={`Remove ${o.name}`}
-                    aria-label={`Remove ${o.name}`}
-                  >
-                    <Icon name="close" size={12} />
-                  </button>
+                  <>
+                    {/* Simple name-only catalogs (Fault Category, Maintenance
+                        Type) only — a catalog with extraFields (e.g. Vehicle
+                        Type's Domain) isn't safe to rename here, since this
+                        list never carries those extra values to prefill the
+                        modal with; blindly submitting would reset them to
+                        whatever the field's bare default is. Those already
+                        have their own proper edit page elsewhere. */}
+                    {extraFields.length === 0 && (
+                      <button
+                        type="button"
+                        className="creatable-select-option-edit"
+                        onClick={(e) => { e.stopPropagation(); openEditModal(o); }}
+                        title={`Rename ${o.name}`}
+                        aria-label={`Rename ${o.name}`}
+                      >
+                        <Icon name="edit" size={12} />
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="creatable-select-option-delete"
+                      onClick={(e) => { e.stopPropagation(); setDeleteTarget(o); setDeleteError(null); }}
+                      title={`Remove ${o.name}`}
+                      aria-label={`Remove ${o.name}`}
+                    >
+                      <Icon name="close" size={12} />
+                    </button>
+                  </>
                 )}
               </div>
             ))}
@@ -12483,7 +12944,7 @@ function CreatableSelect({
           )}
         </div>
       )}
-      <FormModal open={addModalName !== null} title={`Add New ${newItemTitle}`} onClose={closeAddModal}>
+      <FormModal open={addModalName !== null} title={editTarget ? `Rename ${newItemTitle}` : `Add New ${newItemTitle}`} onClose={closeAddModal}>
         <form className="smart-form" onSubmit={saveAddModal} noValidate>
           {addModalError && (
             <div className="toast-notice-overlay" onClick={() => setAddModalError(null)}>
@@ -12503,19 +12964,30 @@ function CreatableSelect({
           {extraFields.map((f) => (
             <label key={f.name}>
               <span>{f.label} {f.required && <span className="required-asterisk">*</span>}</span>
-              <select
-                required={f.required}
-                value={addModalExtra[f.name] ?? ''}
-                onChange={(e) => setAddModalExtra((cur) => ({ ...cur, [f.name]: e.target.value }))}
-              >
-                <option value="" disabled>Select {f.label}</option>
-                {f.options.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
-              </select>
+              {f.type === 'number' ? (
+                <input
+                  type="number"
+                  step="any"
+                  required={f.required}
+                  placeholder={f.placeholder}
+                  value={addModalExtra[f.name] ?? ''}
+                  onChange={(e) => setAddModalExtra((cur) => ({ ...cur, [f.name]: e.target.value }))}
+                />
+              ) : (
+                <select
+                  required={f.required}
+                  value={addModalExtra[f.name] ?? ''}
+                  onChange={(e) => setAddModalExtra((cur) => ({ ...cur, [f.name]: e.target.value }))}
+                >
+                  <option value="" disabled>Select {f.label}</option>
+                  {f.options.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+                </select>
+              )}
             </label>
           ))}
           <div className="form-actions">
             <button className="ghost-button" type="button" onClick={closeAddModal} disabled={addSaving}>Cancel</button>
-            <button className="primary-button" type="submit" disabled={addSaving}>{addSaving ? 'Saving…' : 'Save'}</button>
+            <button className="primary-button" type="submit" disabled={addSaving}>{addSaving ? 'Saving…' : (editTarget ? 'Save Changes' : 'Save')}</button>
           </div>
         </form>
       </FormModal>

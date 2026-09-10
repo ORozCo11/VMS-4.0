@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Vehicle;
 use App\Models\VehicleHub;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
@@ -26,8 +27,10 @@ class HubController extends Controller
     {
         $this->requireRole($request, ['Admin']);
 
+        $barangayId = $request->user()->barangay_id;
+
         $data = $request->validate([
-            'name' => ['required', 'string', 'max:255', Rule::unique('vehicle_hubs', 'name')],
+            'name' => ['required', 'string', 'max:255', Rule::unique('vehicle_hubs', 'name')->where('barangay_id', $barangayId)],
             'lat' => ['required', 'numeric', 'between:-90,90'],
             'lng' => ['required', 'numeric', 'between:-180,180'],
             'label' => ['nullable', 'string', 'max:8'],
@@ -55,7 +58,10 @@ class HubController extends Controller
         $this->requireRole($request, ['Admin']);
 
         $data = $request->validate([
-            'name' => ['sometimes', 'string', 'max:255', Rule::unique('vehicle_hubs', 'name')->ignore($hub->hub_id, 'hub_id')],
+            'name' => [
+                'sometimes', 'string', 'max:255',
+                Rule::unique('vehicle_hubs', 'name')->where('barangay_id', $hub->barangay_id)->ignore($hub->hub_id, 'hub_id'),
+            ],
             'lat' => ['sometimes', 'numeric', 'between:-90,90'],
             'lng' => ['sometimes', 'numeric', 'between:-180,180'],
             'is_hidden' => ['sometimes', 'boolean'],
@@ -74,6 +80,12 @@ class HubController extends Controller
         $this->requireRole($request, ['Admin']);
 
         abort_if($hub->is_default, 422, 'Default hubs cannot be deleted. Hide it instead.');
+
+        abort_if(
+            Vehicle::where('current_location', $hub->name)->exists(),
+            422,
+            'This hub is still set as one or more vehicles\' current location.'
+        );
 
         $hub->delete();
 

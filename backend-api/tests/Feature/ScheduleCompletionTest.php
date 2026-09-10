@@ -67,12 +67,17 @@ class ScheduleCompletionTest extends TestCase
 
         // Schedule closed...
         $this->assertSame('Completed', $schedule->fresh()->status);
-        // ...and a matching maintenance record now exists (proof of work).
+        // ...and a matching maintenance record now exists (proof of work) —
+        // 'For Verification' since no receipt/photo was attached (fast-close
+        // requires one), pending the same Custodian check every other
+        // maintenance path requires.
         $this->assertDatabaseHas('vehicle_maintenance_records', [
             'vehicle_id' => $vehicle->vehicle_id,
             'maintenance_type' => 'Oil Change',
-            'progress_status' => 'Completed',
+            'progress_status' => 'For Verification',
         ]);
+        // The vehicle reflects an open maintenance item until that check happens.
+        $this->assertSame('Under Maintenance', $vehicle->fresh()->status);
         // A one-off schedule does NOT spawn a follow-up.
         $this->assertSame(1, VehicleMaintenanceSchedule::where('vehicle_id', $vehicle->vehicle_id)->count());
     }
@@ -101,6 +106,54 @@ class ScheduleCompletionTest extends TestCase
 
         // Two schedules now exist: the completed one + the next.
         $this->assertSame(2, VehicleMaintenanceSchedule::where('vehicle_id', $vehicle->vehicle_id)->count());
+    }
+
+    #[Test]
+    public function completing_a_schedule_dated_jan_31_does_not_skip_february(): void
+    {
+        // Regression: Carbon::addMonths() overflows past a shorter target
+        // month (2026-01-31 + 1 month = 2026-03-03, since Feb has no 31st)
+        // instead of clamping. addMonthsNoOverflow() clamps to 2026-02-28
+        // (2026 is not a leap year), which is what a monthly recurrence
+        // dated on the 31st should produce.
+        $vehicle = $this->vehicle();
+        $schedule = $this->schedule($vehicle, [
+            'scheduled_date' => '2026-01-31',
+            'recurrence_months' => 1,
+        ]);
+
+        Sanctum::actingAs($this->admin, ['*']);
+        $response = $this->putJson("/api/maintenance-schedules/{$schedule->schedule_id}/complete", [
+            'date_completed' => '2026-01-31',
+            'maintenance_personnel_id' => $this->mechanic->id,
+        ])->assertOk();
+
+        $next = $response->json('next');
+        $this->assertNotNull($next, 'A recurring schedule should seed the next occurrence.');
+        $this->assertSame('2026-02-28', substr($next['scheduled_date'], 0, 10));
+    }
+
+    #[Test]
+    public function completing_a_schedule_dated_jan_31_in_a_leap_year_lands_on_feb_29(): void
+    {
+        // Same overflow scenario, but 2028 IS a leap year, so the correctly
+        // clamped next occurrence is 2028-02-29, not 2028-03-02 (overflow)
+        // and not 2028-02-28 (which would be wrong here too).
+        $vehicle = $this->vehicle();
+        $schedule = $this->schedule($vehicle, [
+            'scheduled_date' => '2028-01-31',
+            'recurrence_months' => 1,
+        ]);
+
+        Sanctum::actingAs($this->admin, ['*']);
+        $response = $this->putJson("/api/maintenance-schedules/{$schedule->schedule_id}/complete", [
+            'date_completed' => '2028-01-31',
+            'maintenance_personnel_id' => $this->mechanic->id,
+        ])->assertOk();
+
+        $next = $response->json('next');
+        $this->assertNotNull($next, 'A recurring schedule should seed the next occurrence.');
+        $this->assertSame('2028-02-29', substr($next['scheduled_date'], 0, 10));
     }
 
     #[Test]

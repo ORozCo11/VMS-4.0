@@ -2,6 +2,7 @@
 
 namespace Database\Seeders;
 
+use App\Models\Barangay;
 use App\Models\User;
 use App\Models\Vehicle;
 use App\Models\VehicleCategory;
@@ -33,19 +34,25 @@ class MockDataSeeder extends Seeder
         }
 
         $ambulanceCat = VehicleCategory::where('category_name', 'Ambulance')->first();
-        $truckCat = VehicleCategory::where('category_name', 'Truck')->first();
         $fireTruckCat = VehicleCategory::where('category_name', 'Fire Truck')->first();
-        $vanCat = VehicleCategory::where('category_name', 'Van')->first();
-        $patrolCat = VehicleCategory::where('category_name', 'Patrol Vehicle')->first();
-        $serviceCat = VehicleCategory::where('category_name', 'Service Vehicle')->first();
-        $rescueBoatCat = VehicleCategory::where('category_name', 'Rescue Boat')->first();
 
-        if (!$ambulanceCat || !$truckCat || !$fireTruckCat || !$vanCat || !$patrolCat || !$serviceCat || !$rescueBoatCat) {
+        if (!$ambulanceCat || !$fireTruckCat) {
             $this->command->error("FleetReferenceSeeder must run first!");
             return;
         }
 
         // 2. Seed Vehicles
+        // Same convention as FleetReferenceSeeder::seedDefaultHubs() and
+        // UserSeeder — these are real Paknaan vehicles, so they're stamped
+        // with Paknaan's own barangay_id. Vehicle::creating()'s auto-stamp
+        // (BelongsToBarangay) only fires when Auth::check() is true, which
+        // is never the case while seeding, so it must be set explicitly here
+        // on every vehicle or it lands with a NULL barangay_id — invisible
+        // to Paknaan's own users and, worse, visible across every tenant
+        // since the global scope only filters when the acting user actually
+        // has a barangay_id of their own.
+        $paknaanId = Barangay::where('name', 'Paknaan')->value('id');
+
         $baseUrl = rtrim((string) config('app.url'), '/');
 
         // Resolve each vehicle mockup to a Supabase Storage URL, uploading it on
@@ -53,22 +60,23 @@ class MockDataSeeder extends Seeder
         // is unavailable, so seeding never hard-fails on storage issues.
         $photo = fn (string $file): string => $this->mockupUrl($file, $baseUrl);
 
-        // Vehicle 1: AmbuLanz (Lego Model)
+        // Vehicle 1: Metro EMS Ambulance
         $v1 = Vehicle::updateOrCreate(
-            ['plate_number' => 'JSFSD-242'],
+            ['plate_number' => 'AMB-1101'],
             [
-                'vehicle_name'     => 'AmbuLanz (Lego Model)',
+                'vehicle_name'     => 'Metro EMS Ambulance',
                 'category_id'      => $ambulanceCat->category_id,
-                'brand'            => 'Lego Creator',
-                'model'            => 'EMS Ambulance 4431',
-                'year_model'       => '2024',
-                'capacity'         => '400kg',
-                'fuel_type'        => 'Electric',
-                'vehicle_color'    => 'White / Blue',
+                'barangay_id'      => $paknaanId,
+                'brand'            => 'Toyota',
+                'model'            => 'HiAce Carryboy EMS',
+                'year_model'       => '2023',
+                'capacity'         => '1000kg',
+                'fuel_type'        => 'Diesel',
+                'vehicle_color'    => 'White / Red',
                 'current_location' => 'Twinbee Hub',
                 'status'           => 'Available',
                 'condition'        => 'Good',
-                'photo_url'        => $photo('ambulance-blue.svg'),
+                'photo_url'        => $photo('vehicles/ambulance-01-hiace-carryboy.jpg'),
             ]
         );
 
@@ -78,35 +86,37 @@ class MockDataSeeder extends Seeder
             [
                 'vehicle_name'     => 'INEM Portuguese Ambulance',
                 'category_id'      => $ambulanceCat->category_id,
+                'barangay_id'      => $paknaanId,
                 'brand'            => 'Mercedes-Benz',
                 'model'            => 'Sprinter 316 CDI',
                 'year_model'       => '2021',
                 'capacity'         => '1200kg',
                 'fuel_type'        => 'Diesel',
-                'vehicle_color'    => 'Yellow',
+                'vehicle_color'    => 'White / Red Stripe',
                 'current_location' => 'Paknaan Brgy Hall',
                 'status'           => 'Available',
                 'condition'        => 'Good',
-                'photo_url'        => $photo('ambulance-yellow.svg'),
+                'photo_url'        => $photo('vehicles/ambulance-02-sprinter.jpg'),
             ]
         );
 
-        // Vehicle 3: Rescue Patrol Truck
+        // Vehicle 3: Rescue Response Ambulance
         $v3 = Vehicle::updateOrCreate(
             ['plate_number' => 'FDR-303'],
             [
-                'vehicle_name'     => 'Rescue Patrol Truck',
-                'category_id'      => $truckCat->category_id,
+                'vehicle_name'     => 'Rescue Response Ambulance',
+                'category_id'      => $ambulanceCat->category_id,
+                'barangay_id'      => $paknaanId,
                 'brand'            => 'Ford',
-                'model'            => 'F-550 Rescue Super Duty',
+                'model'            => 'E-450 Rescue Ambulance',
                 'year_model'       => '2020',
-                'capacity'         => '3500kg',
+                'capacity'         => '1300kg',
                 'fuel_type'        => 'Diesel',
-                'vehicle_color'    => 'Red / White',
+                'vehicle_color'    => 'White / Red',
                 'current_location' => 'Paknaan Gymnasium',
                 'status'           => 'Available',
                 'condition'        => 'Good',
-                'photo_url'        => $photo('rescue-truck.svg'),
+                'photo_url'        => $photo('vehicles/ambulance-03-ford-eseries.jpg'),
             ]
         );
 
@@ -116,16 +126,17 @@ class MockDataSeeder extends Seeder
             [
                 'vehicle_name'     => 'Wagon Caddy Ambulance',
                 'category_id'      => $ambulanceCat->category_id,
-                'brand'            => 'Volkswagen',
-                'model'            => 'Caddy Life Maxi',
+                'barangay_id'      => $paknaanId,
+                'brand'            => 'Ford',
+                'model'            => 'E-350 Box Ambulance',
                 'year_model'       => '2019',
-                'capacity'         => '800kg',
+                'capacity'         => '900kg',
                 'fuel_type'        => 'Gasoline',
                 'vehicle_color'    => 'White / Red Stripe',
                 'current_location' => 'Twinbee Hub',
                 'status'           => 'Under Maintenance',
                 'condition'        => 'Needs Repair',
-                'photo_url'        => $photo('ambulance-wagon.svg'),
+                'photo_url'        => $photo('vehicles/ambulance-04-ford-eseries.jpg'),
             ]
         );
 
@@ -135,8 +146,9 @@ class MockDataSeeder extends Seeder
             [
                 'vehicle_name'     => 'Barangay Fire Responder',
                 'category_id'      => $fireTruckCat->category_id,
-                'brand'            => 'Isuzu',
-                'model'            => 'FRR Fire Pumper',
+                'barangay_id'      => $paknaanId,
+                'brand'            => 'Pierce',
+                'model'            => 'Enforcer Pumper',
                 'year_model'       => '2018',
                 'capacity'         => '2000L water tank',
                 'fuel_type'        => 'Diesel',
@@ -144,97 +156,207 @@ class MockDataSeeder extends Seeder
                 'current_location' => 'Paknaan Brgy Hall',
                 'status'           => 'Available',
                 'condition'        => 'Good',
+                'photo_url'        => $photo('vehicles/firetruck-01-pierce-pumper.jpg'),
             ]
         );
 
-        // Vehicle 6: Community Service Multicab
+        // Vehicle 6: Ladder Company 28
         $v6 = Vehicle::updateOrCreate(
-            ['plate_number' => 'SVC-6102'],
+            ['plate_number' => 'FDT-2801'],
             [
-                'vehicle_name'     => 'Community Service Multicab',
-                'category_id'      => $serviceCat->category_id,
-                'brand'            => 'Suzuki',
-                'model'            => 'Multicab Scrum',
+                'vehicle_name'     => 'Ladder Company 28',
+                'category_id'      => $fireTruckCat->category_id,
+                'barangay_id'      => $paknaanId,
+                'brand'            => 'Pierce',
+                'model'            => 'Aerial Ladder Truck',
                 'year_model'       => '2020',
-                'capacity'         => '600kg',
-                'fuel_type'        => 'Gasoline',
+                'capacity'         => '300 gal water tank',
+                'fuel_type'        => 'Diesel',
+                'vehicle_color'    => 'Red / White',
+                'current_location' => 'Paknaan Gymnasium',
+                'status'           => 'Available',
+                'condition'        => 'Good',
+                'photo_url'        => $photo('vehicles/firetruck-03-ladder-28.jpg'),
+            ]
+        );
+
+        // Vehicle 7: Firehouse Engine 15
+        $v7 = Vehicle::updateOrCreate(
+            ['plate_number' => 'FDT-1502'],
+            [
+                'vehicle_name'     => 'Firehouse Engine 15',
+                'category_id'      => $fireTruckCat->category_id,
+                'barangay_id'      => $paknaanId,
+                'brand'            => 'Spartan',
+                'model'            => 'Metro Star Pumper',
+                'year_model'       => '2019',
+                'capacity'         => '1500L water tank',
+                'fuel_type'        => 'Diesel',
+                'vehicle_color'    => 'Red',
+                'current_location' => 'Twinbee Hub',
+                'status'           => 'Available',
+                'condition'        => 'Good',
+                'photo_url'        => $photo('vehicles/firetruck-04-firehouse-engine.jpg'),
+            ]
+        );
+
+        // Vehicle 8: Highway Rescue Engine
+        $v8 = Vehicle::updateOrCreate(
+            ['plate_number' => 'FDT-0903'],
+            [
+                'vehicle_name'     => 'Highway Rescue Engine',
+                'category_id'      => $fireTruckCat->category_id,
+                'barangay_id'      => $paknaanId,
+                'brand'            => 'Pierce',
+                'model'            => 'Saber Pumper',
+                'year_model'       => '2017',
+                'capacity'         => '1800L water tank',
+                'fuel_type'        => 'Diesel',
+                'vehicle_color'    => 'Red',
+                'current_location' => 'Paknaan Brgy Hall',
+                'status'           => 'Available',
+                'condition'        => 'Good',
+                'photo_url'        => $photo('vehicles/firetruck-05-highway-engine.jpg'),
+            ]
+        );
+
+        // Vehicle 9: Aerial Ladder Unit
+        $v9 = Vehicle::updateOrCreate(
+            ['plate_number' => 'FDT-0704'],
+            [
+                'vehicle_name'     => 'Aerial Ladder Unit',
+                'category_id'      => $fireTruckCat->category_id,
+                'barangay_id'      => $paknaanId,
+                'brand'            => 'Rosenbauer',
+                'model'            => 'Aerial Ladder Fire Truck',
+                'year_model'       => '2021',
+                'capacity'         => '1000L water tank',
+                'fuel_type'        => 'Diesel',
+                'vehicle_color'    => 'Red',
+                'current_location' => 'Paknaan Gymnasium',
+                'status'           => 'Available',
+                'condition'        => 'Good',
+                'photo_url'        => $photo('vehicles/firetruck-06-aerial-ladder.jpg'),
+            ]
+        );
+
+        // Vehicle 10: London Brigade Pumper
+        $v10 = Vehicle::updateOrCreate(
+            ['plate_number' => 'FDT-0605'],
+            [
+                'vehicle_name'     => 'London Brigade Pumper',
+                'category_id'      => $fireTruckCat->category_id,
+                'barangay_id'      => $paknaanId,
+                'brand'            => 'Volvo',
+                'model'            => 'FL6 Pumper',
+                'year_model'       => '2016',
+                'capacity'         => '1600L water tank',
+                'fuel_type'        => 'Diesel',
+                'vehicle_color'    => 'Red / Yellow',
+                'current_location' => 'Twinbee Hub',
+                'status'           => 'Available',
+                'condition'        => 'Good',
+                'photo_url'        => $photo('vehicles/firetruck-07-volvo-fl6.jpg'),
+            ]
+        );
+
+        // Vehicle 11: Engine 23
+        $v11 = Vehicle::updateOrCreate(
+            ['plate_number' => 'FDT-2306'],
+            [
+                'vehicle_name'     => 'Engine 23',
+                'category_id'      => $fireTruckCat->category_id,
+                'barangay_id'      => $paknaanId,
+                'brand'            => 'Pierce',
+                'model'            => 'Dash CF Pumper',
+                'year_model'       => '2015',
+                'capacity'         => '1500L water tank',
+                'fuel_type'        => 'Diesel',
+                'vehicle_color'    => 'Red',
+                'current_location' => 'Paknaan Brgy Hall',
+                'status'           => 'Available',
+                'condition'        => 'Good',
+                'photo_url'        => $photo('vehicles/firetruck-08-sffd-engine.jpg'),
+            ]
+        );
+
+        // Vehicle 12: Autumn Response Pumper
+        $v12 = Vehicle::updateOrCreate(
+            ['plate_number' => 'FDT-1107'],
+            [
+                'vehicle_name'     => 'Autumn Response Pumper',
+                'category_id'      => $fireTruckCat->category_id,
+                'barangay_id'      => $paknaanId,
+                'brand'            => 'Sutphen',
+                'model'            => 'Monarch Pumper',
+                'year_model'       => '2022',
+                'capacity'         => '1900L water tank',
+                'fuel_type'        => 'Diesel',
+                'vehicle_color'    => 'Red',
+                'current_location' => 'Paknaan Gymnasium',
+                'status'           => 'Available',
+                'condition'        => 'Good',
+                'photo_url'        => $photo('vehicles/firetruck-02-pumper-autumn.jpg'),
+            ]
+        );
+
+        // Vehicle 13: Desert Rose EMS
+        $v13 = Vehicle::updateOrCreate(
+            ['plate_number' => 'AMB-2208'],
+            [
+                'vehicle_name'     => 'Desert Rose EMS',
+                'category_id'      => $ambulanceCat->category_id,
+                'barangay_id'      => $paknaanId,
+                'brand'            => 'Toyota',
+                'model'            => 'HiAce Ambulance Conversion',
+                'year_model'       => '2020',
+                'capacity'         => '950kg',
+                'fuel_type'        => 'Diesel',
                 'vehicle_color'    => 'White',
                 'current_location' => 'Twinbee Hub',
                 'status'           => 'Available',
                 'condition'        => 'Good',
+                'photo_url'        => $photo('vehicles/ambulance-05-hiace-hilo.jpg'),
             ]
         );
 
-        // Vehicle 7: Tanod Patrol Vehicle
-        $v7 = Vehicle::updateOrCreate(
-            ['plate_number' => 'TNP-7203'],
+        // Vehicle 14: QuickCare Ambulance
+        $v14 = Vehicle::updateOrCreate(
+            ['plate_number' => 'AMB-3309'],
             [
-                'vehicle_name'     => 'Tanod Patrol Vehicle',
-                'category_id'      => $patrolCat->category_id,
-                'brand'            => 'Toyota',
-                'model'            => 'Hilux Patrol',
+                'vehicle_name'     => 'QuickCare Ambulance',
+                'category_id'      => $ambulanceCat->category_id,
+                'barangay_id'      => $paknaanId,
+                'brand'            => 'Ford',
+                'model'            => 'E-350 Type II Ambulance',
                 'year_model'       => '2022',
-                'capacity'         => '5 seats',
-                'fuel_type'        => 'Diesel',
-                'vehicle_color'    => 'Blue / White',
-                'current_location' => 'Paknaan Gymnasium',
-                'status'           => 'Available',
-                'condition'        => 'Good',
-            ]
-        );
-
-        // Vehicle 8: Community Transport Van
-        $v8 = Vehicle::updateOrCreate(
-            ['plate_number' => 'VAN-8304'],
-            [
-                'vehicle_name'     => 'Community Transport Van',
-                'category_id'      => $vanCat->category_id,
-                'brand'            => 'Toyota',
-                'model'            => 'HiAce Commuter',
-                'year_model'       => '2019',
-                'capacity'         => '15 seats',
-                'fuel_type'        => 'Diesel',
-                'vehicle_color'    => 'Silver',
-                'current_location' => 'Twinbee Hub',
-                'status'           => 'Under Maintenance',
-                'condition'        => 'Needs Repair',
-            ]
-        );
-
-        // Vehicle 9: Flood Rescue Boat
-        $v9 = Vehicle::updateOrCreate(
-            ['plate_number' => 'RB-9405'],
-            [
-                'vehicle_name'     => 'Flood Rescue Boat',
-                'category_id'      => $rescueBoatCat->category_id,
-                'brand'            => 'Yamaha',
-                'model'            => 'Rubber Rescue Boat RB-14',
-                'year_model'       => '2021',
-                'capacity'         => '8 persons',
+                'capacity'         => '1000kg',
                 'fuel_type'        => 'Gasoline',
-                'hull_material'    => 'Reinforced Rubber',
-                'vehicle_color'    => 'Orange / Black',
+                'vehicle_color'    => 'White / Red',
                 'current_location' => 'Paknaan Brgy Hall',
                 'status'           => 'Available',
                 'condition'        => 'Good',
+                'photo_url'        => $photo('vehicles/ambulance-06-quickcare.jpg'),
             ]
         );
 
-        // Vehicle 10: Garbage Collection Truck
-        $v10 = Vehicle::updateOrCreate(
-            ['plate_number' => 'GRB-1006'],
+        // Vehicle 15: Noida Express Ambulance
+        $v15 = Vehicle::updateOrCreate(
+            ['plate_number' => 'AMB-4410'],
             [
-                'vehicle_name'     => 'Garbage Collection Truck',
-                'category_id'      => $truckCat->category_id,
-                'brand'            => 'Fuso',
-                'model'            => 'Canter Dump Truck',
-                'year_model'       => '2017',
-                'capacity'         => '4000kg',
+                'vehicle_name'     => 'Noida Express Ambulance',
+                'category_id'      => $ambulanceCat->category_id,
+                'barangay_id'      => $paknaanId,
+                'brand'            => 'Mercedes-Benz',
+                'model'            => 'Sprinter Ambulance Van',
+                'year_model'       => '2018',
+                'capacity'         => '900kg',
                 'fuel_type'        => 'Diesel',
-                'vehicle_color'    => 'Green',
+                'vehicle_color'    => 'White / Red',
                 'current_location' => 'Paknaan Gymnasium',
                 'status'           => 'Available',
                 'condition'        => 'Good',
+                'photo_url'        => $photo('vehicles/ambulance-07-noida-express.jpg'),
             ]
         );
 
@@ -412,24 +534,39 @@ class MockDataSeeder extends Seeder
      * Upload a bundled vehicle mockup to Supabase Storage (once) and return its
      * public URL. Falls back to the locally-served /mockups path if Supabase is
      * not configured or unreachable, so seeding never hard-fails on storage.
+     * Path is relative to public/mockups/ — e.g. 'vehicles/ambulance-01.jpg'.
      */
-    private function mockupUrl(string $file, string $baseUrl): string
+    private function mockupUrl(string $path, string $baseUrl): string
     {
-        $localPath = public_path('mockups/' . $file);
+        $localPath = public_path('mockups/' . $path);
+
+        // Content-type by extension — the real photo mockups are jpg, the
+        // original icon set was svg; guessing from the extension keeps this
+        // working for either without hardcoding one format.
+        $mimeByExtension = [
+            'svg' => 'image/svg+xml',
+            'jpg' => 'image/jpeg',
+            'jpeg' => 'image/jpeg',
+            'png' => 'image/png',
+        ];
+        $extension = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+        $mimetype = $mimeByExtension[$extension] ?? 'application/octet-stream';
 
         try {
             $disk = Storage::disk('supabase');
-            $remotePath = 'vehicles/' . $file;
+            // $path already includes its own subfolder (e.g. 'vehicles/...') —
+            // used as-is, not nested under another 'vehicles/' prefix.
+            $remotePath = $path;
 
             if (!$disk->exists($remotePath)) {
-                $disk->put($remotePath, file_get_contents($localPath), ['mimetype' => 'image/svg+xml']);
+                $disk->put($remotePath, file_get_contents($localPath), ['mimetype' => $mimetype]);
             }
 
             $publicBase = rtrim((string) config('filesystems.disks.supabase.url'), '/');
             return $publicBase . '/' . $remotePath;
         } catch (\Throwable $e) {
-            $this->command->warn("Supabase upload failed for {$file}; using local mockup. ({$e->getMessage()})");
-            return $baseUrl . '/mockups/' . $file;
+            $this->command->warn("Supabase upload failed for {$path}; using local mockup. ({$e->getMessage()})");
+            return $baseUrl . '/mockups/' . $path;
         }
     }
 }

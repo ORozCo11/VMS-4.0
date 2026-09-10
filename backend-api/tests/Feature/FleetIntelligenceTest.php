@@ -2,12 +2,18 @@
 
 namespace Tests\Feature;
 
+use App\Models\Barangay;
 use App\Models\MaintenanceTicket;
 use App\Models\User;
 use App\Models\Vehicle;
 use App\Models\VehicleCategory;
+use App\Models\VehicleConditionCheck;
+use App\Models\VehicleIssueReport;
+use App\Models\VehicleHub;
+use App\Models\VehicleLocation;
 use App\Models\VehicleMaintenanceRecord;
 use App\Models\VehicleMaintenanceSchedule;
+use App\Models\VehicleReadinessCheck;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
 use PHPUnit\Framework\Attributes\Test;
@@ -290,14 +296,18 @@ class FleetIntelligenceTest extends TestCase
     {
         $vehicle = $this->vehicle();
         // A real repair need before retirement...
-        $vehicle->update(['condition' => 'Needs Repair']);
+        VehicleConditionCheck::create([
+            'vehicle_id' => $vehicle->vehicle_id,
+            'condition_result' => 'Needs Repair',
+            'checked_by' => $this->custodian->id,
+        ]);
 
         Sanctum::actingAs($this->admin, ['*']);
         $before = $this->getJson('/api/dashboard')->assertOk()->json('badge_counts.conditions');
         $this->assertGreaterThanOrEqual(1, $before);
 
-        // ...decommissioning sets condition to Damaged, but the vehicle is
-        // retired — it shouldn't keep inflating "needs attention" forever.
+        // ...decommissioning sets condition to Needs Repair, but the vehicle
+        // is retired — it shouldn't keep inflating "needs attention" forever.
         $this->putJson("/api/vehicles/{$vehicle->vehicle_id}/decommission", [
             'decommission_reason' => 'Beyond economical repair.',
         ])->assertOk();
@@ -461,5 +471,317 @@ class FleetIntelligenceTest extends TestCase
 
         $this->assertSame('Brake Repair', $patterns->first()['type']);
         $this->assertSame(2, $patterns->first()['count']);
+    }
+
+    // ---- Regression: resolving an issue report must not un-retire a vehicle -
+
+    #[Test]
+    public function resolving_an_issue_report_does_not_reactivate_a_decommissioned_vehicle(): void
+    {
+        $vehicle = $this->vehicle();
+        $vehicle->update([
+            'status' => 'Decommissioned',
+            'condition' => 'Needs Repair',
+            'decommission_reason' => 'retired',
+            'decommissioned_by' => $this->admin->id,
+            'decommissioned_at' => now(),
+        ]);
+
+        // An old issue report filed before the vehicle was retired.
+        $issue = VehicleIssueReport::create([
+            'vehicle_id' => $vehicle->vehicle_id,
+            'issue_type' => 'Engine Problem',
+            'issue_description' => 'x',
+            'severity_level' => 'Low',
+            'reported_by' => $this->custodian->id,
+            'status' => 'Pending',
+        ]);
+
+        Sanctum::actingAs($this->admin, ['*']);
+        $this->putJson("/api/issues/{$issue->issue_report_id}", ['status' => 'Resolved'])->assertOk();
+
+        $vehicle->refresh();
+        $this->assertSame('Decommissioned', $vehicle->status, 'A retired vehicle must stay retired.');
+        $this->assertSame('Needs Repair', $vehicle->condition);
+    }
+
+    #[Test]
+    public function resolving_an_issue_report_still_updates_an_active_vehicle(): void
+    {
+        $vehicle = $this->vehicle(overrides: ['status' => 'Under Maintenance', 'condition' => 'Needs Repair']);
+
+        $issue = VehicleIssueReport::create([
+            'vehicle_id' => $vehicle->vehicle_id,
+            'issue_type' => 'Engine Problem',
+            'issue_description' => 'x',
+            'severity_level' => 'Low',
+            'reported_by' => $this->custodian->id,
+            'status' => 'In Maintenance',
+        ]);
+
+        Sanctum::actingAs($this->admin, ['*']);
+        $this->putJson("/api/issues/{$issue->issue_report_id}", ['status' => 'Resolved'])->assertOk();
+
+        $vehicle->refresh();
+        $this->assertSame('Available', $vehicle->status);
+        $this->assertSame('Good', $vehicle->condition);
+    }
+
+    // ---- Regression: mark-available needs server-side proof ---------------
+
+    #[Test]
+    public function mark_available_is_blocked_without_any_readiness_check(): void
+    {
+        $vehicle = $this->vehicle();
+
+        Sanctum::actingAs($this->admin, ['*']);
+        $this->putJson("/api/vehicles/{$vehicle->vehicle_id}/mark-available")->assertUnprocessable();
+
+        $this->assertSame('Available', $vehicle->fresh()->status);
+    }
+
+    #[Test]
+    public function mark_available_is_blocked_when_the_latest_readiness_check_failed(): void
+    {
+        $vehicle = $this->vehicle(overrides: ['status' => 'Under Maintenance']);
+        VehicleReadinessCheck::create([
+            'vehicle_id' => $vehicle->vehicle_id,
+            'checked_by' => $this->custodian->id,
+            'checklist' => [['item' => 'Fuel full', 'passed' => false]],
+            'all_passed' => false,
+            'checked_at' => now(),
+        ]);
+
+        Sanctum::actingAs($this->admin, ['*']);
+        $this->putJson("/api/vehicles/{$vehicle->vehicle_id}/mark-available")->assertUnprocessable();
+
+        $this->assertSame('Under Maintenance', $vehicle->fresh()->status);
+    }
+
+    #[Test]
+    public function a_passing_readiness_check_overrides_a_lingering_needs_repair_condition(): void
+    {
+        // Emergency-dispatch case: a minor outstanding repair shouldn't
+        // block a vehicle from responding if it's physically confirmed
+        // ready right now — the readiness check is what decides that, not
+        // the separate condition label.
+        $vehicle = $this->vehicle(overrides: ['status' => 'Under Maintenance', 'condition' => 'Needs Repair']);
+        VehicleReadinessCheck::create([
+            'vehicle_id' => $vehicle->vehicle_id,
+            'checked_by' => $this->custodian->id,
+            'checklist' => [['item' => 'Fuel full', 'passed' => true]],
+            'all_passed' => true,
+            'checked_at' => now(),
+        ]);
+
+        Sanctum::actingAs($this->admin, ['*']);
+        $this->putJson("/api/vehicles/{$vehicle->vehicle_id}/mark-available")->assertOk();
+
+        $vehicle->refresh();
+        $this->assertSame('Available', $vehicle->status);
+        // The condition label is left alone — the repair is still real and
+        // still outstanding, it just isn't what's blocking dispatch now.
+        $this->assertSame('Needs Repair', $vehicle->condition);
+
+        // "Ready to Respond" reflects the passing check, not the lingering
+        // condition flag, now that the vehicle is Available again.
+        $readiness = $this->getJson("/api/vehicles/{$vehicle->vehicle_id}/readiness")->assertOk();
+        $this->assertSame('ready', $readiness->json('state'));
+    }
+
+    #[Test]
+    public function mark_available_succeeds_after_a_passing_readiness_check(): void
+    {
+        $vehicle = $this->vehicle(overrides: ['status' => 'Under Maintenance', 'condition' => 'Good']);
+        VehicleReadinessCheck::create([
+            'vehicle_id' => $vehicle->vehicle_id,
+            'checked_by' => $this->custodian->id,
+            'checklist' => [['item' => 'Fuel full', 'passed' => true]],
+            'all_passed' => true,
+            'checked_at' => now(),
+        ]);
+
+        Sanctum::actingAs($this->admin, ['*']);
+        $this->putJson("/api/vehicles/{$vehicle->vehicle_id}/mark-available")->assertOk();
+
+        $this->assertSame('Available', $vehicle->fresh()->status);
+    }
+
+    // ---- Regression: shared VehicleCategory can't be deleted cross-tenant --
+
+    #[Test]
+    public function a_category_still_used_by_another_barangays_vehicle_cannot_be_deleted(): void
+    {
+        $otherBarangay = Barangay::create(['name' => 'Other Barangay ' . uniqid()]);
+        $category = VehicleCategory::create(['category_name' => 'Shared Type ' . uniqid(), 'description' => 'x']);
+
+        // A vehicle owned by a DIFFERENT barangay uses this category. The
+        // current admin's own (barangay-scoped) view of Vehicle sees none of
+        // it, but the shared vehicle_categories row is still referenced.
+        Vehicle::create([
+            'vehicle_name' => 'Other Barangay Unit',
+            'plate_number' => 'OTH ' . random_int(1000, 9999),
+            'category_id' => $category->category_id,
+            'brand' => 'Toyota', 'model' => 'HiAce', 'year_model' => 2022,
+            'capacity' => '12 pax', 'vehicle_color' => 'White', 'current_location' => 'Main Depot',
+            'barangay_id' => $otherBarangay->id,
+        ]);
+
+        Sanctum::actingAs($this->admin, ['*']);
+        $this->deleteJson("/api/categories/{$category->category_id}")->assertUnprocessable();
+
+        $this->assertDatabaseHas('vehicle_categories', ['category_id' => $category->category_id]);
+    }
+
+    // ---- Regression: condition checks must not un-decommission a vehicle --
+
+    #[Test]
+    public function storing_a_condition_check_does_not_reactivate_a_decommissioned_vehicle(): void
+    {
+        $vehicle = $this->vehicle();
+        $vehicle->update([
+            'status' => 'Decommissioned',
+            'condition' => 'Needs Repair',
+            'decommission_reason' => 'retired',
+            'decommissioned_by' => $this->admin->id,
+            'decommissioned_at' => now(),
+        ]);
+
+        Sanctum::actingAs($this->admin, ['*']);
+        $this->postJson('/api/conditions', [
+            'vehicle_id' => $vehicle->vehicle_id,
+            'condition_result' => 'Good',
+        ])->assertCreated();
+
+        $vehicle->refresh();
+        $this->assertSame('Decommissioned', $vehicle->status, 'A retired vehicle must stay retired.');
+        $this->assertSame('Needs Repair', $vehicle->condition);
+    }
+
+    #[Test]
+    public function updating_a_condition_check_does_not_reactivate_a_decommissioned_vehicle(): void
+    {
+        $vehicle = $this->vehicle();
+        $condition = VehicleConditionCheck::create([
+            'vehicle_id' => $vehicle->vehicle_id,
+            'condition_result' => 'Needs Repair',
+            'checked_by' => $this->custodian->id,
+        ]);
+
+        $vehicle->update([
+            'status' => 'Decommissioned',
+            'condition' => 'Needs Repair',
+            'decommission_reason' => 'retired',
+            'decommissioned_by' => $this->admin->id,
+            'decommissioned_at' => now(),
+        ]);
+
+        Sanctum::actingAs($this->admin, ['*']);
+        $this->putJson("/api/conditions/{$condition->condition_check_id}", [
+            'condition_result' => 'Good',
+        ])->assertOk();
+
+        $vehicle->refresh();
+        $this->assertSame('Decommissioned', $vehicle->status, 'A retired vehicle must stay retired.');
+        $this->assertSame('Needs Repair', $vehicle->condition);
+    }
+
+    #[Test]
+    public function deleting_a_condition_check_does_not_reactivate_a_decommissioned_vehicle(): void
+    {
+        $vehicle = $this->vehicle();
+        $condition = VehicleConditionCheck::create([
+            'vehicle_id' => $vehicle->vehicle_id,
+            'condition_result' => 'Good',
+            'checked_by' => $this->custodian->id,
+        ]);
+
+        $vehicle->update([
+            'status' => 'Decommissioned',
+            'condition' => 'Needs Repair',
+            'decommission_reason' => 'retired',
+            'decommissioned_by' => $this->admin->id,
+            'decommissioned_at' => now(),
+        ]);
+
+        Sanctum::actingAs($this->admin, ['*']);
+        $this->deleteJson("/api/conditions/{$condition->condition_check_id}")->assertOk();
+
+        $vehicle->refresh();
+        $this->assertSame('Decommissioned', $vehicle->status, 'A retired vehicle must stay retired.');
+        $this->assertSame('Needs Repair', $vehicle->condition);
+    }
+
+    #[Test]
+    public function a_condition_check_still_updates_an_active_vehicle(): void
+    {
+        $vehicle = $this->vehicle(overrides: ['status' => 'Available', 'condition' => 'Good']);
+
+        Sanctum::actingAs($this->admin, ['*']);
+        $this->postJson('/api/conditions', [
+            'vehicle_id' => $vehicle->vehicle_id,
+            'condition_result' => 'Needs Repair',
+        ])->assertCreated();
+
+        $vehicle->refresh();
+        $this->assertSame('Under Maintenance', $vehicle->status);
+        $this->assertSame('Needs Repair', $vehicle->condition);
+    }
+
+    // ---- Regression: editing a vehicle's location via PUT must be logged --
+
+    #[Test]
+    public function updating_a_vehicles_current_location_via_put_creates_a_location_history_row(): void
+    {
+        VehicleHub::create(['hub_key' => 'main-depot', 'name' => 'Main Depot', 'label' => 'MD', 'lat' => 10.3, 'lng' => 123.9]);
+        VehicleHub::create(['hub_key' => 'sub-station', 'name' => 'Sub Station', 'label' => 'SS', 'lat' => 10.4, 'lng' => 123.8]);
+
+        $vehicle = $this->vehicle(overrides: ['current_location' => 'Main Depot']);
+
+        Sanctum::actingAs($this->admin, ['*']);
+        $this->putJson("/api/vehicles/{$vehicle->vehicle_id}", [
+            'vehicle_name' => $vehicle->vehicle_name,
+            'plate_number' => $vehicle->plate_number,
+            'category_id' => $vehicle->category_id,
+            'brand' => $vehicle->brand,
+            'model' => $vehicle->model,
+            'year_model' => $vehicle->year_model,
+            'capacity' => $vehicle->capacity,
+            'fuel_type' => 'Diesel',
+            'vehicle_color' => $vehicle->vehicle_color,
+            'current_location' => 'Sub Station',
+        ])->assertOk();
+
+        $vehicle->refresh();
+        $this->assertSame('Sub Station', $vehicle->current_location);
+        $this->assertDatabaseHas('vehicle_locations', [
+            'vehicle_id' => $vehicle->vehicle_id,
+            'current_location' => 'Sub Station',
+        ]);
+        $this->assertSame(1, VehicleLocation::where('vehicle_id', $vehicle->vehicle_id)->count());
+    }
+
+    #[Test]
+    public function updating_a_vehicle_without_changing_its_location_creates_no_location_row(): void
+    {
+        VehicleHub::create(['hub_key' => 'main-depot', 'name' => 'Main Depot', 'label' => 'MD', 'lat' => 10.3, 'lng' => 123.9]);
+
+        $vehicle = $this->vehicle(overrides: ['current_location' => 'Main Depot']);
+
+        Sanctum::actingAs($this->admin, ['*']);
+        $this->putJson("/api/vehicles/{$vehicle->vehicle_id}", [
+            'vehicle_name' => $vehicle->vehicle_name,
+            'plate_number' => $vehicle->plate_number,
+            'category_id' => $vehicle->category_id,
+            'brand' => $vehicle->brand,
+            'model' => $vehicle->model,
+            'year_model' => $vehicle->year_model,
+            'capacity' => $vehicle->capacity,
+            'fuel_type' => 'Diesel',
+            'vehicle_color' => $vehicle->vehicle_color,
+            'current_location' => 'Main Depot',
+        ])->assertOk();
+
+        $this->assertDatabaseCount('vehicle_locations', 0);
     }
 }

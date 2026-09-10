@@ -27,8 +27,14 @@ function normalizeHub(record) {
   };
 }
 
-const CARTO_LIGHT_TILE_URL = 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
-const CARTO_ATTRIBUTION = '&copy; OpenStreetMap contributors &copy; CARTO';
+// Was CARTO's basemaps.cartocdn.com "light_all" — free and keyless when this
+// was first built, but CARTO has since started requiring an API key for
+// that tier, so every tile just showed an "API KEY REQUIRED" watermark.
+// Esri's World Street Map is the same free/keyless deal as the satellite
+// layer below (same provider, same REST tile pattern), so it's the
+// lowest-risk swap rather than introducing a third tile source.
+const STREET_TILE_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}';
+const STREET_ATTRIBUTION = 'Tiles &copy; Esri — Source: Esri, HERE, Garmin, USGS, Intermap, and the GIS User Community';
 
 // Free satellite/aerial imagery (Esri World Imagery — no API key required),
 // with a transparent labels overlay so street/place names still show on top
@@ -111,15 +117,42 @@ function isValidCoordinate(value) {
 // LatLng rings — one ring per Polygon, one per part of a MultiPolygon (e.g.
 // islands). Holes are dropped since this is only ever used to draw a
 // decorative boundary outline, not an exact administrative shape.
+// Malformed/unexpected boundary data (e.g. a ring that isn't an array of
+// [lng, lat] pairs) must not throw here — this runs inside a useMemo during
+// render, so an uncaught error would crash the whole Workspace with a white
+// screen. Any ring that doesn't look right is skipped (and logged) instead.
+function isLngLatPair(point) {
+  return Array.isArray(point) && point.length >= 2
+    && Number.isFinite(point[0]) && Number.isFinite(point[1]);
+}
+
+function toLatLngRing(ring) {
+  if (!Array.isArray(ring) || !ring.every(isLngLatPair)) {
+    console.warn('LocationDensityMap: skipping malformed boundary ring', ring);
+    return null;
+  }
+  return ring.map(([lng, lat]) => [lat, lng]);
+}
+
 function geoJsonToRings(geometry) {
   if (!geometry) return [];
-  const toLatLngRing = (ring) => ring.map(([lng, lat]) => [lat, lng]);
 
   if (geometry.type === 'Polygon') {
-    return [toLatLngRing(geometry.coordinates[0])];
+    if (!Array.isArray(geometry.coordinates)) {
+      console.warn('LocationDensityMap: skipping malformed Polygon geometry', geometry);
+      return [];
+    }
+    const ring = toLatLngRing(geometry.coordinates[0]);
+    return ring ? [ring] : [];
   }
   if (geometry.type === 'MultiPolygon') {
-    return geometry.coordinates.map((polygon) => toLatLngRing(polygon[0]));
+    if (!Array.isArray(geometry.coordinates)) {
+      console.warn('LocationDensityMap: skipping malformed MultiPolygon geometry', geometry);
+      return [];
+    }
+    return geometry.coordinates
+      .map((polygon) => (Array.isArray(polygon) ? toLatLngRing(polygon[0]) : null))
+      .filter(Boolean);
   }
   return [];
 }
@@ -247,6 +280,25 @@ function FitBoundsToPolygon({ bounds }) {
 
   useEffect(() => {
     map.fitBounds(bounds, { padding: [24, 24], maxZoom: 16 });
+
+    // maxBounds is re-derived from what's ACTUALLY on screen (not the raw
+    // polygon bounds) so a tall/narrow polygon inside a wide/short map
+    // container — which forces fitBounds to zoom out far enough that the
+    // visible area already exceeds a bounds computed from the polygon
+    // alone — always still has slack to pan. This has to be recomputed on
+    // every zoom change too: a bounds padding sized for the fitted zoom
+    // becomes too tight the moment the user scroll-wheel-zooms OUT (a
+    // wider viewport at the same screen size needs a wider allowance), and
+    // Leaflet's own maxBounds enforcement was slamming the view back to
+    // the original center as soon as that happened — which is what made
+    // the map feel completely stuck rather than just edge-limited.
+    const syncMaxBounds = () => map.setMaxBounds(map.getBounds().pad(1));
+    syncMaxBounds();
+    map.on('zoomend', syncMaxBounds);
+
+    return () => {
+      map.off('zoomend', syncMaxBounds);
+    };
   }, [map, bounds]);
 
   return null;
@@ -282,6 +334,9 @@ function ResetMapView({ requestKey, bounds }) {
 
 // Leaflet renders tiles based on the container size at mount; when the shell
 // resizes (e.g. toggling fullscreen) the map must be told to recalculate.
+// This one is deliberately narrow — it only fires on the isMaximized flip,
+// after the CSS fullscreen transition has had time to finish (260ms) — so it
+// stays alongside ResizeMapOnContainerResize below rather than replacing it.
 function ResizeMapOnToggle({ trigger }) {
   const map = useMap();
 
@@ -289,6 +344,30 @@ function ResizeMapOnToggle({ trigger }) {
     const timer = setTimeout(() => map.invalidateSize(), 260);
     return () => clearTimeout(timer);
   }, [map, trigger]);
+
+  return null;
+}
+
+// General-purpose counterpart to ResizeMapOnToggle: watches the map's own
+// container element for ANY size change — a collapsing/expanding sidebar in
+// Workspace.jsx resizing the main content column, a window resize, or
+// anything else layout-driven — none of which fire a native `resize` event
+// or change `isMaximized`. Whenever the container's box actually changes
+// size, tell Leaflet to recalculate its tile layout.
+function ResizeMapOnContainerResize() {
+  const map = useMap();
+
+  useEffect(() => {
+    const container = map.getContainer();
+    if (!container || typeof ResizeObserver === 'undefined') return undefined;
+
+    const observer = new ResizeObserver(() => {
+      map.invalidateSize();
+    });
+    observer.observe(container);
+
+    return () => observer.disconnect();
+  }, [map]);
 
   return null;
 }
@@ -449,15 +528,24 @@ function LocationDensityMap({
     }
   }, [onClearSelectedVehicle]);
 
+  const hasBoundarySelection = boundaryOverride !== null;
+  const hasBoundaryGeometry = Boolean(boundaryOverride?.geometry);
   const boundaryLabel = boundaryOverride?.label ?? 'Paknaan';
+  // Only the actual outline to draw — deliberately empty when a barangay
+  // was picked but has no boundary polygon on file (only Mandaue City
+  // barangays do today), rather than silently substituting Paknaan's shape.
   const boundaryRings = useMemo(() => {
+    if (hasBoundarySelection && !hasBoundaryGeometry) return [];
     const overrideRings = geoJsonToRings(boundaryOverride?.geometry);
     return overrideRings.length ? overrideRings : [PAKNAAN_POLYGON];
-  }, [boundaryOverride]);
-  const boundaryBounds = useMemo(
-    () => L.latLngBounds(boundaryRings.flat()),
-    [boundaryRings],
-  );
+  }, [boundaryOverride, hasBoundarySelection, hasBoundaryGeometry]);
+  // The map still needs *some* valid area to frame even when there's
+  // nothing to draw — keep the last known region (Paknaan) rather than an
+  // empty/invalid Leaflet bounds object.
+  const boundaryBounds = useMemo(() => {
+    const framingRings = boundaryRings.length ? boundaryRings : [PAKNAAN_POLYGON];
+    return L.latLngBounds(framingRings.flat());
+  }, [boundaryRings]);
   // Generous padding so panning/zooming still feels free within whichever
   // area is selected, not just the original hand-tuned Paknaan box.
   const boundaryMaxBounds = useMemo(() => boundaryBounds.pad(0.5), [boundaryBounds]);
@@ -620,11 +708,18 @@ function LocationDensityMap({
           </span>
           FOCUS
         </span>
-        <span className="location-density-legend-item">
-          <span className="legend-symbol legend-symbol-boundary" aria-hidden="true" />
-          {boundaryLabel} boundary
-        </span>
+        {boundaryRings.length > 0 && (
+          <span className="location-density-legend-item">
+            <span className="legend-symbol legend-symbol-boundary" aria-hidden="true" />
+            {boundaryLabel} boundary
+          </span>
+        )}
       </div>
+      {hasBoundarySelection && !hasBoundaryGeometry && (
+        <div className="location-density-notice info" role="status">
+          <span>No boundary outline on file for {boundaryLabel} yet — only Mandaue City barangays have one today. Hubs and vehicles below aren't affected.</span>
+        </div>
+      )}
       {mapNotice && (
         <div className={`location-density-notice ${mapNotice.type}`} role="status">
           <span>{mapNotice.text}</span>
@@ -658,7 +753,7 @@ function LocationDensityMap({
             <TileLayer attribution="" crossOrigin="anonymous" maxZoom={19} url={ESRI_LABELS_URL} />
           </>
         ) : (
-          <TileLayer attribution={CARTO_ATTRIBUTION} crossOrigin="anonymous" maxZoom={19} url={CARTO_LIGHT_TILE_URL} />
+          <TileLayer attribution={STREET_ATTRIBUTION} crossOrigin="anonymous" maxZoom={19} url={STREET_TILE_URL} />
         )}
 
         {/* Map / Satellite base-layer toggle — floats over the map like Google.
@@ -804,6 +899,7 @@ function LocationDensityMap({
         <FocusVehicleOnMap target={selectedVehicleGroup} />
         <ResetMapView requestKey={resetViewRequest} bounds={boundaryBounds} />
         <ResizeMapOnToggle trigger={isMaximized} />
+        <ResizeMapOnContainerResize />
       </MapContainer>
 
       {pendingLatLng && (

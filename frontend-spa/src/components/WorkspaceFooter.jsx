@@ -1,8 +1,10 @@
 import { Link } from 'react-router-dom';
 import Icon from './Icon';
 
-// Shared footer — used inside the authenticated app shell AND on the public
-// login page, so both read as the same site rather than two disconnected UIs.
+// Footer for the authenticated app shell (Workspace, Super Admin) — its own
+// "Visit Support Center" / "Contact Us" buttons live here since a logged-in
+// user is the more likely audience for those. Public pages (Login, About,
+// Support, etc.) use the separate, lighter AuthFooter instead.
 export default function WorkspaceFooter() {
   return (
     <footer className="workspace-footer">
@@ -21,8 +23,8 @@ export default function WorkspaceFooter() {
       </div>
       <div className="workspace-footer-actions">
         <div className="workspace-footer-buttons">
-          <button type="button" className="workspace-footer-btn workspace-footer-btn-light">Visit Support Center</button>
-          <button type="button" className="workspace-footer-btn workspace-footer-btn-dark">Contact Us</button>
+          <Link to="/support" className="workspace-footer-btn workspace-footer-btn-light">Visit Support Center</Link>
+          <Link to="/support#contact" className="workspace-footer-btn workspace-footer-btn-dark">Contact Us</Link>
         </div>
         <p className="workspace-footer-copyright">
           © {new Date().getFullYear()} Barangay Vehicle Management System. All rights reserved.
